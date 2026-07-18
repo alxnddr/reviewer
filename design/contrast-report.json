@@ -1,0 +1,282 @@
+[
+  {
+    "mode": "dark",
+    "fg": "text",
+    "bg": "bg",
+    "kind": "body text",
+    "wcag": 13.05,
+    "required": 4.5,
+    "apcaLc": -82.8,
+    "pass": true
+  },
+  {
+    "mode": "dark",
+    "fg": "text",
+    "bg": "surface",
+    "kind": "body text",
+    "wcag": 12.58,
+    "required": 4.5,
+    "apcaLc": -82.4,
+    "pass": true
+  },
+  {
+    "mode": "dark",
+    "fg": "text",
+    "bg": "elevated",
+    "kind": "body text",
+    "wcag": 11.81,
+    "required": 4.5,
+    "apcaLc": -81.7,
+    "pass": true
+  },
+  {
+    "mode": "dark",
+    "fg": "textMuted",
+    "bg": "bg",
+    "kind": "secondary text",
+    "wcag": 5.85,
+    "required": 4.5,
+    "apcaLc": -42.4,
+    "pass": true
+  },
+  {
+    "mode": "dark",
+    "fg": "textMuted",
+    "bg": "surface",
+    "kind": "secondary text",
+    "wcag": 5.63,
+    "required": 4.5,
+    "apcaLc": -42,
+    "pass": true
+  },
+  {
+    "mode": "dark",
+    "fg": "textFaint",
+    "bg": "bg",
+    "kind": "faint/large text",
+    "wcag": 3.51,
+    "required": 3,
+    "apcaLc": -24.9,
+    "pass": true
+  },
+  {
+    "mode": "dark",
+    "fg": "onPrimary",
+    "bg": "primary",
+    "kind": "button label",
+    "wcag": 7.38,
+    "required": 4.5,
+    "apcaLc": 53,
+    "pass": true
+  },
+  {
+    "mode": "dark",
+    "fg": "onAccentStrong",
+    "bg": "accentStrong",
+    "kind": "solid button label",
+    "wcag": 5.84,
+    "required": 4.5,
+    "apcaLc": -81.6,
+    "pass": true
+  },
+  {
+    "mode": "dark",
+    "fg": "onSuccess",
+    "bg": "success",
+    "kind": "status label",
+    "wcag": 7.59,
+    "required": 4.5,
+    "apcaLc": 54.2,
+    "pass": true
+  },
+  {
+    "mode": "dark",
+    "fg": "onWarning",
+    "bg": "warning",
+    "kind": "status label",
+    "wcag": 7.22,
+    "required": 4.5,
+    "apcaLc": 52,
+    "pass": true
+  },
+  {
+    "mode": "dark",
+    "fg": "onDanger",
+    "bg": "danger",
+    "kind": "status label",
+    "wcag": 7.04,
+    "required": 4.5,
+    "apcaLc": 50.9,
+    "pass": true
+  },
+  {
+    "mode": "dark",
+    "fg": "primary",
+    "bg": "bg",
+    "kind": "interactive component",
+    "wcag": 7.12,
+    "required": 3,
+    "apcaLc": -50.8,
+    "pass": true
+  },
+  {
+    "mode": "dark",
+    "fg": "ring",
+    "bg": "bg",
+    "kind": "focus indicator",
+    "wcag": 9.45,
+    "required": 3,
+    "apcaLc": -64.4,
+    "pass": true
+  },
+  {
+    "mode": "dark",
+    "fg": "danger",
+    "bg": "bg",
+    "kind": "status against bg",
+    "wcag": 6.75,
+    "required": 3,
+    "apcaLc": -48.6,
+    "pass": true
+  },
+  {
+    "mode": "light",
+    "fg": "text",
+    "bg": "bg",
+    "kind": "body text",
+    "wcag": 11.75,
+    "required": 4.5,
+    "apcaLc": 95,
+    "pass": true
+  },
+  {
+    "mode": "light",
+    "fg": "text",
+    "bg": "surface",
+    "kind": "body text",
+    "wcag": 11.25,
+    "required": 4.5,
+    "apcaLc": 92,
+    "pass": true
+  },
+  {
+    "mode": "light",
+    "fg": "text",
+    "bg": "elevated",
+    "kind": "body text",
+    "wcag": 12.27,
+    "required": 4.5,
+    "apcaLc": 98,
+    "pass": true
+  },
+  {
+    "mode": "light",
+    "fg": "textMuted",
+    "bg": "bg",
+    "kind": "secondary text",
+    "wcag": 4.81,
+    "required": 4.5,
+    "apcaLc": 71.8,
+    "pass": true
+  },
+  {
+    "mode": "light",
+    "fg": "textMuted",
+    "bg": "surface",
+    "kind": "secondary text",
+    "wcag": 4.61,
+    "required": 4.5,
+    "apcaLc": 68.8,
+    "pass": true
+  },
+  {
+    "mode": "light",
+    "fg": "textFaint",
+    "bg": "bg",
+    "kind": "faint/large text",
+    "wcag": 3.22,
+    "required": 3,
+    "apcaLc": 58.1,
+    "pass": true
+  },
+  {
+    "mode": "light",
+    "fg": "onPrimary",
+    "bg": "primary",
+    "kind": "button label",
+    "wcag": 4.77,
+    "required": 4.5,
+    "apcaLc": -75.7,
+    "pass": true
+  },
+  {
+    "mode": "light",
+    "fg": "onAccentStrong",
+    "bg": "accentStrong",
+    "kind": "solid button label",
+    "wcag": 6.15,
+    "required": 4.5,
+    "apcaLc": -82.8,
+    "pass": true
+  },
+  {
+    "mode": "light",
+    "fg": "onSuccess",
+    "bg": "success",
+    "kind": "status label",
+    "wcag": 4.6,
+    "required": 4.5,
+    "apcaLc": -76.6,
+    "pass": true
+  },
+  {
+    "mode": "light",
+    "fg": "onWarning",
+    "bg": "warning",
+    "kind": "status label",
+    "wcag": 4.81,
+    "required": 4.5,
+    "apcaLc": -76.4,
+    "pass": true
+  },
+  {
+    "mode": "light",
+    "fg": "onDanger",
+    "bg": "danger",
+    "kind": "status label",
+    "wcag": 5.17,
+    "required": 4.5,
+    "apcaLc": -77.4,
+    "pass": true
+  },
+  {
+    "mode": "light",
+    "fg": "primary",
+    "bg": "bg",
+    "kind": "interactive component",
+    "wcag": 4.79,
+    "required": 3,
+    "apcaLc": 70.8,
+    "pass": true
+  },
+  {
+    "mode": "light",
+    "fg": "ring",
+    "bg": "bg",
+    "kind": "focus indicator",
+    "wcag": 5.23,
+    "required": 3,
+    "apcaLc": 73.5,
+    "pass": true
+  },
+  {
+    "mode": "light",
+    "fg": "danger",
+    "bg": "bg",
+    "kind": "status against bg",
+    "wcag": 5.2,
+    "required": 3,
+    "apcaLc": 72.8,
+    "pass": true
+  }
+]

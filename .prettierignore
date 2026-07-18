@@ -1,0 +1,10 @@
+# Generated design-system artifacts (regenerate from design/design-manifest.json).
+design/globals.css
+design/tokens.json
+design/contrast-report.json
+design/preview.html
+
+# Prose docs are not JS/TS: oxfmt (a code formatter) is non-idempotent on Markdown —
+# it perpetually re-toggles indentation inside wrapped inline-code spans, so fmt:check
+# can never converge on them. History and prose live in Markdown; the code gate leaves it be.
+**/*.md

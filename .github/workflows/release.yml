@@ -1,0 +1,43 @@
+name: Release
+
+# Tag a commit to cut a release, e.g.:
+#   git tag v0.1.0 && git push origin v0.1.0
+# Keep the tag in sync with the `version` in package.json — the .dmg is named from it.
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release-mac:
+    # macos-latest is Apple Silicon; the artifacts are arm64. For a universal
+    # build, run electron-builder with `--universal`.
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install
+        run: bun install --frozen-lockfile
+
+      - name: Build app + .dmg
+        # No signing certificate on CI: disable auto-discovery so electron-builder
+        # produces an unsigned, ad-hoc-signed build instead of failing.
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: "false"
+        run: bun run build:mac
+
+      - name: Publish to GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          draft: true
+          generate_release_notes: true
+          fail_on_unmatched_files: true
+          files: |
+            dist/*.dmg
+            dist/*-mac.zip

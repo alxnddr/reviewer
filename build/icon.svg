@@ -1,0 +1,52 @@
+<svg width="1024" height="1024" viewBox="0 0 1024 1024" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <!-- Reviewer app icon: accent #009fff, diff signals emerald (additions) + coral
+       (deletions). A stylised side-by-side diff split by a glowing azure seam.
+       Renders to build/icon.{png,icns,ico} via scripts/gen-icon.mjs. -->
+  <defs>
+    <linearGradient id="ground" x1="512" y1="100" x2="512" y2="924" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#20242F"/>
+      <stop offset="1" stop-color="#0C0E13"/>
+    </linearGradient>
+    <linearGradient id="seam" x1="512" y1="372" x2="512" y2="672" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#57C1FF"/>
+      <stop offset="1" stop-color="#009FFF"/>
+    </linearGradient>
+    <linearGradient id="sheen" x1="512" y1="100" x2="512" y2="520" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#FFFFFF" stop-opacity="0.06"/>
+      <stop offset="1" stop-color="#FFFFFF" stop-opacity="0"/>
+    </linearGradient>
+    <filter id="glow" x="-50%" y="-50%" width="200%" height="200%">
+      <feGaussianBlur stdDeviation="16"/>
+    </filter>
+  </defs>
+
+  <!-- Squircle ground on the macOS 824/1024 keyline grid. -->
+  <rect x="100" y="100" width="824" height="824" rx="185" fill="url(#ground)"/>
+  <rect x="100" y="100" width="824" height="824" rx="185" fill="url(#sheen)"/>
+
+  <!-- Tilted diff: coral deletions to the left of the seam, emerald additions to the right,
+       rows interleaved in y so it reads as a change, not a table. Scaled up to fill the tile
+       with confidence and stay legible down to 32px. -->
+  <g transform="translate(512 512) scale(1.3) translate(-512 -512)">
+  <g transform="rotate(-12 512 512)">
+    <!-- Azure seam glow, then the seam itself. -->
+    <rect x="500" y="372" width="24" height="300" rx="12" fill="#009FFF" opacity="0.55" filter="url(#glow)"/>
+
+    <!-- Deletions (coral), right-aligned to the seam. -->
+    <rect x="324" y="404" width="150" height="40" rx="20" fill="#F76F5E"/>
+    <rect x="370" y="494" width="104" height="40" rx="20" fill="#F76F5E"/>
+    <rect x="342" y="584" width="132" height="40" rx="20" fill="#F76F5E"/>
+
+    <!-- Additions (emerald), left-aligned from the seam, offset in y. -->
+    <rect x="550" y="449" width="168" height="40" rx="20" fill="#3FCE93"/>
+    <rect x="550" y="539" width="110" height="40" rx="20" fill="#3FCE93"/>
+    <rect x="550" y="629" width="142" height="40" rx="20" fill="#3FCE93"/>
+
+    <!-- The seam on top of the bars. -->
+    <rect x="500" y="372" width="24" height="300" rx="12" fill="url(#seam)"/>
+  </g>
+  </g>
+
+  <!-- Premium edge: a hair-line inner rim catching the light at the top. -->
+  <rect x="101" y="101" width="822" height="822" rx="184" fill="none" stroke="#8FD3FF" stroke-opacity="0.14" stroke-width="2"/>
+</svg>

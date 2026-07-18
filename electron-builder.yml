@@ -1,0 +1,31 @@
+appId: dev.al.reviewer
+productName: Reviewer
+directories:
+  buildResources: build
+files:
+  - "!**/.vscode/*"
+  - "!.github/*"
+  - "!src/*"
+  - "!design/*"
+  - "!assets/*"
+  - "!electron.vite.config.{js,ts,mjs,cjs}"
+  - "!vitest.config.{js,ts,mjs,cjs}"
+  - "!{.editorconfig,README.md}"
+  - "!{.env,.env.*,.npmrc}"
+  - "!{tsconfig.json,tsconfig.node.json,tsconfig.web.json}"
+  - "!*.tsbuildinfo"
+  - "!skills/*"
+# The rvw CLI and its agent-agnostic review skills (assets shipped by `rvw skills`), laid out
+# as the CLI resolves them: rvw.js one directory below the dir holding `skills/` (bundledSkillsRoot).
+extraResources:
+  - from: dist/rvw.js
+    to: cli/rvw.js
+  - from: skills
+    to: skills
+mac:
+  category: public.app-category.developer-tools
+  entitlementsInherit: build/entitlements.mac.plist
+  notarize: false
+dmg:
+  artifactName: ${name}-${version}.${ext}
+npmRebuild: false

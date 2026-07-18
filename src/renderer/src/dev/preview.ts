@@ -1,0 +1,394 @@
+import type { BranchList, LogEntry } from "../../../shared/git";
+import type { Comment, ReviewLayer } from "../../../shared/review";
+import {
+  buildHugeAdditionPatch,
+  buildManyFilesPatch,
+  MULTI_STATUS_PATCH,
+} from "../lib/diff/fixtures";
+import { parsePatch } from "../lib/diff/patch";
+import { useReviewStore, type SessionSlice } from "../stores/review";
+
+const HOUR_MS = 3600 * 1000;
+
+const SUBJECTS = [
+  "Fix worker pool teardown on window close",
+  "Add rename detection to patch parser",
+  "Extract diff toolbar composite",
+  "Tune traffic-light offsets for hiddenInset",
+  "Cap git output at 32 MiB",
+  "Wire theme flip into the worker pool",
+  "Parse NUL-separated log records",
+  "Handle unborn HEAD in commit log",
+];
+
+/** A dirty repo's log: the uncommitted pseudo-entry over recent commits. */
+function fixtureEntries(): LogEntry[] {
+  const commits: LogEntry[] = SUBJECTS.map((subject, index) => {
+    const sha = index.toString(16).repeat(40).slice(0, 40);
+    return {
+      kind: "commit",
+      commit: {
+        sha,
+        shortSha: sha.slice(0, 7),
+        author: index % 3 === 0 ? "alex" : "mira",
+        authoredAt: new Date(Date.now() - (index + 1) * 7 * HOUR_MS).toISOString(),
+        subject,
+      },
+    };
+  });
+  return [{ kind: "uncommitted" }, ...commits];
+}
+
+const FIXTURE_BRANCHES: BranchList = {
+  branches: [
+    "main",
+    "feature/brush-selection",
+    "feature/worker-pool",
+    "fix/theme-flip",
+    "chore/gates",
+  ],
+  defaultBranch: "main",
+  currentBranch: "feature/brush-selection",
+};
+
+const FIXTURE_SESSION_ID = "00000000-0000-4000-8000-000000000000";
+
+/** Fixture comments over MULTI_STATUS_PATCH: two placed on covered lines (one
+ * with an inline `code` ref, to show the sans/mono split) and one whose range
+ * drifted off the diff, pinned outdated to its file header. */
+function fixtureComments(): Comment[] {
+  return [
+    {
+      file: "greet.ts",
+      side: "additions",
+      startLine: 4,
+      endLine: 6,
+      body: "Extract this into a `formatGreeting` helper — `shout` and `greet` will both want it.",
+      id: "c0000000-0000-4000-8000-000000000001",
+    },
+    {
+      file: "added.txt",
+      side: "additions",
+      startLine: 1,
+      endLine: 1,
+      body: "Give this file a header comment so its purpose is obvious.",
+      id: "c0000000-0000-4000-8000-000000000002",
+    },
+    {
+      file: "greet.ts",
+      side: "additions",
+      startLine: 80,
+      endLine: 82,
+      body: "This block moved since the review was written — check it still holds.",
+      id: "c0000000-0000-4000-8000-000000000003",
+    },
+  ];
+}
+
+/** Ordered layers over MULTI_STATUS_PATCH: authored reading order, an overlapping
+ * file (greet.ts appears in two layers), and a last layer whose range references a
+ * file the diff no longer carries — the outdated fail-soft state. */
+function fixtureLayers(): ReviewLayer[] {
+  return [
+    {
+      id: "layer-greeting",
+      label: "Add greeting API",
+      summary: "New shout() built on greet()",
+      description:
+        "This layer introduces the public greeting surface. `greet.ts` gains a `shout()` helper that composes over the existing `greet()`, so the two share one formatting path rather than drifting apart.\n\nThe fixture file [added.txt](added.txt) ships alongside as the smoke test — open it to confirm the new entry point reads cleanly. Callers still reach the API through `greet.ts`; nothing downstream changes shape.",
+      kind: "feature",
+      ranges: [
+        { file: "greet.ts", side: "additions", startLine: 4, endLine: 6 },
+        { file: "added.txt", side: "additions", startLine: 1, endLine: 2 },
+      ],
+    },
+    {
+      id: "layer-notes",
+      label: "Refresh the notes",
+      summary: "Capitalise and extend the list",
+      description:
+        "Small copy pass over [notes.txt](notes.txt): the second item is capitalised and a new trailing entry is appended. No code path depends on this file — it is reading material only.",
+      kind: "docs",
+      ranges: [{ file: "notes.txt", side: "additions", startLine: 6, endLine: 6 }],
+    },
+    {
+      id: "layer-rename",
+      label: "Reword the greeting",
+      summary: "hello → hi (greet.ts, shared with the API layer)",
+      kind: "refactor",
+      ranges: [{ file: "greet.ts", side: "additions", startLine: 2, endLine: 2 }],
+    },
+    {
+      id: "layer-cleanup",
+      label: "Delete dead file",
+      summary: "Remove doomed.txt",
+      kind: "chore",
+      ranges: [{ file: "doomed.txt", side: "deletions", startLine: 1, endLine: 2 }],
+    },
+    {
+      id: "layer-legacy",
+      label: "Retire legacy config",
+      summary: "Range drifted — file no longer in the diff",
+      description:
+        "This layer targeted [config/legacy.ts](config/legacy.ts), which has since dropped out of the diff — so its file link is inert and soloing it lands on the dead-end. The prose still explains the intent even when the code is gone.",
+      kind: "validation",
+      ranges: [{ file: "config/legacy.ts", side: "additions", startLine: 10, endLine: 12 }],
+    },
+  ];
+}
+
+/** A derived sibling slice for the tab-strip states; id must be a unique uuid. */
+function siblingSlice(ordinal: number, name: string): SessionSlice {
+  const digit = (ordinal % 10).toString();
+  return {
+    id: `${digit.repeat(8)}-${digit.repeat(4)}-4000-8000-${digit.repeat(12)}`,
+    repo: { path: `/preview/${name}`, name },
+    mode: "commits",
+    log: null,
+    branches: null,
+    brush: null,
+    base: null,
+    head: null,
+    selection: null,
+    diff: { phase: "idle" },
+    selectedFilePath: null,
+    scrollTop: 0,
+    commitSelection: null,
+    comments: [],
+    layers: [],
+    reviewDiff: null,
+    reviewSubrange: null,
+    reviewOrigin: null,
+    activeLayerId: null,
+    needsDerive: true,
+    requestTicket: 0,
+  };
+}
+
+/** Adds inactive sibling tabs around whatever state already seeded the active
+ * session — key insertion order is tab order, so `before`/`after` place them. */
+function seedSiblingTabs(before: string[], after: string[]): void {
+  const state = useReviewStore.getState();
+  const sessions: Record<string, SessionSlice> = {};
+  for (const [index, name] of before.entries()) {
+    const sibling = siblingSlice(index + 1, name);
+    sessions[sibling.id] = sibling;
+  }
+  Object.assign(sessions, state.sessions);
+  for (const [index, name] of after.entries()) {
+    const sibling = siblingSlice(before.length + index + 1, name);
+    sessions[sibling.id] = sibling;
+  }
+  useReviewStore.setState({ sessions });
+}
+
+/** Boots the store as if one hydrated, derived session were active. */
+function seedSession(overrides: Partial<SessionSlice>): void {
+  const slice: SessionSlice = {
+    id: FIXTURE_SESSION_ID,
+    repo: { path: "/preview/fixture", name: "fixture" },
+    mode: "commits",
+    log: { phase: "loaded", entries: fixtureEntries() },
+    branches: { phase: "loaded", list: FIXTURE_BRANCHES },
+    brush: { anchor: 0, focus: 0 },
+    base: FIXTURE_BRANCHES.defaultBranch,
+    head: FIXTURE_BRANCHES.currentBranch,
+    selection: { kind: "uncommitted" },
+    diff: { phase: "empty" },
+    selectedFilePath: null,
+    scrollTop: 0,
+    commitSelection: { kind: "uncommitted" },
+    comments: [],
+    layers: [],
+    reviewDiff: null,
+    reviewSubrange: null,
+    reviewOrigin: null,
+    activeLayerId: null,
+    needsDerive: false,
+    requestTicket: 1,
+    ...overrides,
+  };
+  useReviewStore.setState({
+    boot: "ready",
+    sessions: { [slice.id]: slice },
+    activeSessionId: slice.id,
+  });
+}
+
+/** Dev-only: `?state=<name>` seeds the store with a fixture so every diff-area state
+ * is reachable by URL for the visual gates (shoot/checks run in a plain browser,
+ * where no bridge and no repository exist). Dead code in production builds — the
+ * import in main.tsx is guarded by `import.meta.env.DEV`. */
+export function applyPreviewState(): void {
+  const state = new URLSearchParams(window.location.search).get("state");
+  if (state === null) {
+    return;
+  }
+
+  switch (state) {
+    case "loading":
+      seedSession({
+        log: { phase: "loading" },
+        branches: { phase: "loading" },
+        brush: null,
+        selection: null,
+        commitSelection: null,
+        diff: { phase: "loading" },
+      });
+      break;
+    case "empty":
+      seedSession({ diff: { phase: "empty" } });
+      break;
+    case "error":
+      seedSession({ diff: { phase: "failed", failure: { code: "unknownRevision" } } });
+      break;
+    case "log-error": {
+      const failure = { code: "notARepo", path: "/preview/fixture" } as const;
+      seedSession({
+        log: { phase: "failed", failure },
+        branches: { phase: "failed", failure },
+        brush: null,
+        selection: null,
+        commitSelection: null,
+        diff: { phase: "failed", failure },
+      });
+      break;
+    }
+    case "brush": {
+      const files = parsePatch(MULTI_STATUS_PATCH, "preview:brush");
+      seedSession({
+        brush: { anchor: 0, focus: 3 },
+        diff: { phase: "loaded", loadId: 1, files },
+        selectedFilePath: files[0]?.path ?? null,
+      });
+      break;
+    }
+    case "branches": {
+      const files = parsePatch(MULTI_STATUS_PATCH, "preview:branches");
+      seedSession({
+        mode: "branches",
+        selection: {
+          kind: "branches",
+          base: "main",
+          head: "feature/brush-selection",
+        },
+        diff: { phase: "loaded", loadId: 1, files },
+        selectedFilePath: files[0]?.path ?? null,
+      });
+      break;
+    }
+    case "branch-empty":
+      seedSession({
+        mode: "branches",
+        selection: {
+          kind: "branches",
+          base: "main",
+          head: "feature/brush-selection",
+        },
+        diff: { phase: "empty" },
+      });
+      break;
+    case "loaded": {
+      const files = parsePatch(MULTI_STATUS_PATCH, "preview:loaded");
+      seedSession({
+        diff: { phase: "loaded", loadId: 1, files },
+        selectedFilePath: files[0]?.path ?? null,
+      });
+      break;
+    }
+    case "comments": {
+      const files = parsePatch(MULTI_STATUS_PATCH, "preview:comments");
+      seedSession({
+        diff: { phase: "loaded", loadId: 1, files },
+        selectedFilePath: files[0]?.path ?? null,
+        comments: fixtureComments(),
+      });
+      break;
+    }
+    case "layers": {
+      const files = parsePatch(MULTI_STATUS_PATCH, "preview:layers");
+      seedSession({
+        diff: { phase: "loaded", loadId: 1, files },
+        selectedFilePath: files[0]?.path ?? null,
+        comments: fixtureComments(),
+        layers: fixtureLayers(),
+      });
+      break;
+    }
+    case "layers-solo": {
+      const files = parsePatch(MULTI_STATUS_PATCH, "preview:layers-solo");
+      seedSession({
+        diff: { phase: "loaded", loadId: 1, files },
+        selectedFilePath: files[0]?.path ?? null,
+        comments: fixtureComments(),
+        layers: fixtureLayers(),
+        activeLayerId: "layer-greeting",
+      });
+      break;
+    }
+    case "layers-outdated": {
+      const files = parsePatch(MULTI_STATUS_PATCH, "preview:layers-outdated");
+      seedSession({
+        diff: { phase: "loaded", loadId: 1, files },
+        selectedFilePath: files[0]?.path ?? null,
+        comments: fixtureComments(),
+        layers: fixtureLayers(),
+        // The last layer's only range references a file the diff no longer carries,
+        // so soloing it resolves to zero files — the dead-end empty state.
+        activeLayerId: "layer-legacy",
+      });
+      break;
+    }
+    case "many": {
+      const files = parsePatch(buildManyFilesPatch(24, 2000), "preview:many");
+      seedSession({
+        diff: { phase: "loaded", loadId: 1, files },
+        selectedFilePath: files[0]?.path ?? null,
+      });
+      break;
+    }
+    case "huge": {
+      const files = parsePatch(buildHugeAdditionPatch(100_000), "preview:huge");
+      seedSession({
+        diff: { phase: "loaded", loadId: 1, files },
+        selectedFilePath: files[0]?.path ?? null,
+      });
+      break;
+    }
+    case "tabs": {
+      const files = parsePatch(MULTI_STATUS_PATCH, "preview:tabs");
+      seedSession({
+        diff: { phase: "loaded", loadId: 1, files },
+        selectedFilePath: files[0]?.path ?? null,
+      });
+      seedSiblingTabs(["reviewer"], ["web-app"]);
+      break;
+    }
+    case "tabs-overflow": {
+      const files = parsePatch(MULTI_STATUS_PATCH, "preview:tabs-overflow");
+      seedSession({
+        diff: { phase: "loaded", loadId: 1, files },
+        selectedFilePath: files[0]?.path ?? null,
+      });
+      seedSiblingTabs(
+        ["reviewer", "api-server", "very-long-repository-name", "dotfiles"],
+        ["notes", "pierre-diffs", "electron-vite", "playground"],
+      );
+      break;
+    }
+    case "open-failure": {
+      const files = parsePatch(MULTI_STATUS_PATCH, "preview:open-failure");
+      seedSession({
+        diff: { phase: "loaded", loadId: 1, files },
+        selectedFilePath: files[0]?.path ?? null,
+      });
+      seedSiblingTabs(["reviewer"], []);
+      useReviewStore.setState({
+        openFailure: { code: "notARepo", path: "/Users/demo/Downloads/not-a-repo" },
+      });
+      break;
+    }
+    default:
+      console.error(`Unknown preview state: ${state}`);
+  }
+}

@@ -1,0 +1,120 @@
+@import "@fontsource-variable/geist";
+@import "@fontsource-variable/geist-mono";
+@import "tailwindcss";
+@import "tw-animate-css";
+@import "shadcn/tailwind.css";
+/* Generated design system — imported LAST so its :root/.dark/@theme win the cascade. */
+@import "../../../design/globals.css";
+
+@custom-variant dark (&:is(.dark *));
+
+/* The diff-signal content colours (--diff-*) are per-theme, keyed by html[data-theme] — each theme's
+ * shell bands match the Pierre/Shiki surface beside them.
+ * Only the theme-independent Pierre surface typography lives here. */
+:root {
+  /* Pierre surface typography: the shadow roots read these public vars from the
+   * host — without them the diff falls back to SF Mono and the tree/headers to
+   * system-ui. Only CODE is mono; the tree, file headers, and stats are
+   * navigational chrome and read in the shell sans.
+   * Sizes stay on Pierre's 13px register. */
+  --diffs-font-family: var(--font-mono);
+  --diffs-header-font-family: var(--font-sans);
+  /* The ONE selection fill, used by every selected/active element (tabs, file tree,
+   * commit/layer rows, mode toggles). It is a NEUTRAL highlight —
+   * the theme's own border tone at 60% (i.e. `bg-border/60`), no accent: spending
+   * accent here reads as arbitrarily "blue" on every theme, and the theme identity
+   * already lives in the surfaces. --border is per-theme, so the selection
+   * still tracks the theme; hover (`bg-border/30`) sits one step below it. */
+  --selected: color-mix(in oklab, var(--border) 60%, transparent);
+  /* Trees re-declares its vars inside the shadow root; the public knobs are the
+   * -override vars, which otherwise fall back to Pierre's OWN fixed palette
+   * (bg light-dark(#f8f8f8,#141415), a fixed accent, …) and would NOT follow the
+   * theme. Map every appearance knob to our themed tokens so the tree re-colours
+   * with the rest of the shell — custom properties inherit through the shadow
+   * boundary, so var(--…) resolves against the live html[data-theme]. Status
+   * badges drop from 600 to 500 — single glyphs need some weight to read, but 600
+   * shouts in a 400-weight column. */
+  --trees-font-family-override: var(--font-sans);
+  --trees-font-weight-semibold-override: 500;
+  --trees-bg-override: var(--sidebar);
+  --trees-fg-override: var(--foreground);
+  --trees-fg-muted-override: var(--text-muted);
+  --trees-border-color-override: var(--border);
+  --trees-indent-guide-bg-override: var(--border);
+  --trees-accent-override: var(--primary);
+  --trees-focus-ring-color-override: var(--ring);
+  --trees-input-bg-override: var(--muted);
+  /* Git status glyphs follow the theme's diff-signal + status hues, not Pierre's
+   * fixed set, so an added/deleted file reads in the same green/red as the diff. */
+  --trees-status-added-override: var(--diff-add-fg);
+  --trees-status-untracked-override: var(--diff-add-fg);
+  --trees-status-deleted-override: var(--diff-del-fg);
+  --trees-status-modified-override: var(--warning);
+  --trees-status-renamed-override: var(--primary);
+  --trees-status-ignored-override: var(--text-faint);
+  /* The selected file row wears the shell's themed selection fill (below) so the
+   * tree carries the active theme's accent, matching the shell rows beside it;
+   * the focused-selection border takes the raw accent. */
+  --trees-selected-bg-override: var(--selected);
+  --trees-selected-fg-override: var(--foreground);
+  --trees-selected-focused-border-color-override: var(--primary);
+}
+
+@theme inline {
+  --color-diff-del-bg: var(--diff-del-bg);
+  --color-diff-add-bg: var(--diff-add-bg);
+  --color-diff-del-fg: var(--diff-del-fg);
+  --color-diff-add-fg: var(--diff-add-fg);
+  --color-diff-surface: var(--diff-surface);
+  --color-selected: var(--selected);
+
+  /* One hair above the 14px reading prose so a section title (the LayerIntro
+   * chapter heading) reads as a heading without the 18px `text-lg` jump, which
+   * overpowered the band. The generated scale has no 14–18 middle step, so it is
+   * defined here rather than reached for with an arbitrary value. */
+  --text-title: 15px;
+  --text-title--line-height: 21px;
+}
+
+@layer base {
+  :root {
+    color-scheme: light;
+  }
+  .dark {
+    color-scheme: dark;
+  }
+  body {
+    /* antialiased: macOS subpixel smoothing renders every weight a half-step
+     * heavier than intended; grayscale smoothing is what the dense-tool
+     * register is calibrated against. Inherits into
+     * the Pierre shadow roots. */
+    @apply bg-background font-sans text-base text-foreground antialiased;
+    /* Desktop chrome is not selectable text; content surfaces opt back in. */
+    user-select: none;
+    -webkit-user-select: none;
+  }
+}
+
+/* Electron-only window-drag surfaces (titleBarStyle "hiddenInset" removes the system one). */
+.app-region-drag {
+  -webkit-app-region: drag;
+}
+.app-region-no-drag {
+  -webkit-app-region: no-drag;
+}
+
+/* Theme flips are instant by design: the store adds this class around the .dark swap. */
+.no-transitions,
+.no-transitions * {
+  transition: none !important;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}

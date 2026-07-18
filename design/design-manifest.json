@@ -1,0 +1,32 @@
+{
+  "name": "reviewer",
+  "accent": "#009fff",
+  "tone": "precision-tool",
+  "domain": "local-first code review / diff comprehension",
+  "neutralTint": "none",
+  "contrast": "AA",
+  "radiusBase": 8,
+  "fonts": {
+    "display": "Geist",
+    "body": "Geist",
+    "mono": "Geist Mono",
+    "pkgs": ["@fontsource-variable/geist", "@fontsource-variable/geist-mono"]
+  },
+  "targets": ["web"],
+  "seed": "pierre-sibling",
+  "resolved": {
+    "accentHue": 246.59,
+    "peakChroma": 0.1777990726214093,
+    "neutralHue": 0,
+    "neutralChroma": 0,
+    "fonts": {
+      "display": "Geist",
+      "body": "Geist",
+      "mono": "Geist Mono"
+    }
+  },
+  "decisions": [
+    "accent hue 246.6 taken from brand seed #009fff",
+    "fonts explicitly configured (verify license + self-hosting yourself)"
+  ]
+}

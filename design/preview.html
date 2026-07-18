@@ -1,0 +1,118 @@
+<!doctype html><meta charset="utf-8"><title>reviewer — design system preview</title>
+<style>
+  body{font-family:"Geist Variable", "Geist", sans-serif;margin:0;padding:24px;background:#e8e8e8;display:grid;gap:16px}
+  .sw{display:flex;gap:8px;align-items:center;font-size:12px}.chip{width:20px;height:20px;border-radius:4px;display:inline-block;border:1px solid rgba(128,128,128,.4)}
+  .dim{opacity:.6}.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(340px,1fr));gap:4px;margin-top:8px}
+  table{border-collapse:collapse;font-size:13px;background:#fff;border-radius:8px;overflow:hidden}
+  td,th{padding:6px 12px;border-bottom:1px solid #ddd;text-align:left}.fail{background:#ffe4e4;font-weight:700}
+</style>
+<p style="font-family:monospace">Fonts render only if installed/self-hosted: display "Geist" · body "Geist" · mono "Geist Mono"</p>
+
+  <section style="background:#141414;color:#d9d9d9;padding:32px;border-radius:10px">
+    <p style="color:#919191;margin:0 0 4px;font-size:12px;letter-spacing:.08em;text-transform:uppercase">Dark (default)</p>
+    <h2 style="font-family:"Geist Variable", "Geist", sans-serif;font-weight:800;font-size:28px;margin:0 0 16px">reviewer — the quick brown fox</h2>
+    <div style="background:#181818;border:1px solid #252525;border-radius:8px;padding:16px;margin-bottom:12px">
+      <strong>Surface card.</strong> <span style="color:#919191">Muted secondary copy sits here at AA.</span>
+      <div style="background:#1e1e1e;border:1px solid #252525;border-radius:6px;padding:10px;margin-top:10px">
+        Elevated layer <code style="font-family:"Geist Mono Variable", "Geist Mono", monospace;font-size:13px">mono 13px</code>
+      </div>
+    </div>
+    <button style="background:#66a5e8;color:#06101c;border:0;border-radius:6px;padding:8px 16px;font-weight:600;outline:2px solid #83beff;outline-offset:2px">Primary + focus ring</button>
+    <span style="margin-left:12px;color:#e28277">danger</span>
+    <span style="margin-left:8px;color:#75b181">success</span>
+    <span style="margin-left:8px;color:#c59755">warning</span>
+    <details style="margin-top:16px"><summary style="color:#919191">Swatches</summary><div class="grid"><div class="sw"><span class="chip" style="background:#141414"></span><code>bg</code><code class="dim">#141414 · oklch(0.19 0 0)</code></div>
+<div class="sw"><span class="chip" style="background:#181818"></span><code>surface</code><code class="dim">#181818 · oklch(0.21 0 0)</code></div>
+<div class="sw"><span class="chip" style="background:#1e1e1e"></span><code>elevated</code><code class="dim">#1e1e1e · oklch(0.235 0 0)</code></div>
+<div class="sw"><span class="chip" style="background:#252525"></span><code>border</code><code class="dim">#252525 · oklch(0.2655 0 0)</code></div>
+<div class="sw"><span class="chip" style="background:#383838"></span><code>borderStrong</code><code class="dim">#383838 · oklch(0.341 0 0)</code></div>
+<div class="sw"><span class="chip" style="background:#d9d9d9"></span><code>text</code><code class="dim">#d9d9d9 · oklch(0.8846 0 0)</code></div>
+<div class="sw"><span class="chip" style="background:#919191"></span><code>textMuted</code><code class="dim">#919191 · oklch(0.6581 0 0)</code></div>
+<div class="sw"><span class="chip" style="background:#6c6c6c"></span><code>textFaint</code><code class="dim">#6c6c6c · oklch(0.5297 0 0)</code></div>
+<div class="sw"><span class="chip" style="background:#66a5e8"></span><code>primary</code><code class="dim">#66a5e8 · oklch(0.707 0.1191 251.26)</code></div>
+<div class="sw"><span class="chip" style="background:#06101c"></span><code>onPrimary</code><code class="dim">#06101c · oklch(0.17 0.0298 251.26)</code></div>
+<div class="sw"><span class="chip" style="background:#0f61ba"></span><code>accentStrong</code><code class="dim">#0f61ba · oklch(0.5 0.1575 255.26)</code></div>
+<div class="sw"><span class="chip" style="background:#f7faff"></span><code>onAccentStrong</code><code class="dim">#f7faff · oklch(0.985 0.0072 255.26)</code></div>
+<div class="sw"><span class="chip" style="background:#9bc5f1"></span><code>accent</code><code class="dim">#9bc5f1 · oklch(0.809 0.0765 249.93)</code></div>
+<div class="sw"><span class="chip" style="background:#83beff"></span><code>ring</code><code class="dim">#83beff · oklch(0.787 0.1116 251.26)</code></div>
+<div class="sw"><span class="chip" style="background:#75b181"></span><code>success</code><code class="dim">#75b181 · oklch(0.707 0.0938 150)</code></div>
+<div class="sw"><span class="chip" style="background:#08120a"></span><code>onSuccess</code><code class="dim">#08120a · oklch(0.17 0.0235 150)</code></div>
+<div class="sw"><span class="chip" style="background:#c59755"></span><code>warning</code><code class="dim">#c59755 · oklch(0.707 0.1005 75)</code></div>
+<div class="sw"><span class="chip" style="background:#160e04"></span><code>onWarning</code><code class="dim">#160e04 · oklch(0.17 0.0251 75)</code></div>
+<div class="sw"><span class="chip" style="background:#e28277"></span><code>danger</code><code class="dim">#e28277 · oklch(0.707 0.1206 27)</code></div>
+<div class="sw"><span class="chip" style="background:#1b0a08"></span><code>onDanger</code><code class="dim">#1b0a08 · oklch(0.17 0.0301 27)</code></div>
+<div class="sw"><span class="chip" style="background:#499af8"></span><code>chart1</code><code class="dim">#499af8 · oklch(0.68 0.16 253.93)</code></div>
+<div class="sw"><span class="chip" style="background:#ca71cd"></span><code>chart2</code><code class="dim">#ca71cd · oklch(0.68 0.16 325.93)</code></div>
+<div class="sw"><span class="chip" style="background:#e96f49"></span><code>chart3</code><code class="dim">#e96f49 · oklch(0.68 0.16 37.93)</code></div>
+<div class="sw"><span class="chip" style="background:#9f9f00"></span><code>chart4</code><code class="dim">#9f9f00 · oklch(0.68 0.1484 109.93)</code></div>
+<div class="sw"><span class="chip" style="background:#00b09e"></span><code>chart5</code><code class="dim">#00b09e · oklch(0.68 0.1219 181.93)</code></div></div></details>
+  </section>
+
+  <section style="background:#fafafa;color:#353535;padding:32px;border-radius:10px">
+    <p style="color:#6f6f6f;margin:0 0 4px;font-size:12px;letter-spacing:.08em;text-transform:uppercase">Light</p>
+    <h2 style="font-family:"Geist Variable", "Geist", sans-serif;font-weight:800;font-size:28px;margin:0 0 16px">reviewer — the quick brown fox</h2>
+    <div style="background:#f5f5f5;border:1px solid #e2e2e2;border-radius:8px;padding:16px;margin-bottom:12px">
+      <strong>Surface card.</strong> <span style="color:#6f6f6f">Muted secondary copy sits here at AA.</span>
+      <div style="background:#ffffff;border:1px solid #e2e2e2;border-radius:6px;padding:10px;margin-top:10px">
+        Elevated layer <code style="font-family:"Geist Mono Variable", "Geist Mono", monospace;font-size:13px">mono 13px</code>
+      </div>
+    </div>
+    <button style="background:#006fd2;color:#f7faff;border:0;border-radius:6px;padding:8px 16px;font-weight:600;outline:2px solid #0069c7;outline-offset:2px">Primary + focus ring</button>
+    <span style="margin-left:12px;color:#c33530">danger</span>
+    <span style="margin-left:8px;color:#1a8641">success</span>
+    <span style="margin-left:8px;color:#976500">warning</span>
+    <details style="margin-top:16px"><summary style="color:#6f6f6f">Swatches</summary><div class="grid"><div class="sw"><span class="chip" style="background:#fafafa"></span><code>bg</code><code class="dim">#fafafa · oklch(0.985 0 0)</code></div>
+<div class="sw"><span class="chip" style="background:#f5f5f5"></span><code>surface</code><code class="dim">#f5f5f5 · oklch(0.97 0 0)</code></div>
+<div class="sw"><span class="chip" style="background:#ffffff"></span><code>elevated</code><code class="dim">#ffffff · oklch(1 0 0)</code></div>
+<div class="sw"><span class="chip" style="background:#e2e2e2"></span><code>border</code><code class="dim">#e2e2e2 · oklch(0.9135 0 0)</code></div>
+<div class="sw"><span class="chip" style="background:#cbcbcb"></span><code>borderStrong</code><code class="dim">#cbcbcb · oklch(0.842 0 0)</code></div>
+<div class="sw"><span class="chip" style="background:#353535"></span><code>text</code><code class="dim">#353535 · oklch(0.3272 0 0)</code></div>
+<div class="sw"><span class="chip" style="background:#6f6f6f"></span><code>textMuted</code><code class="dim">#6f6f6f · oklch(0.5417 0 0)</code></div>
+<div class="sw"><span class="chip" style="background:#8c8c8c"></span><code>textFaint</code><code class="dim">#8c8c8c · oklch(0.6393 0 0)</code></div>
+<div class="sw"><span class="chip" style="background:#006fd2"></span><code>primary</code><code class="dim">#006fd2 · oklch(0.546 0.1735 253.93)</code></div>
+<div class="sw"><span class="chip" style="background:#f7faff"></span><code>onPrimary</code><code class="dim">#f7faff · oklch(0.985 0.0072 253.93)</code></div>
+<div class="sw"><span class="chip" style="background:#005db9"></span><code>accentStrong</code><code class="dim">#005db9 · oklch(0.488 0.1624 255.26)</code></div>
+<div class="sw"><span class="chip" style="background:#f7faff"></span><code>onAccentStrong</code><code class="dim">#f7faff · oklch(0.985 0.0072 255.26)</code></div>
+<div class="sw"><span class="chip" style="background:#005db9"></span><code>accent</code><code class="dim">#005db9 · oklch(0.488 0.1624 255.26)</code></div>
+<div class="sw"><span class="chip" style="background:#0069c7"></span><code>ring</code><code class="dim">#0069c7 · oklch(0.526 0.1672 253.93)</code></div>
+<div class="sw"><span class="chip" style="background:#1a8641"></span><code>success</code><code class="dim">#1a8641 · oklch(0.546 0.14 150)</code></div>
+<div class="sw"><span class="chip" style="background:#fcfffc"></span><code>onSuccess</code><code class="dim">#fcfffc · oklch(0.997 0.0047 150)</code></div>
+<div class="sw"><span class="chip" style="background:#976500"></span><code>warning</code><code class="dim">#976500 · oklch(0.546 0.1153 75)</code></div>
+<div class="sw"><span class="chip" style="background:#fff9f1"></span><code>onWarning</code><code class="dim">#fff9f1 · oklch(0.985 0.0119 75)</code></div>
+<div class="sw"><span class="chip" style="background:#c33530"></span><code>danger</code><code class="dim">#c33530 · oklch(0.546 0.18 27)</code></div>
+<div class="sw"><span class="chip" style="background:#fff8f7"></span><code>onDanger</code><code class="dim">#fff8f7 · oklch(0.985 0.0073 27)</code></div>
+<div class="sw"><span class="chip" style="background:#1f74cf"></span><code>chart1</code><code class="dim">#1f74cf · oklch(0.56 0.16 253.93)</code></div>
+<div class="sw"><span class="chip" style="background:#a24da6"></span><code>chart2</code><code class="dim">#a24da6 · oklch(0.56 0.16 325.93)</code></div>
+<div class="sw"><span class="chip" style="background:#bf4922"></span><code>chart3</code><code class="dim">#bf4922 · oklch(0.56 0.16 37.93)</code></div>
+<div class="sw"><span class="chip" style="background:#7a7a00"></span><code>chart4</code><code class="dim">#7a7a00 · oklch(0.56 0.1223 109.93)</code></div>
+<div class="sw"><span class="chip" style="background:#008779"></span><code>chart5</code><code class="dim">#008779 · oklch(0.56 0.1004 181.93)</code></div></div></details>
+  </section>
+<h3>Contrast report — all pass</h3>
+<table><tr><th>mode</th><th>pair</th><th>kind</th><th>WCAG</th><th>APCA Lc</th><th>gate</th></tr><tr class=""><td>dark</td><td>text / bg</td><td>body text</td><td>13.05 (≥4.5)</td><td>-82.8</td><td>PASS</td></tr>
+<tr class=""><td>dark</td><td>text / surface</td><td>body text</td><td>12.58 (≥4.5)</td><td>-82.4</td><td>PASS</td></tr>
+<tr class=""><td>dark</td><td>text / elevated</td><td>body text</td><td>11.81 (≥4.5)</td><td>-81.7</td><td>PASS</td></tr>
+<tr class=""><td>dark</td><td>textMuted / bg</td><td>secondary text</td><td>5.85 (≥4.5)</td><td>-42.4</td><td>PASS</td></tr>
+<tr class=""><td>dark</td><td>textMuted / surface</td><td>secondary text</td><td>5.63 (≥4.5)</td><td>-42</td><td>PASS</td></tr>
+<tr class=""><td>dark</td><td>textFaint / bg</td><td>faint/large text</td><td>3.51 (≥3)</td><td>-24.9</td><td>PASS</td></tr>
+<tr class=""><td>dark</td><td>onPrimary / primary</td><td>button label</td><td>7.38 (≥4.5)</td><td>53</td><td>PASS</td></tr>
+<tr class=""><td>dark</td><td>onAccentStrong / accentStrong</td><td>solid button label</td><td>5.84 (≥4.5)</td><td>-81.6</td><td>PASS</td></tr>
+<tr class=""><td>dark</td><td>onSuccess / success</td><td>status label</td><td>7.59 (≥4.5)</td><td>54.2</td><td>PASS</td></tr>
+<tr class=""><td>dark</td><td>onWarning / warning</td><td>status label</td><td>7.22 (≥4.5)</td><td>52</td><td>PASS</td></tr>
+<tr class=""><td>dark</td><td>onDanger / danger</td><td>status label</td><td>7.04 (≥4.5)</td><td>50.9</td><td>PASS</td></tr>
+<tr class=""><td>dark</td><td>primary / bg</td><td>interactive component</td><td>7.12 (≥3)</td><td>-50.8</td><td>PASS</td></tr>
+<tr class=""><td>dark</td><td>ring / bg</td><td>focus indicator</td><td>9.45 (≥3)</td><td>-64.4</td><td>PASS</td></tr>
+<tr class=""><td>dark</td><td>danger / bg</td><td>status against bg</td><td>6.75 (≥3)</td><td>-48.6</td><td>PASS</td></tr>
+<tr class=""><td>light</td><td>text / bg</td><td>body text</td><td>11.75 (≥4.5)</td><td>95</td><td>PASS</td></tr>
+<tr class=""><td>light</td><td>text / surface</td><td>body text</td><td>11.25 (≥4.5)</td><td>92</td><td>PASS</td></tr>
+<tr class=""><td>light</td><td>text / elevated</td><td>body text</td><td>12.27 (≥4.5)</td><td>98</td><td>PASS</td></tr>
+<tr class=""><td>light</td><td>textMuted / bg</td><td>secondary text</td><td>4.81 (≥4.5)</td><td>71.8</td><td>PASS</td></tr>
+<tr class=""><td>light</td><td>textMuted / surface</td><td>secondary text</td><td>4.61 (≥4.5)</td><td>68.8</td><td>PASS</td></tr>
+<tr class=""><td>light</td><td>textFaint / bg</td><td>faint/large text</td><td>3.22 (≥3)</td><td>58.1</td><td>PASS</td></tr>
+<tr class=""><td>light</td><td>onPrimary / primary</td><td>button label</td><td>4.77 (≥4.5)</td><td>-75.7</td><td>PASS</td></tr>
+<tr class=""><td>light</td><td>onAccentStrong / accentStrong</td><td>solid button label</td><td>6.15 (≥4.5)</td><td>-82.8</td><td>PASS</td></tr>
+<tr class=""><td>light</td><td>onSuccess / success</td><td>status label</td><td>4.6 (≥4.5)</td><td>-76.6</td><td>PASS</td></tr>
+<tr class=""><td>light</td><td>onWarning / warning</td><td>status label</td><td>4.81 (≥4.5)</td><td>-76.4</td><td>PASS</td></tr>
+<tr class=""><td>light</td><td>onDanger / danger</td><td>status label</td><td>5.17 (≥4.5)</td><td>-77.4</td><td>PASS</td></tr>
+<tr class=""><td>light</td><td>primary / bg</td><td>interactive component</td><td>4.79 (≥3)</td><td>70.8</td><td>PASS</td></tr>
+<tr class=""><td>light</td><td>ring / bg</td><td>focus indicator</td><td>5.23 (≥3)</td><td>73.5</td><td>PASS</td></tr>
+<tr class=""><td>light</td><td>danger / bg</td><td>status against bg</td><td>5.2 (≥3)</td><td>72.8</td><td>PASS</td></tr></table>
