@@ -1,6 +1,7 @@
 import {
   useCallback,
   useLayoutEffect,
+  useMemo,
   useRef,
   useState,
   type ReactElement,
@@ -15,10 +16,12 @@ import {
 } from "react-resizable-panels";
 import { assertNever } from "../../../shared/assert";
 import type { CommitSelection, DiffSelection, LogEntry } from "../../../shared/git";
-import type { ReviewLayer, ReviewSource } from "../../../shared/review";
+import type { Comment, ReviewLayer, ReviewSource } from "../../../shared/review";
+import { CommentsPanel } from "@/components/CommentsPanel";
 import { FileTreePanel } from "@/components/FileTreePanel";
 import { LayerList } from "@/components/LayerList";
 import { SelectionPanel } from "@/components/SelectionPanel";
+import { commentCountsByFile } from "@/lib/diff/comment-navigation";
 import { Button } from "@/components/ui/button";
 import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from "@/components/ui/resizable";
 import { emptySoloReason, findLayer, soloFiles } from "@/lib/layers";
@@ -36,6 +39,7 @@ type SidebarView = "selector" | "tree";
 // A stable empty array so the layers selector returns a constant reference for a
 // layer-less session, rather than a fresh [] that would re-render every tick.
 const EMPTY_LAYERS: ReviewLayer[] = [];
+const EMPTY_COMMENTS: Comment[] = [];
 
 /** The header's diff label: a rendered node (refs/SHAs mono, plain-language arms
  * sans) plus a plain-string `title`, so a truncated ref stays recoverable on hover. */
@@ -160,8 +164,18 @@ export function SidebarNav(): ReactElement {
     (state) => selectActiveSlice(state)?.reviewDiff?.kind === "frozenPatch",
   );
   const activeLayerId = useReviewStore((state) => selectActiveSlice(state)?.activeLayerId ?? null);
+  const comments = useReviewStore((state) => selectActiveSlice(state)?.comments ?? EMPTY_COMMENTS);
+  const activeCommentId = useReviewStore(
+    (state) => selectActiveSlice(state)?.activeCommentId ?? null,
+  );
+  const focusComment = useReviewStore((state) => state.focusComment);
   const activeSessionId = useReviewStore((state) => state.activeSessionId);
   const [view, setView] = useState<SidebarView>("tree");
+  // Disclosure of the comment overview: collapsed it's a one-line count bar; expanded
+  // it becomes a resizable panel above the layers/tree stack. Per-session (SidebarNav
+  // is keyed by the active session), so it resets like `view` on a tab switch.
+  const [commentsExpanded, setCommentsExpanded] = useState(false);
+  const commentCounts = useMemo(() => commentCountsByFile(comments), [comments]);
 
   // A tree only exists for a loaded diff; every other phase (idle, loading,
   // empty, failed) forces the selector — there is nothing to browse, and the
@@ -278,39 +292,84 @@ export function SidebarNav(): ReactElement {
               <FileTreePanel
                 key={`${activeSessionId}:${diff.loadId}:${activeLayerId ?? ""}`}
                 files={treeFiles}
+                commentCounts={commentCounts}
               />
             );
-          if (layers.length === 0) {
-            return tree;
+          // The layers + tree stack the comment overview sits above. Its own inner
+          // resize group is untouched — the comment panel wraps it, it never merges in.
+          const restStack =
+            layers.length === 0 ? (
+              tree
+            ) : (
+              <ResizablePanelGroup
+                orientation="vertical"
+                elementRef={layersGroupElRef}
+                groupRef={layersGroupRef}
+                onLayoutChanged={onLayersLayoutChanged}
+                className="min-h-0 flex-1"
+              >
+                <ResizablePanel
+                  id="layers"
+                  panelRef={layersPanelRef}
+                  defaultSize="50%"
+                  minSize="64px"
+                  groupResizeBehavior="preserve-pixel-size"
+                >
+                  <LayerList
+                    layers={layers}
+                    activeLayerId={activeLayerId}
+                    files={diff.files}
+                    frozen={frozen}
+                    contentRef={layersContentRef}
+                  />
+                </ResizablePanel>
+                <ResizableHandle />
+                <ResizablePanel id="tree" minSize="120px">
+                  <div className="flex h-full min-h-0 flex-col">{tree}</div>
+                </ResizablePanel>
+              </ResizablePanelGroup>
+            );
+          // The overview reads the full diff (not the soloed subset) — clicking a
+          // soloed-out comment clears the solo in the store.
+          const renderComments = (fill: boolean): ReactElement | null => (
+            <CommentsPanel
+              files={diff.files}
+              comments={comments}
+              frozen={frozen}
+              activeCommentId={activeCommentId}
+              onFocusComment={focusComment}
+              expanded={commentsExpanded}
+              onToggleExpanded={() => setCommentsExpanded((value) => !value)}
+              fill={fill}
+            />
+          );
+          // Expanded (with comments to show), the overview is its own resizable panel
+          // above the rest, draggable at the seam. Collapsed — or on a diff with no
+          // comments — it's just the shrink-0 count bar over the plain stack, so the
+          // resize math is only paid for when the list is actually open.
+          if (comments.length > 0 && commentsExpanded) {
+            return (
+              <ResizablePanelGroup orientation="vertical" className="min-h-0 flex-1">
+                <ResizablePanel
+                  id="comments"
+                  defaultSize="240px"
+                  minSize="72px"
+                  groupResizeBehavior="preserve-pixel-size"
+                >
+                  {renderComments(true)}
+                </ResizablePanel>
+                <ResizableHandle />
+                <ResizablePanel id="rest" minSize="120px">
+                  <div className="flex h-full min-h-0 flex-col">{restStack}</div>
+                </ResizablePanel>
+              </ResizablePanelGroup>
+            );
           }
           return (
-            <ResizablePanelGroup
-              orientation="vertical"
-              elementRef={layersGroupElRef}
-              groupRef={layersGroupRef}
-              onLayoutChanged={onLayersLayoutChanged}
-              className="min-h-0 flex-1"
-            >
-              <ResizablePanel
-                id="layers"
-                panelRef={layersPanelRef}
-                defaultSize="50%"
-                minSize="64px"
-                groupResizeBehavior="preserve-pixel-size"
-              >
-                <LayerList
-                  layers={layers}
-                  activeLayerId={activeLayerId}
-                  files={diff.files}
-                  frozen={frozen}
-                  contentRef={layersContentRef}
-                />
-              </ResizablePanel>
-              <ResizableHandle />
-              <ResizablePanel id="tree" minSize="120px">
-                <div className="flex h-full min-h-0 flex-col">{tree}</div>
-              </ResizablePanel>
-            </ResizablePanelGroup>
+            <div className="flex min-h-0 flex-1 flex-col">
+              {renderComments(false)}
+              {restStack}
+            </div>
           );
         })()
       ) : (

@@ -656,6 +656,7 @@ describe("useReviewStore.selectAdjacentFile", () => {
       reviewSubrange: null,
       reviewOrigin: null,
       activeLayerId: null,
+      activeCommentId: null,
       needsDerive: false,
       requestTicket: 1,
     };
@@ -1520,6 +1521,7 @@ describe("useReviewStore layer navigation", () => {
       reviewSubrange: null,
       reviewOrigin: null,
       activeLayerId: null,
+      activeCommentId: null,
       needsDerive: false,
       requestTicket: 1,
     };
@@ -1586,6 +1588,165 @@ describe("useReviewStore layer navigation", () => {
   });
 });
 
+describe("useReviewStore comment navigation", () => {
+  // MULTI_STATUS_PATCH file order: added.txt, doomed.txt, greet.ts, img.png,
+  // newname.txt, notes.txt. Three placed comments, one per file, so document order
+  // is added.txt → greet.ts → notes.txt.
+  const C_ADDED: Comment = {
+    file: "added.txt",
+    side: "additions",
+    startLine: 1,
+    endLine: 1,
+    body: "first file",
+    id: ID_A,
+  };
+  const C_GREET: Comment = {
+    file: "greet.ts",
+    side: "additions",
+    startLine: 2,
+    endLine: 2,
+    body: "middle file",
+    id: ID_B,
+  };
+  const C_NOTES: Comment = {
+    file: "notes.txt",
+    side: "additions",
+    startLine: 6,
+    endLine: 6,
+    body: "last file",
+    id: ID_C,
+  };
+
+  function seedComments(comments: Comment[], overrides: Partial<SessionSlice> = {}): void {
+    const files = parsePatch(MULTI_STATUS_PATCH, "test");
+    const base: SessionSlice = {
+      id: SESSION_ID,
+      repo: { path: "/repo", name: "repo" },
+      mode: "branches",
+      log: null,
+      branches: null,
+      brush: null,
+      base: "main" as BranchName,
+      head: "feature/x" as BranchName,
+      selection: { kind: "branches", base: "main" as BranchName, head: "feature/x" as BranchName },
+      diff: { phase: "loaded", loadId: 1, files },
+      selectedFilePath: null,
+      scrollTop: 0,
+      commitSelection: null,
+      comments,
+      layers: [],
+      reviewDiff: null,
+      reviewSubrange: null,
+      reviewOrigin: null,
+      activeLayerId: null,
+      activeCommentId: null,
+      needsDerive: false,
+      requestTicket: 1,
+    };
+    useReviewStore.setState({
+      boot: "ready",
+      sessions: { [SESSION_ID]: { ...base, ...overrides } },
+      activeSessionId: SESSION_ID,
+    });
+  }
+
+  it("focuses a comment: sets the active id and moves file focus onto its file", () => {
+    seedComments([C_ADDED, C_GREET, C_NOTES]);
+    useReviewStore.getState().focusComment(ID_B);
+    expect(active().activeCommentId).toBe(ID_B);
+    expect(active().selectedFilePath).toBe("greet.ts");
+  });
+
+  it("steps in document order from nothing, forward lands on the first comment", () => {
+    seedComments([C_NOTES, C_ADDED, C_GREET]);
+    const { stepComment } = useReviewStore.getState();
+    stepComment(1);
+    expect(active().activeCommentId).toBe(ID_A);
+    stepComment(1);
+    expect(active().activeCommentId).toBe(ID_B);
+    stepComment(1);
+    expect(active().activeCommentId).toBe(ID_C);
+  });
+
+  it("wraps at both ends so the walk is a cycle", () => {
+    seedComments([C_ADDED, C_GREET, C_NOTES]);
+    const { stepComment } = useReviewStore.getState();
+    stepComment(-1); // from nothing, backward lands on the last
+    expect(active().activeCommentId).toBe(ID_C);
+    stepComment(1); // last → first
+    expect(active().activeCommentId).toBe(ID_A);
+    stepComment(-1); // first → last
+    expect(active().activeCommentId).toBe(ID_C);
+  });
+
+  it("steps only the visible (soloed) file set, skipping comments a layer hides", () => {
+    const soloGreet: ReviewLayer[] = [
+      {
+        id: "only-greet",
+        label: "Greeting",
+        summary: "the greet file",
+        kind: "feature",
+        ranges: [{ file: "greet.ts", side: "additions", startLine: 1, endLine: 1 }],
+      },
+    ];
+    seedComments([C_ADDED, C_GREET, C_NOTES], { layers: soloGreet, activeLayerId: "only-greet" });
+    const { stepComment } = useReviewStore.getState();
+    stepComment(1);
+    expect(active().activeCommentId).toBe(ID_B);
+    stepComment(1); // only one navigable under the solo → wraps back to itself
+    expect(active().activeCommentId).toBe(ID_B);
+  });
+
+  it("clears the solo when focusing a comment the active layer would hide", () => {
+    const soloGreet: ReviewLayer[] = [
+      {
+        id: "only-greet",
+        label: "Greeting",
+        summary: "the greet file",
+        kind: "feature",
+        ranges: [{ file: "greet.ts", side: "additions", startLine: 1, endLine: 1 }],
+      },
+    ];
+    seedComments([C_ADDED, C_GREET], { layers: soloGreet, activeLayerId: "only-greet" });
+    useReviewStore.getState().focusComment(ID_A); // added.txt is outside the solo
+    expect(active().activeLayerId).toBeNull();
+    expect(active().activeCommentId).toBe(ID_A);
+  });
+
+  it("clears a dangling active id when the focused comment is discarded", () => {
+    seedComments([C_ADDED, C_GREET]);
+    useReviewStore.getState().focusComment(ID_A);
+    useReviewStore.getState().discardComment(ID_A);
+    expect(active().activeCommentId).toBeNull();
+    // Discarding a different comment leaves the focus alone.
+    useReviewStore.getState().focusComment(ID_B);
+    useReviewStore.getState().discardComment("no-such-id");
+    expect(active().activeCommentId).toBe(ID_B);
+  });
+
+  it("plain file navigation (tree click, j/k) dismisses the comment step-through", () => {
+    seedComments([C_ADDED, C_GREET, C_NOTES]);
+    useReviewStore.getState().focusComment(ID_B);
+    useReviewStore.getState().selectFile("notes.txt");
+    expect(active().activeCommentId).toBeNull();
+    useReviewStore.getState().focusComment(ID_B);
+    useReviewStore.getState().selectAdjacentFile(1);
+    expect(active().activeCommentId).toBeNull();
+  });
+
+  it("never persists the active comment id", () => {
+    const bridge = makeBridge({});
+    vi.stubGlobal("window", { reviewer: bridge });
+    seedComments([C_ADDED]);
+    useReviewStore.getState().focusComment(ID_A);
+    useReviewStore.getState().flushWriteBacks();
+    const persisted = vi.mocked(bridge.updateSession).mock.calls.at(-1)?.[0];
+    expect(persisted).not.toHaveProperty("activeCommentId");
+    // The file focus half of focusComment does persist.
+    expect(persisted?.selectedFilePath).toBe("added.txt");
+  });
+});
+
 describe("review export actions", () => {
   const REPO = { path: "/repo", name: "app" };
   const ORIGIN: ReviewOrigin = {
@@ -1630,6 +1791,7 @@ describe("review export actions", () => {
       reviewSubrange: null,
       reviewOrigin: null,
       activeLayerId: null,
+      activeCommentId: null,
       needsDerive: false,
       requestTicket: 1,
     };
@@ -1876,6 +2038,7 @@ describe("exit gate", () => {
       reviewSubrange: null,
       reviewOrigin: reviewOriginFor(review),
       activeLayerId: null,
+      activeCommentId: null,
       needsDerive: false,
       requestTicket: 1,
     };

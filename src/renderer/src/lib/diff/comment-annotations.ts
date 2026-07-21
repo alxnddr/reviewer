@@ -21,7 +21,7 @@ import { resolveAnchor } from "./anchor";
  * placed or outdated authored/manual comment; a `draft` slot is the not-yet-saved
  * new comment whose editor occupies the picked line. */
 export type CommentSlot =
-  | { kind: "comment"; comment: Comment; outdated: boolean; editing: boolean }
+  | { kind: "comment"; comment: Comment; outdated: boolean; editing: boolean; active: boolean }
   | { kind: "draft"; anchor: ReviewAnchor };
 
 /** An in-flight new comment: the file it was opened on and the picked range. */
@@ -50,13 +50,13 @@ function annotationsVersion(annotations: readonly DiffLineAnnotation<CommentSlot
   const parts = annotations.map((annotation) => {
     const slot = annotation.metadata;
     return slot.kind === "comment"
-      ? `c|${annotation.side}|${annotation.lineNumber}|${slot.comment.id}|${slot.outdated ? 1 : 0}|${slot.editing ? 1 : 0}|${slot.comment.body}`
+      ? `c|${annotation.side}|${annotation.lineNumber}|${slot.comment.id}|${slot.outdated ? 1 : 0}|${slot.editing ? 1 : 0}|${slot.active ? 1 : 0}|${slot.comment.body}`
       : `d|${annotation.side}|${annotation.lineNumber}|${slot.anchor.startLine}-${slot.anchor.endLine}`;
   });
   return fnv1a(parts.join("\n"));
 }
 
-function groupByFile(comments: readonly Comment[]): Map<string, Comment[]> {
+export function groupByFile(comments: readonly Comment[]): Map<string, Comment[]> {
   const byFile = new Map<string, Comment[]>();
   for (const comment of comments) {
     const list = byFile.get(comment.file);
@@ -78,6 +78,7 @@ export function buildCommentItems(
   comments: readonly Comment[],
   ui: CommentUiState,
   frozen: boolean,
+  activeCommentId: string | null = null,
 ): CodeViewDiffItem<CommentSlot>[] {
   const byFile = groupByFile(comments);
   return files.map((file) => {
@@ -95,6 +96,7 @@ export function buildCommentItems(
           comment,
           outdated: resolution.status === "outdated",
           editing: ui.editingId === comment.id,
+          active: activeCommentId === comment.id,
         },
       });
     }

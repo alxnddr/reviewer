@@ -25,12 +25,15 @@ function toTreeGitStatus(status: FileChangeStatus): GitStatus {
 
 type FileTreePanelProps = {
   files: PatchFile[];
+  /** How many comments each file carries, for the per-file count badge. Keyed by
+   * `PatchFile.path`; a file with none gets no badge. */
+  commentCounts: Map<string, number>;
 };
 
 /** Changed-files tree for the loaded diff, behind a fuzzy path filter. Remount
  * with a new `key` when `files` changes identity — that also resets the filter,
  * which belongs to one subset, not the session. */
-export function FileTreePanel({ files }: FileTreePanelProps): ReactElement {
+export function FileTreePanel({ files, commentCounts }: FileTreePanelProps): ReactElement {
   const [filter, setFilter] = useState("");
   const visibleFiles = useMemo(
     () => files.filter((file) => fuzzyMatches(filter, file.path)),
@@ -68,6 +71,7 @@ export function FileTreePanel({ files }: FileTreePanelProps): ReactElement {
         <ChangedFileTree
           key={visibleFiles.map((file) => file.path).join("\n")}
           files={visibleFiles}
+          commentCounts={commentCounts}
         />
       )}
     </div>
@@ -76,13 +80,21 @@ export function FileTreePanel({ files }: FileTreePanelProps): ReactElement {
 
 type ChangedFileTreeProps = {
   files: PatchFile[];
+  commentCounts: Map<string, number>;
 };
 
-function ChangedFileTree({ files }: ChangedFileTreeProps): ReactElement {
+function ChangedFileTree({ files, commentCounts }: ChangedFileTreeProps): ReactElement {
   const selectedFilePath = useReviewStore(
     (state) => selectActiveSlice(state)?.selectedFilePath ?? null,
   );
   const selectFile = useReviewStore((state) => state.selectFile);
+
+  // Pierre builds the tree once (its options are captured at construction), so the
+  // decoration renderer must read counts through a ref to stay current: a comment
+  // add/discard updates the ref, and the badge refreshes on the next row render
+  // (scroll/expand/select) rather than a full remount that would drop tree state.
+  const countsRef = useRef(commentCounts);
+  countsRef.current = commentCounts;
 
   const { model } = useFileTree({
     paths: files.map((file) => file.path),
@@ -100,6 +112,17 @@ function ChangedFileTree({ files }: ChangedFileTreeProps): ReactElement {
       if (path !== undefined) {
         selectFile(path);
       }
+    },
+    // Per-file comment count on the right of its row; files with none stay bare.
+    renderRowDecoration: (context) => {
+      if (context.item.kind !== "file") {
+        return null;
+      }
+      const count = countsRef.current.get(context.item.path) ?? 0;
+      if (count === 0) {
+        return null;
+      }
+      return { text: String(count), title: count === 1 ? "1 comment" : `${count} comments` };
     },
   });
 

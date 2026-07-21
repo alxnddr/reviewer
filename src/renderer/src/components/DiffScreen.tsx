@@ -60,6 +60,30 @@ function useFileStepShortcuts(): void {
   }, [selectAdjacentFile]);
 }
 
+/** n/p walk the comments (next/previous), Escape dismisses the walk. Sibling of the
+ * j/k file stepper, with the same editable-target and modifier guards so it never
+ * fires inside the comment editor or a filter field. */
+function useCommentStepShortcuts(): void {
+  const stepComment = useReviewStore((state) => state.stepComment);
+  const clearActiveComment = useReviewStore((state) => state.clearActiveComment);
+
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent): void => {
+      if (event.metaKey || event.ctrlKey || event.altKey || isEditable(event.target)) {
+        return;
+      }
+      if (event.key === "n" || event.key === "p") {
+        event.preventDefault();
+        stepComment(event.key === "n" ? 1 : -1);
+      } else if (event.key === "Escape") {
+        clearActiveComment();
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [stepComment, clearActiveComment]);
+}
+
 function LoadingState(): ReactElement {
   return (
     <div aria-label="Loading diff" className="flex h-full flex-col gap-2 p-6" role="status">
@@ -137,6 +161,9 @@ export function DiffScreen(): ReactElement | null {
   const comments = useReviewStore((state) => selectActiveSlice(state)?.comments ?? EMPTY_COMMENTS);
   const layers = useReviewStore((state) => selectActiveSlice(state)?.layers ?? EMPTY_LAYERS);
   const activeLayerId = useReviewStore((state) => selectActiveSlice(state)?.activeLayerId ?? null);
+  const activeCommentId = useReviewStore(
+    (state) => selectActiveSlice(state)?.activeCommentId ?? null,
+  );
   // A frozen review pins its embedded patch: its anchors place directly, never
   // re-resolved against a re-derived diff.
   const frozen = useReviewStore(
@@ -154,6 +181,8 @@ export function DiffScreen(): ReactElement | null {
   const addComment = useReviewStore((state) => state.addComment);
   const editComment = useReviewStore((state) => state.editComment);
   const discardComment = useReviewStore((state) => state.discardComment);
+  const stepComment = useReviewStore((state) => state.stepComment);
+  const clearActiveComment = useReviewStore((state) => state.clearActiveComment);
   const setActiveLayer = useReviewStore((state) => state.setActiveLayer);
   // Collapsing the prose drops the resize panel entirely (nothing to size), so the
   // parent — not LayerIntro — owns this.
@@ -173,6 +202,7 @@ export function DiffScreen(): ReactElement | null {
   const introContentRef = useRef<HTMLDivElement>(null);
   const wantFitRef = useRef(false);
   useFileStepShortcuts();
+  useCommentStepShortcuts();
 
   // Bound to the active id (which is DiffView's mount key), so it stays stable for
   // the mounted view and captures land only in the session that scrolled.
@@ -208,6 +238,19 @@ export function DiffScreen(): ReactElement | null {
     },
     [discardComment, activeSessionId],
   );
+  const onStepComment = useCallback(
+    (direction: 1 | -1) => {
+      if (activeSessionId !== null) {
+        stepComment(direction, activeSessionId);
+      }
+    },
+    [stepComment, activeSessionId],
+  );
+  const onClearActiveComment = useCallback(() => {
+    if (activeSessionId !== null) {
+      clearActiveComment(activeSessionId);
+    }
+  }, [clearActiveComment, activeSessionId]);
   const onResetReviewSubrange = useCallback(() => {
     if (activeSessionId !== null) {
       resetReviewSubrange(activeSessionId);
@@ -367,11 +410,14 @@ export function DiffScreen(): ReactElement | null {
           diffStyle={diffStyle}
           restoreScrollTop={scrollTop}
           activeLayerId={activeLayerId}
+          activeCommentId={activeCommentId}
           loadDiffFiles={loadDiffFiles}
           onScrollTop={onScrollTop}
           onAddComment={onAddComment}
           onEditComment={onEditComment}
           onDiscardComment={onDiscardComment}
+          onStepComment={onStepComment}
+          onClearActiveComment={onClearActiveComment}
         />
       );
       // The active layer's chapter intro reads its description at width. In

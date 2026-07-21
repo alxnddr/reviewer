@@ -22,7 +22,8 @@ import {
 import type { ReviewOpenFailure, ReviewOpenResponse } from "../../../shared/review-open";
 import type { SelectionMode, Session, SessionId, SessionSnapshot } from "../../../shared/session";
 import { parsePatch, type PatchFile } from "../lib/diff/patch";
-import { stepLayer as stepLayerId } from "../lib/layers";
+import { findLayer, soloFiles, stepLayer as stepLayerId } from "../lib/layers";
+import { indexOfComment, navigableEntries, orderedComments } from "../lib/diff/comment-navigation";
 import {
   exportSourceFor,
   markdownCommentsFrom,
@@ -113,6 +114,13 @@ export type SessionSlice = {
    * write-back, so layer navigation is additive over the session, never a
    * mutation of `selection`/`selectedFilePath`/`scrollTop`. */
   activeLayerId: string | null;
+  /** The comment the reviewer is stepping through / has focused, or null. Derived
+   * view state exactly like `activeLayerId`: never persisted (absent from
+   * `persistedSession`) and its setters schedule no write-back, so comment
+   * navigation is additive over the session and a relaunch always starts clean.
+   * The one source the sidebar list, the floating counter, and `DiffView`'s
+   * scroll-to-comment all read. */
+  activeCommentId: string | null;
   /** True from hydration until first activation derives log/branches/diff; a
    * derived slice is never re-derived, so switching back costs zero bridge calls. */
   needsDerive: boolean;
@@ -208,6 +216,18 @@ type ReviewState = {
   /** Walk the authored layer order, clamping at both ends; snappy and additive,
    * exactly like `setActiveLayer` (no write-back, no session mutation). */
   stepLayer: (direction: 1 | -1, sessionId?: SessionId) => void;
+  /** Focus a comment by id: mark it active (drives the scroll-to + card ring + the
+   * counter) and move the file focus onto its file so the tree and j/k stay in
+   * sync. Clears an active solo that would hide the target so its annotation is
+   * actually mounted. The active id is ephemeral (no write-back); the file focus
+   * persists like any other navigation. */
+  focusComment: (commentId: string, sessionId?: SessionId) => void;
+  /** Step the reader through the comments that have a line on the surface (placed
+   * or outdated), in reading order over the currently visible (soloed) file set,
+   * wrapping at both ends. A no-op when there are none. */
+  stepComment: (direction: 1 | -1, sessionId?: SessionId) => void;
+  /** Drop the focused comment back to none — dismisses the counter and the ring. */
+  clearActiveComment: (sessionId?: SessionId) => void;
   setDiffStyle: (style: DiffStyle) => void;
   /** Export the curated review as a round-trip `.reviewer.json`: serialize
    * the authored projection and hand it to the native save seam in main. An
@@ -591,6 +611,7 @@ function restoredSlice(session: Session): SessionSlice {
     reviewSubrange: session.reviewSubrange,
     reviewOrigin: session.reviewOrigin,
     activeLayerId: null,
+    activeCommentId: null,
     needsDerive: true,
     requestTicket: 0,
   };
@@ -878,6 +899,7 @@ export const useReviewStore = create<ReviewState>((set, get) => ({
       reviewSubrange: null,
       reviewOrigin: null,
       activeLayerId: null,
+      activeCommentId: null,
       needsDerive: false,
       requestTicket: 0,
     };
@@ -1096,7 +1118,9 @@ export const useReviewStore = create<ReviewState>((set, get) => ({
     if (id === null) {
       return;
     }
-    setSlice(set, get, id, { selectedFilePath: path });
+    // Plain file navigation dismisses the comment step-through: the reader is
+    // browsing files now, not walking comments.
+    setSlice(set, get, id, { selectedFilePath: path, activeCommentId: null });
     scheduleSessionWriteBack(get, id);
   },
 
@@ -1119,7 +1143,8 @@ export const useReviewStore = create<ReviewState>((set, get) => ({
         : Math.min(Math.max(currentIndex + direction, 0), files.length - 1);
     const next = files[nextIndex];
     if (next && next.path !== slice.selectedFilePath) {
-      setSlice(set, get, id, { selectedFilePath: next.path });
+      // j/k is plain file navigation — it dismisses the comment step-through.
+      setSlice(set, get, id, { selectedFilePath: next.path, activeCommentId: null });
       scheduleSessionWriteBack(get, id);
     }
   },
@@ -1197,7 +1222,12 @@ export const useReviewStore = create<ReviewState>((set, get) => ({
     if (remaining.length === slice.comments.length) {
       return;
     }
-    setSlice(set, get, id, { comments: remaining });
+    // Never leave the focus pointing at a comment that no longer exists — the
+    // counter would read a phantom position and the ring would target nothing.
+    setSlice(set, get, id, {
+      comments: remaining,
+      ...(slice.activeCommentId === commentId ? { activeCommentId: null } : {}),
+    });
     scheduleSessionWriteBack(get, id);
   },
 
@@ -1230,6 +1260,85 @@ export const useReviewStore = create<ReviewState>((set, get) => ({
       return;
     }
     setSlice(set, get, id, { activeLayerId: next });
+  },
+
+  focusComment: (commentId, sessionId) => {
+    const id = sessionId ?? get().activeSessionId;
+    if (id === null) {
+      return;
+    }
+    const slice = get().sessions[id];
+    if (slice === undefined) {
+      return;
+    }
+    const comment = slice.comments.find((candidate) => candidate.id === commentId);
+    if (comment === undefined) {
+      return;
+    }
+    // A soloed layer that doesn't cover the target's file would leave its
+    // annotation unmounted, so there'd be nothing to scroll to; clear the solo
+    // first (the panel lists every comment, soloed-out ones included). The full
+    // diff is unaffected, so this only fires when a solo is actually hiding it.
+    const clearsSolo =
+      slice.activeLayerId !== null &&
+      slice.diff.phase === "loaded" &&
+      !soloFiles(slice.diff.files, findLayer(slice.layers, slice.activeLayerId), slice.layers).some(
+        (file) => file.path === comment.file,
+      );
+    // The active id is ephemeral (no write-back); the file focus moves with it so
+    // the tree and j/k stay on the comment's file — that half persists.
+    setSlice(set, get, id, {
+      activeCommentId: commentId,
+      selectedFilePath: comment.file,
+      ...(clearsSolo ? { activeLayerId: null } : {}),
+    });
+    scheduleSessionWriteBack(get, id);
+  },
+
+  stepComment: (direction, sessionId) => {
+    const id = sessionId ?? get().activeSessionId;
+    if (id === null) {
+      return;
+    }
+    const slice = get().sessions[id];
+    if (slice === undefined || slice.diff.phase !== "loaded") {
+      return;
+    }
+    // Walk the file set the surface actually shows: a soloed layer restricts both
+    // the diff and this walk, so `n`/`p` never jumps to a comment that isn't on
+    // screen. `frozen` places every anchor; otherwise placement is positional.
+    const frozen = slice.reviewDiff?.kind === "frozenPatch";
+    const visible = soloFiles(
+      slice.diff.files,
+      findLayer(slice.layers, slice.activeLayerId),
+      slice.layers,
+    );
+    const entries = navigableEntries(orderedComments(visible, slice.comments, frozen));
+    if (entries.length === 0) {
+      return;
+    }
+    const current =
+      slice.activeCommentId === null ? -1 : indexOfComment(entries, slice.activeCommentId);
+    // From nowhere, forward lands on the first comment and backward on the last;
+    // otherwise step and wrap so the ends meet (the counter makes the wrap legible).
+    const nextIndex =
+      current === -1
+        ? direction === 1
+          ? 0
+          : entries.length - 1
+        : (current + direction + entries.length) % entries.length;
+    const next = entries[nextIndex];
+    if (next !== undefined) {
+      get().focusComment(next.comment.id, id);
+    }
+  },
+
+  clearActiveComment: (sessionId) => {
+    const id = sessionId ?? get().activeSessionId;
+    if (id === null) {
+      return;
+    }
+    setSlice(set, get, id, { activeCommentId: null });
   },
 
   clearOpenFailure: () => {

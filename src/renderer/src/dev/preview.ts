@@ -160,6 +160,7 @@ function siblingSlice(ordinal: number, name: string): SessionSlice {
     reviewSubrange: null,
     reviewOrigin: null,
     activeLayerId: null,
+    activeCommentId: null,
     needsDerive: true,
     requestTicket: 0,
   };
@@ -204,6 +205,7 @@ function seedSession(overrides: Partial<SessionSlice>): void {
     reviewSubrange: null,
     reviewOrigin: null,
     activeLayerId: null,
+    activeCommentId: null,
     needsDerive: false,
     requestTicket: 1,
     ...overrides,

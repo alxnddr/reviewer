@@ -4,12 +4,16 @@ import type { Comment } from "../../../shared/review";
 import { Button } from "@/components/ui/button";
 import { CommentBody } from "@/components/CommentBody";
 import { commentLocation } from "@/lib/comment-body";
+import { cn } from "@/lib/utils";
 
 type CommentThreadProps = {
   comment: Comment;
   /** The anchor drifted: this comment is pinned to the file header, and its
    * original location is shown (mono) since it no longer sits on its line. */
   outdated: boolean;
+  /** The comment the reader just jumped to (via `n`/`p` or the sidebar list): it
+   * gets a ring so the scrolled-to card is unmistakable among its neighbours. */
+  active: boolean;
   onEdit: () => void;
   onDiscard: () => void;
 };
@@ -21,13 +25,21 @@ type CommentThreadProps = {
 export function CommentThread({
   comment,
   outdated,
+  active,
   onEdit,
   onDiscard,
 }: CommentThreadProps): ReactElement {
   const location = commentLocation(comment);
 
   return (
-    <div className="flex flex-col gap-1.5 rounded-lg border border-border bg-card px-3 py-2.5 font-sans text-card-foreground">
+    <div
+      className={cn(
+        "flex flex-col gap-1.5 rounded-lg border border-border bg-card px-3 py-2.5 font-sans text-card-foreground",
+        // The jumped-to card: an accent ring lifts it off the surface (offset so
+        // the ring reads as a halo, not a second border hugging the card edge).
+        active && "ring-2 ring-primary ring-offset-2 ring-offset-diff-surface",
+      )}
+    >
       {outdated && (
         <div className="flex items-center gap-2 text-xs text-text-muted">
           <span className="rounded bg-border/60 px-1.5 py-0.5 text-foreground">Outdated</span>

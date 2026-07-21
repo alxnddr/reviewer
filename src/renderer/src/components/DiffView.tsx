@@ -22,8 +22,11 @@ import type { ReviewAnchor } from "../../../shared/review";
 import { Button } from "@/components/ui/button";
 import { CommentEditor } from "@/components/CommentEditor";
 import { CommentThread } from "@/components/CommentThread";
+import { CommentNavIndicator } from "@/components/CommentNavIndicator";
 import { DiffSearch } from "@/components/DiffSearch";
 import { useDiffSearch } from "@/lib/diff/use-diff-search";
+import { indexOfComment, navigableEntries, orderedComments } from "@/lib/diff/comment-navigation";
+import { commentLocation } from "@/lib/comment-body";
 import {
   buildCommentItems,
   pickAddAnchor,
@@ -57,6 +60,10 @@ type DiffViewProps = {
   /** The soloed layer, or null for the full diff. Its *change* resets the diff to the
    * top (below); solo filtering of `files` is done upstream. */
   activeLayerId: string | null;
+  /** The comment the reader is focused on (via `n`/`p` or the sidebar list), or
+   * null. Its change scrolls the diff to that comment's line and rings its card;
+   * the ring itself is driven through `buildCommentItems`. */
+  activeCommentId: string | null;
   /** Loads full file text so Pierre can expand unchanged context around a hunk;
    * null when no live repo backs the diff (a frozen artifact) or the selection
    * has no two readable refs — the expander is then off and no git read fires. */
@@ -67,6 +74,10 @@ type DiffViewProps = {
   onAddComment: (anchor: ReviewAnchor, body: string) => void;
   onEditComment: (commentId: string, body: string) => void;
   onDiscardComment: (commentId: string) => void;
+  /** Comment step-through, routed to the owning session's slice — drives the
+   * floating navigator's prev/next and close. */
+  onStepComment: (direction: 1 | -1) => void;
+  onClearActiveComment: () => void;
 };
 
 // Two overrides injected through Pierre's `unsafeCSS` hatch — its own `@layer unsafe`, which outranks
@@ -118,11 +129,14 @@ export function DiffView({
   diffStyle,
   restoreScrollTop,
   activeLayerId,
+  activeCommentId,
   loadDiffFiles,
   onScrollTop,
   onAddComment,
   onEditComment,
   onDiscardComment,
+  onStepComment,
+  onClearActiveComment,
 }: DiffViewProps): ReactElement {
   const dark = useEffectiveDark();
   const themeSelection = useThemeStore((state) => state.selection);
@@ -146,9 +160,20 @@ export function DiffView({
   const search = useDiffSearch(handleRef, files);
 
   const items = useMemo(
-    () => buildCommentItems(files, comments, { editingId, draft }, frozen),
-    [files, comments, editingId, draft, frozen],
+    () => buildCommentItems(files, comments, { editingId, draft }, frozen, activeCommentId),
+    [files, comments, editingId, draft, frozen, activeCommentId],
   );
+
+  // The floating counter's position, derived defensively: the same navigable order
+  // `stepComment` walks, and the active comment's 1-based place in it. A focused id
+  // that isn't in the list (soloed out, unplaceable, or just discarded) resolves to
+  // −1, which hides the counter rather than showing a phantom position.
+  const navEntries = useMemo(
+    () => navigableEntries(orderedComments(files, comments, frozen)),
+    [files, comments, frozen],
+  );
+  const navIndex = activeCommentId === null ? -1 : indexOfComment(navEntries, activeCommentId);
+  const navActive = navIndex >= 0 ? (navEntries[navIndex] ?? null) : null;
 
   // A binary change is otherwise indistinguishable from a pure rename (both render
   // header-only, zero hunks) — the header says which one the reader is looking at.
@@ -239,6 +264,7 @@ export function DiffView({
           <CommentThread
             comment={slot.comment}
             outdated={slot.outdated}
+            active={slot.active}
             onEdit={() => openEdit(slot.comment.id)}
             onDiscard={() => onDiscardComment(slot.comment.id)}
           />
@@ -275,6 +301,58 @@ export function DiffView({
   // fire. A value-compare, not a fire-once flag: a StrictMode remount replays with
   // the same value and stays inert, where a boolean guard would flip and jump.
   const lastJumpedPath = useRef(selectedFilePath);
+
+  // Scroll to the focused comment (a sidebar click or an `n`/`p` step). Declared
+  // BEFORE the file-jump effect below and seeding `lastJumpedPath`: `focusComment`
+  // sets `activeCommentId` and `selectedFilePath` in one store write, so both change
+  // in the same commit — running first and claiming the jump makes the file-jump
+  // effect a no-op, so exactly one precise scroll fires (line/centre, not
+  // file/start). Value-compare-seeded like the jumps, so a mount / StrictMode replay
+  // is inert (the persisted-scroll restore owns the mount; the ring still paints from
+  // `items`, so a tab bounce keeps the highlight without a competing scroll). A
+  // placed comment centres on its line; an outdated one has no line, so its file
+  // header is brought into view where it renders; an id with no host item here
+  // (soloed out, unplaceable, or discarded) is a no-op.
+  const lastFocusedCommentId = useRef(activeCommentId);
+  useEffect(() => {
+    if (activeCommentId === lastFocusedCommentId.current) {
+      return;
+    }
+    lastFocusedCommentId.current = activeCommentId;
+    if (activeCommentId === null) {
+      return;
+    }
+    const handle = handleRef.current;
+    if (handle === null) {
+      return;
+    }
+    const entry = orderedComments(files, comments, frozen).find(
+      (candidate) => candidate.comment.id === activeCommentId,
+    );
+    if (entry === undefined) {
+      return;
+    }
+    // Claim the jump so the file-jump effect (next) doesn't also scroll to the file.
+    lastJumpedPath.current = entry.comment.file;
+    if (entry.status === "placed" && entry.line !== null) {
+      handle.scrollTo({
+        type: "line",
+        id: entry.comment.file,
+        lineNumber: entry.line,
+        side: entry.comment.side,
+        align: "center",
+        behavior: "instant",
+      });
+    } else {
+      handle.scrollTo({
+        type: "item",
+        id: entry.comment.file,
+        align: "start",
+        behavior: "instant",
+      });
+    }
+  }, [activeCommentId, files, comments, frozen]);
+
   useEffect(() => {
     if (selectedFilePath === lastJumpedPath.current) {
       return;
@@ -326,6 +404,17 @@ export function DiffView({
   // bar stays put while the diff scrolls beneath it.
   return (
     <div className="relative h-full">
+      {navActive !== null && (
+        <CommentNavIndicator
+          position={navIndex + 1}
+          count={navEntries.length}
+          location={commentLocation(navActive.comment)}
+          outdated={navActive.status === "outdated"}
+          onPrevious={() => onStepComment(-1)}
+          onNext={() => onStepComment(1)}
+          onClose={onClearActiveComment}
+        />
+      )}
       {search.open && (
         <DiffSearch
           query={search.query}
