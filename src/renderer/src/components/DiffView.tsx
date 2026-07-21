@@ -22,6 +22,8 @@ import type { ReviewAnchor } from "../../../shared/review";
 import { Button } from "@/components/ui/button";
 import { CommentEditor } from "@/components/CommentEditor";
 import { CommentThread } from "@/components/CommentThread";
+import { DiffSearch } from "@/components/DiffSearch";
+import { useDiffSearch } from "@/lib/diff/use-diff-search";
 import {
   buildCommentItems,
   pickAddAnchor,
@@ -135,6 +137,13 @@ export function DiffView({
   // it; this only observes) so the gutter `+` can name its action honestly: a
   // deliberate multi-line drag makes it a range add, an ordinary hover a line add.
   const [selection, setSelection] = useState<CodeViewLineSelection | null>(null);
+
+  // Find-in-diff. The surface is virtualized, so off-screen lines never enter the
+  // DOM and the browser's native find is blind to them; this searches the parsed
+  // patch and navigates by driving the same handle used for file jumps. It
+  // highlights the active match through Pierre's line selection (written
+  // notify:false, so it never reaches `setSelection` above or the comment `+`).
+  const search = useDiffSearch(handleRef, files);
 
   const items = useMemo(
     () => buildCommentItems(files, comments, { editingId, draft }, frozen),
@@ -312,77 +321,95 @@ export function DiffView({
   useEffect(() => () => capture.flush(), [capture]);
 
   // The CodeView container is the scroll context; without overflow-y the document
-  // itself grows by the diff's full height and the shell chrome scrolls away.
+  // itself grows by the diff's full height and the shell chrome scrolls away. The
+  // relative wrapper hosts the floating find bar above that scroll context so the
+  // bar stays put while the diff scrolls beneath it.
   return (
-    <CodeView
-      ref={handleRef}
-      items={items}
-      options={options}
-      onScroll={(scrollTop) => {
-        // A soloed layer's scroll is derived view state — never the reader's place
-        // in the full diff, so it must not be captured or persisted.
-        if (capturesScroll(activeLayerIdRef.current)) {
-          capture.notify(scrollTop);
-        }
-      }}
-      className="h-full overflow-y-auto"
-      onSelectedLinesChange={setSelection}
-      renderHeaderFilenameSuffix={(item) =>
-        binaryPaths.has(item.id) ? (
-          <span className="font-mono text-xs text-text-muted">binary</span>
-        ) : null
-      }
-      renderHeaderMetadata={(item) => <CopyPathButton path={item.id} />}
-      renderAnnotation={renderAnnotation}
-      renderGutterUtility={(getHoveredLine, item) => (
-        // size-6 (24px) meets the hit-target floor; the glyph stays 12px so
-        // the affordance still reads as a gutter micro-control. Accent is the add
-        // trigger (only one shows at a time, on the hovered line). The label names
-        // the real action: a range when a deliberate multi-line drag covers this
-        // file, a single line otherwise.
-        <Button
-          type="button"
-          size="icon-xs"
-          // Keep the primary fill solid on hover: the default variant's
-          // `hover:bg-primary/80` reads as the add affordance dimming, not lifting.
-          className="hover:bg-primary"
-          aria-label={
-            selectionRange(selection, item.id) === null
-              ? "Add a comment on this line"
-              : "Add a comment on the selected lines"
-          }
-          // Replacing Pierre's default `[data-utility-button]` drops the
-          // stacking lift and gutter offset it carried (z-index + a negative
-          // right margin in the gutter's own lh/ch metric); without them our
-          // composite paints under, and sits inside, the line-number column.
-          // Restore Pierre's exact values so the affordance clears the numbers.
-          style={{ position: "relative", zIndex: 4, marginRight: "calc(-1lh + 1ch)" }}
-          onClick={() => {
-            const handle = handleRef.current;
-            const raw = getHoveredLine();
-            // Narrow Pierre's file|diff hovered union to an anchor-side line, or
-            // null (a file-mode row with no side, never a diff gutter).
-            let hovered: HoveredLine | null = null;
-            if (raw !== undefined && "side" in raw) {
-              const side = raw.side;
-              if (side === "additions" || side === "deletions") {
-                hovered = { lineNumber: raw.lineNumber, side };
-              }
-            }
-            // A deliberate multi-line drag that covers this `+` commits its range;
-            // otherwise the single hovered line. Clear the selection either way so
-            // its highlight does not linger under the opened editor.
-            const anchor = pickAddAnchor(item.id, hovered, handle?.getSelectedLines() ?? null);
-            if (anchor !== null) {
-              openDraft(item.id, anchor);
-              handle?.clearSelectedLines();
-            }
-          }}
-        >
-          <Plus />
-        </Button>
+    <div className="relative h-full">
+      {search.open && (
+        <DiffSearch
+          query={search.query}
+          caseSensitive={search.caseSensitive}
+          matchCount={search.matchCount}
+          activePosition={search.activePosition}
+          focusNonce={search.focusNonce}
+          onQueryChange={search.setQuery}
+          onToggleCase={search.toggleCaseSensitive}
+          onNext={search.goToNext}
+          onPrevious={search.goToPrevious}
+          onClose={search.closeSearch}
+        />
       )}
-    />
+      <CodeView
+        ref={handleRef}
+        items={items}
+        options={options}
+        onScroll={(scrollTop) => {
+          // A soloed layer's scroll is derived view state — never the reader's place
+          // in the full diff, so it must not be captured or persisted.
+          if (capturesScroll(activeLayerIdRef.current)) {
+            capture.notify(scrollTop);
+          }
+        }}
+        className="h-full overflow-y-auto"
+        onSelectedLinesChange={setSelection}
+        renderHeaderFilenameSuffix={(item) =>
+          binaryPaths.has(item.id) ? (
+            <span className="font-mono text-xs text-text-muted">binary</span>
+          ) : null
+        }
+        renderHeaderMetadata={(item) => <CopyPathButton path={item.id} />}
+        renderAnnotation={renderAnnotation}
+        renderGutterUtility={(getHoveredLine, item) => (
+          // size-6 (24px) meets the hit-target floor; the glyph stays 12px so
+          // the affordance still reads as a gutter micro-control. Accent is the add
+          // trigger (only one shows at a time, on the hovered line). The label names
+          // the real action: a range when a deliberate multi-line drag covers this
+          // file, a single line otherwise.
+          <Button
+            type="button"
+            size="icon-xs"
+            // Keep the primary fill solid on hover: the default variant's
+            // `hover:bg-primary/80` reads as the add affordance dimming, not lifting.
+            className="hover:bg-primary"
+            aria-label={
+              selectionRange(selection, item.id) === null
+                ? "Add a comment on this line"
+                : "Add a comment on the selected lines"
+            }
+            // Replacing Pierre's default `[data-utility-button]` drops the
+            // stacking lift and gutter offset it carried (z-index + a negative
+            // right margin in the gutter's own lh/ch metric); without them our
+            // composite paints under, and sits inside, the line-number column.
+            // Restore Pierre's exact values so the affordance clears the numbers.
+            style={{ position: "relative", zIndex: 4, marginRight: "calc(-1lh + 1ch)" }}
+            onClick={() => {
+              const handle = handleRef.current;
+              const raw = getHoveredLine();
+              // Narrow Pierre's file|diff hovered union to an anchor-side line, or
+              // null (a file-mode row with no side, never a diff gutter).
+              let hovered: HoveredLine | null = null;
+              if (raw !== undefined && "side" in raw) {
+                const side = raw.side;
+                if (side === "additions" || side === "deletions") {
+                  hovered = { lineNumber: raw.lineNumber, side };
+                }
+              }
+              // A deliberate multi-line drag that covers this `+` commits its range;
+              // otherwise the single hovered line. Clear the selection either way so
+              // its highlight does not linger under the opened editor.
+              const anchor = pickAddAnchor(item.id, hovered, handle?.getSelectedLines() ?? null);
+              if (anchor !== null) {
+                openDraft(item.id, anchor);
+                handle?.clearSelectedLines();
+              }
+            }}
+          >
+            <Plus />
+          </Button>
+        )}
+      />
+    </div>
   );
 }
 
