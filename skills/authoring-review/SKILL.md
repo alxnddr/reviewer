@@ -1,40 +1,43 @@
 ---
 name: authoring-review
-description: Reviews a git range and authors a .reviewer.json (anchored comments, ordered chapter layers) that opens in Reviewer with zero manual fixing. User-invoked.
+description: Presents a review you have already performed as a .reviewer.json — anchored comments and an ordered layer walkthrough — that opens in the Reviewer app with zero manual fixing. User-invoked.
 disable-model-invocation: true
 ---
 
 # authoring-review
 
-Author one high-quality `.reviewer.json` for a git range: comments anchored to exact lines and
-**ordered layers** — a guided reading order — each with a chapter-intro `description`. `rvw emit`
-captures the range's diff to prove every anchor places, then writes a refs-only artifact the app
-re-derives from the branch on open — it is **self-validated before handoff**, so it is correct by
-construction, not by hope. It opens in Reviewer with no manual fixing (the branch must stay
-available for the app to render).
+You have already reviewed the change — found the issues, formed the judgments (with whatever
+review skills you loaded for that). This skill is **not** how to review. It is how to **present**
+a review: it turns the findings you already hold into one `.reviewer.json` — comments anchored to
+exact lines, and **ordered layers** that walk a human through the change in a deliberate reading
+order, each with a chapter-intro `description` — and opens it in the Reviewer app.
+
+`rvw emit` captures the range's diff, proves every anchor places against it, and writes a
+refs-only artifact the app re-derives from the branch on open. It is **self-validated before
+handoff** — correct by construction, not by hope — and needs no manual fixing (the branch must
+stay available for the app to render).
 
 **This skill authors an artifact. It never publishes to GitHub and never marks a review
-submitted** — it drafts _as the user_, who then curates in the app and decides what ships.
-The only output is a `.reviewer.json` file on disk.
+submitted.** It drafts _as the user_, who then curates in the app and decides what ships. The
+only output is a `.reviewer.json` file on disk.
 
-Ask the toolchain for the artifact shape — `rvw schema --json` emits it, derived from the contract
-the gate enforces. Order **is** reading order: the app renders layers in the sequence you
-emit and re-sorts nothing, so the whole ordering burden is yours.
+Order **is** reading order: the app renders layers in the sequence you emit and re-sorts nothing.
+Getting that order right is the one act of craft this skill exists to guide — see Step 2.
 
 ## The `rvw` CLI
 
 Every command below is a verb on `rvw`, the review CLI. It is self-contained: it runs **from any
-working directory, in any repo**, and needs no dependencies installed in the repo you are reviewing.
-Run `rvw <verb> --help` for flags.
+working directory, in any repo**, and needs no dependencies installed in the repo you are
+reviewing. Run `rvw <verb> --help` for flags, and `rvw schema --json` for the authoritative
+artifact shape (derived from the contract the gate enforces).
 
 If `rvw` is not on your `PATH`, invoke the bundle directly — `node <reviewer-install>/dist/rvw.js
 <verb>`, or `bun run cli <verb>` from inside the Reviewer checkout.
 
-Reference (load when you reach the step that names it):
+Reference (load when you reach Step 2):
 
-- `reference/authoring-guide.md` — how to divide a diff into comprehension-ordered layers, write a
-  chapter `description`, keep comments minimal, and the exact `draft.json` shape you write. Read it
-  before Step 2.
+- `reference/authoring-guide.md` — the exact `draft.json` shape and field rules, the chapter
+  `description` grammar, how to phrase a comment, and the anchoring contract.
 
 ## Step 1 — Resolve the range
 
@@ -46,17 +49,17 @@ and so the gate, rejects it). Resolve any expression first:
 git -C <repo> rev-parse <expr>     # → full sha to pass as --base / --head
 ```
 
-The diff is captured with the exact three-dot `base...head` (merge-base) range — only what head adds
-over the common ancestor, matching how a PR is reviewed. You do not run that command yourself; `rvw
-emit` (Step 4) captures it to validate every anchor, and the app re-derives the same range on open.
+The diff is the exact three-dot `base...head` (merge-base) range — only what head adds over the
+common ancestor, matching how a PR is reviewed. You do not run that command yourself; `rvw emit`
+(Step 4) captures it, and the app re-derives the same range on open.
 
 Completion: you have a `<repo>` path and two refs, each a branch name or full sha.
 
-## Step 2 — Read the diff and author the draft
+## Step 2 — Read the diff, then shape your findings into a draft
 
-Read the full diff for the range — with the same config the Step 4 gate captures, so you read the
-exact file-path bytes it embeds (a repo whose git config escapes paths would otherwise make you
-author against a path the gate reports absent):
+Read the full diff with the exact config the Step 4 gate captures, so you anchor against the same
+file-path bytes it embeds (a repo whose git config escapes paths would otherwise make you author
+against a path the gate reports absent):
 
 ```
 git -C <repo> -c core.quotepath=false -c diff.noprefix=false -c diff.mnemonicPrefix=false \
@@ -64,29 +67,47 @@ git -C <repo> -c core.quotepath=false -c diff.noprefix=false -c diff.mnemonicPre
 ```
 
 Then author `draft.json` — an object with two keys, `comments` and `layers` — following
-`reference/authoring-guide.md`. In short:
+`reference/authoring-guide.md`:
 
-- **Layers** are the ordered walkthrough. Emit them in the sequence that makes the change easiest to
-  understand (foundation → dependents, not file-alphabetical). Each layer: `id`, `label`, one-line
-  `summary`, author-chosen `kind`, `ranges` (each `file` + `side` + ascending `startLine`/`endLine`),
-  and a chapter `description` — genuine "why this slice" reading context, not a restated summary. A
-  parent layer may carry empty `ranges` and roll up its children via their `parent` field.
-- **Comments** are minimal: `file`, `side`, ascending `startLine`/`endLine`, `body`. `side` is the
-  enum **`deletions`** or **`additions`** (never `old`/`new`). The body says _why_ — it never
-  restates the line.
-- Every range/comment `side` + line span must fall inside a hunk of the range's diff, and every
-  `[label](path)` link in a `description` must target a file present in this diff. The Step 4 gate
-  enforces both; author against the diff you read so it passes first time.
+- **Comments** carry the findings you already have. One per finding: `file`, `side` (the enum
+  **`additions`** or **`deletions`**, never `old`/`new`), ascending `startLine`/`endLine`, and a
+  `body` that says _why_. Anchor to the smallest span that carries the point; do not restate the
+  line — the diff already shows what changed.
 
-Completion: `draft.json` exists with ≥1 comment and an ordered `layers` array; every anchor was read
-off the actual diff.
+- **Layers** are the walkthrough, and they are where this artifact earns its keep — see below.
+
+### Layering: the walkthrough is the product
+
+A pile of comments is a checklist; a layered review is a guided reading. `layers` is an
+**ordered** array the app renders verbatim, one chapter at a time. Order it for a first-time
+reader of _this_ change, not for the filesystem.
+
+- **Foundation before dependents.** The type, contract, or schema a change rests on comes before
+  the code that consumes it. Meet the shape first and every later use reads for free.
+- **Story over structure.** Group by _what changed and why_ — a capability, a fix, a migration —
+  not by directory. One layer can span many files; one file can appear in several layers.
+- **Rollups for scale.** When a theme spans many hunks, make a parent layer (empty `ranges`, a
+  `summary` naming the theme) and nest the pieces under it via `parent`. The parent is the
+  chapter; the children are its sections.
+- **Every substantive layer earns a `description`** — the "why this slice" a reviewer would say
+  out loud: what it does, why it is grouped, what to notice. Not a restated `summary`.
+
+Alphabetical files, one layer per file, a `summary` that echoes the filename — that is a
+directory listing, not a review. Each layer: `id`, `label`, one-line `summary`, author-chosen
+`kind`, ascending `ranges` (each `file` + `side` + `startLine`/`endLine`), and a `description`.
+
+Every range/comment `side` + line span must fall inside a hunk of the diff, and every
+`[label](path)` link in a `description` must target a file present in the diff. The Step 4 gate
+enforces both; author against the diff you read so it passes first time.
+
+Completion: `draft.json` exists with ≥1 comment and an ordered `layers` array; every anchor was
+read off the actual diff.
 
 ## Step 3 — (nothing to assemble by hand)
 
-You never hand-write the `version` or `source`, and never paste the diff into JSON — `rvw emit`
-captures the diff with the exact flags to validate your anchors and assembles the artifact. Hand-
-assembly is where a stray byte or a mis-authored anchor breaks placement; the tool removes that
-class of error.
+You never hand-write `version` or `source`, and never paste the diff into JSON — `rvw emit`
+captures the diff with the exact flags and assembles the artifact. Hand-assembly is where a stray
+byte or a mis-authored anchor breaks placement; the tool removes that class of error.
 
 ## Step 4 — Emit and self-validate (hard gate)
 
@@ -99,24 +120,24 @@ rvw emit \
 ```
 
 `--out` is optional: omit it and the artifact lands in rvw's managed reviews dir (`~/.rvw/reviews/`,
-or `$RVW_HOME/reviews/`) under a derived name — **never in the repo you are reviewing**, which stays
-clean. Pass `--out <name>.reviewer.json` only when the user wants it somewhere specific. Either way
-`rvw emit` prints the written path (and reports it as `out` under `--json`) — **capture that path**;
-it is what you hand to `rvw check` and `rvw open` in the next steps.
+or `$RVW_HOME/reviews/`) under a derived name — **never in the repo you are reviewing**, which
+stays clean. Pass `--out <name>.reviewer.json` only when the user wants it somewhere specific.
+Either way `rvw emit` prints the written path (and reports it as `out` under `--json`) — **capture
+that path**; it is what you hand to `rvw check` and `rvw open`.
 
-`rvw emit` captures the diff, folds in your draft, and validates the assembled artifact with
-the same validator the app anchors with — every comment anchor and layer range proven to **place**
-against that captured diff, every description link proven to resolve — **before writing any bytes**.
-On a clean pass it writes a refs-only artifact (no embedded patch) the app re-derives from the branch
-on open. Outcomes:
+`rvw emit` validates the assembled artifact with the same validator the app anchors with — every
+comment anchor and layer range proven to **place** against the captured diff, every description
+link proven to resolve — **before writing any bytes**. On a clean pass it writes a refs-only
+artifact (no embedded patch). Outcomes:
 
 - **Exit 0**: `<name>.reviewer.json` is written and ready. Only then is the artifact real.
-- **Exit 1**: the artifact failed the gate; **nothing was written**. `rvw emit` prints each problem
-  with its exact locator (file, side, line range, layer id, or bad link). Fix `draft.json` — a range
-  that does not place is a wrong line number; an unresolved link is a path not in the diff — and
-  re-run. **Never hand over an artifact the gate did not pass**: a hallucinated line reaching
-  the user is the failure this step exists to prevent.
-- **Exit 2**: `rvw emit` could not run (bad flags, git failure, unreadable draft). Fix the invocation.
+- **Exit 1**: the artifact failed the gate; **nothing was written**. `rvw emit` prints each
+  problem with its exact locator (file, side, line range, layer id, or bad link). Fix
+  `draft.json` — a range that does not place is a wrong line number; an unresolved link is a path
+  not in the diff — and re-run. **Never hand over an artifact the gate did not pass**: a
+  hallucinated line reaching the user is the failure this step exists to prevent.
+- **Exit 2**: `rvw emit` could not run (bad flags, git failure, unreadable draft). Fix the
+  invocation.
 
 Then run the pre-handoff gate, which re-checks placement **and** reports what the layers leave
 uncovered:
@@ -126,9 +147,9 @@ rvw check <name>.reviewer.json                     # exit 0 = valid; a coverage 
 rvw check <name>.reviewer.json --require-complete  # exit 1 unless every changed line is covered
 ```
 
-A gap is not automatically a defect — a strong review may skip formatting or generated files — but it
-is a decision you make with the numbers in front of you, never by accident. If the gap is real,
-add a layer and re-emit.
+A gap is not automatically a defect — a strong review may skip formatting or generated files —
+but it is a decision you make with the numbers in front of you, never by accident. If the gap is
+real, add a layer and re-emit.
 
 Completion: `rvw emit` exited 0, `rvw check` exited 0, and `<name>.reviewer.json` exists.
 
@@ -142,8 +163,8 @@ rvw open <name>.reviewer.json
 
 This hands the file to the installed app, which imports it and reveals it (a running Reviewer is
 reused; a closed one is launched). Exit `0` means the app was asked to open it; exit `2` means it
-could not — the app is not installed, or you are not on macOS. If `rvw open` cannot launch it, tell
-the user to open it by hand, any one of:
+could not — the app is not installed, or you are not on macOS. If `rvw open` cannot launch it,
+tell the user to open it by hand, any one of:
 
 - `reviewer <name>.reviewer.json` on the command line,
 - **File → Open** in the app, or
