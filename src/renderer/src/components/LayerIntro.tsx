@@ -1,6 +1,7 @@
-import { useMemo, type ReactElement, type Ref } from "react";
+import { useMemo, type ReactElement } from "react";
 import { ChevronDown, ChevronLeft, ChevronRight, ChevronUp, File } from "lucide-react";
 import type { ReviewLayer } from "../../../shared/review";
+import type { FitToContentRefs } from "@/lib/fit-panel";
 import { parseLayerDescription, type DescriptionRun } from "@/lib/layer-description";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
@@ -72,9 +73,15 @@ function renderRun(
 
 type LayerIntroProps = {
   layer: ReviewLayer;
-  /** 0-based position of the active layer in the authored order. */
-  index: number;
-  total: number;
+  /** The authored-order position rendered as "Layer {index+1} of {total}", or null for
+   * the inferred "not covered by layers" layer — which is no authored chapter and so
+   * shows its name in place of an ordinal. */
+  ordinal: { index: number; total: number } | null;
+  /** Whether a previous / next layer exists in the *effective* order (authored plus the
+   * inferred layer), so the chevrons dead-end at the true ends of the walkthrough rather
+   * than at the last authored layer when an inferred one follows it. */
+  hasPrev: boolean;
+  hasNext: boolean;
   /** The files currently rendered in the diff (the soloed subset): both the link
    * resolution set and the navigation targets. */
   filePaths: string[];
@@ -86,21 +93,22 @@ type LayerIntroProps = {
    * panel's dragged height and the prose scrolls within it (the border seam is the
    * handle below). False keeps the classic content-height band with a bounded prose. */
   fill: boolean;
-  /** The parent measures this prose block's natural height to size the panel to fit
-   * on expand (DiffScreen). Attached to the reading-width content, which stays at
-   * content height even when the scroll viewport around it is stretched taller. */
-  contentRef?: Ref<HTMLDivElement>;
+  /** Marks what DiffScreen measures to fit the panel to the prose's own height (it
+   * only does so in `fill` mode): the scroll viewport, and the reading-width block
+   * inside it that stays at content height however tall that viewport is stretched. */
+  fit?: FitToContentRefs;
 };
 
 export function LayerIntro({
   layer,
-  index,
-  total,
+  ordinal,
+  hasPrev,
+  hasNext,
   filePaths,
   collapsed,
   onToggleCollapsed,
   fill,
-  contentRef,
+  fit,
 }: LayerIntroProps): ReactElement {
   const stepLayer = useReviewStore((state) => state.stepLayer);
   const selectFile = useReviewStore((state) => state.selectFile);
@@ -141,15 +149,19 @@ export function LayerIntro({
             <span className="min-w-0 truncate">{layer.label}</span>
           </Button>
         </h2>
-        <span className="shrink-0 text-xs text-text-muted">
-          Layer {index + 1} of {total}
-        </span>
+        {/* Only an authored chapter carries a position counter; the inferred layer's
+            heading already reads "Not covered by layers", so its slot stays empty. */}
+        {ordinal !== null && (
+          <span className="shrink-0 text-xs text-text-muted">
+            Layer {ordinal.index + 1} of {ordinal.total}
+          </span>
+        )}
         <div className="ml-auto flex shrink-0 items-center gap-0.5">
           <Button
             variant="ghost"
             size="icon-sm"
             aria-label="Previous layer"
-            disabled={index === 0}
+            disabled={!hasPrev}
             className="hover:bg-border/60 dark:hover:bg-border/60"
             onClick={() => stepLayer(-1)}
           >
@@ -159,7 +171,7 @@ export function LayerIntro({
             variant="ghost"
             size="icon-sm"
             aria-label="Next layer"
-            disabled={index === total - 1}
+            disabled={!hasNext}
             className="hover:bg-border/60 dark:hover:bg-border/60"
             onClick={() => stepLayer(1)}
           >
@@ -180,9 +192,12 @@ export function LayerIntro({
         // The scroll viewport spans the full pane so its scrollbar rides the diff's
         // right edge, not a narrow column; the prose keeps its reading width inside.
         // In the panel it fills the dragged height; otherwise it stays a bounded band.
-        <div className={cn("overflow-y-auto pb-3", fill ? "min-h-0 flex-1" : "max-h-48")}>
+        <div
+          ref={fit?.viewportRef}
+          className={cn("overflow-y-auto pb-3", fill ? "min-h-0 flex-1" : "max-h-48")}
+        >
           <div
-            ref={contentRef}
+            ref={fit?.contentRef}
             className="max-w-3xl space-y-2 px-6 text-base leading-relaxed text-foreground select-text"
           >
             {paragraphs.map((paragraph, paragraphIndex) => (

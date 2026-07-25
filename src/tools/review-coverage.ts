@@ -100,7 +100,12 @@ export function coverageOfPatch(patch: string, layers: readonly ReviewLayer[]): 
   return { ok: true, report: coverageOfFiles(files, layers) };
 }
 
-function coverageOfFiles(
+/** Coverage of an already-parsed diff — the entry the renderer shares with
+ * `coverageOfPatch`. The CLI parses patch bytes into files then measures; the app already
+ * holds the parsed files it rendered (`slice.diff.files`), so it measures those directly,
+ * re-parse-free and against the exact diff on screen. Same core either way, so the app's
+ * number always matches `rvw coverage`. */
+export function coverageOfFiles(
   files: readonly PatchFile[],
   layers: readonly ReviewLayer[],
 ): CoverageReport {

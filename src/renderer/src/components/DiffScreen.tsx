@@ -1,23 +1,17 @@
 import {
   useCallback,
   useEffect,
-  useLayoutEffect,
   useMemo,
-  useRef,
   useState,
   type ReactElement,
   type ReactNode,
 } from "react";
-import {
-  useGroupRef,
-  usePanelRef,
-  type Layout,
-  type LayoutChangedMeta,
-} from "react-resizable-panels";
 import { assertNever } from "../../../shared/assert";
 import type { DiffSelection } from "../../../shared/git";
 import type { Comment, ReviewAnchor, ReviewLayer } from "../../../shared/review";
 import { emptySoloReason, findLayer, soloFiles } from "@/lib/layers";
+import { effectiveLayers, UNCOVERED_LAYER_ID } from "@/lib/coverage";
+import { useFitToContent } from "@/lib/fit-panel";
 import { unplaceableComments } from "@/lib/diff/comment-annotations";
 import { resolveExpandLoader } from "@/lib/diff/expand-context";
 import { DiffView } from "@/components/DiffView";
@@ -187,20 +181,6 @@ export function DiffScreen(): ReactElement | null {
   // Collapsing the prose drops the resize panel entirely (nothing to size), so the
   // parent — not LayerIntro — owns this.
   const [layerIntroCollapsed, setLayerIntroCollapsed] = useState(false);
-  // Each fresh expand and every layer switch re-fits the intro to its prose (see
-  // fitIntro below): the panel opens at max(half the diff viewport, the
-  // description's natural height), then the seam handle can still override it until
-  // the next expand or layer change recomputes. The group element gives the
-  // viewport height; the group handle reports whether its initial layout has
-  // settled; the panel handle applies the size; the content ref (in LayerIntro)
-  // measures the prose. `wantFit` gates the fit so onLayoutChanged reapplies it once
-  // the group settles (imperative resize is a no-op while the layout is deferred)
-  // without ever overriding the user's own drag.
-  const introGroupElRef = useRef<HTMLDivElement>(null);
-  const introGroupRef = useGroupRef();
-  const introPanelRef = usePanelRef();
-  const introContentRef = useRef<HTMLDivElement>(null);
-  const wantFitRef = useRef(false);
   useFileStepShortcuts();
   useCommentStepShortcuts();
 
@@ -269,10 +249,19 @@ export function DiffScreen(): ReactElement | null {
     () => unplaceableComments(loadedFiles ?? [], comments),
     [loadedFiles, comments],
   );
-  const activeLayer = useMemo(() => findLayer(layers, activeLayerId), [layers, activeLayerId]);
+  // The authored layers plus the inferred "not covered by layers" layer, so soloing that
+  // synthetic row restricts the code view to the skipped files just like an authored one.
+  const effLayers = useMemo(
+    () => effectiveLayers(loadedFiles ?? [], layers),
+    [loadedFiles, layers],
+  );
+  const activeLayer = useMemo(
+    () => findLayer(effLayers, activeLayerId),
+    [effLayers, activeLayerId],
+  );
   const visibleFiles = useMemo(
-    () => (loadedFiles === null ? null : soloFiles(loadedFiles, activeLayer, layers)),
-    [loadedFiles, activeLayer, layers],
+    () => (loadedFiles === null ? null : soloFiles(loadedFiles, activeLayer, effLayers)),
+    [loadedFiles, activeLayer, effLayers],
   );
   // The intro's file-link resolution + navigation set. Memoised on the stable
   // subset so LayerIntro's own derived state (the diff-file Set, the parsed
@@ -296,48 +285,12 @@ export function DiffScreen(): ReactElement | null {
     [frozen, repoPath, selection],
   );
 
-  // Fit the panel to min(the prose's natural height, half the diff viewport): it
-  // hugs a short description and caps at half the pane for a long one, which then
-  // scrolls within. A no-op while the group's initial layout is still deferred
-  // (resize() cannot apply then) — it leaves `wantFit` set so onLayoutChanged runs
-  // it once the group settles; otherwise it clears the gate so a later settle does
-  // not re-fit.
-  const fitIntro = useCallback(() => {
-    const groupEl = introGroupElRef.current;
-    const group = introGroupRef.current;
-    const content = introContentRef.current;
-    const panel = introPanelRef.current;
-    if (groupEl === null || group === null || content === null || panel === null) return;
-    if (Object.keys(group.getLayout()).length === 0) return;
-    // The h-11 heading bar (44px) above the prose, plus the viewport's pb-3 (12px).
-    const natural = 44 + content.offsetHeight + 12;
-    panel.resize(Math.min(natural, groupEl.clientHeight / 2));
-    wantFitRef.current = false;
-  }, [introGroupRef, introPanelRef]);
-
-  // Re-fit on each expand and each layer switch. Content-driven, so it is measured
-  // rather than a fixed default. A layer switch does not move the seam, so the
-  // library fires no layout event — this attempt handles it directly; a fresh
-  // expand mounts deferred, so this leaves the gate up for onLayoutChanged.
+  // The intro band hugs its prose: on each fresh expand and each layer switch the
+  // panel re-fits to the description's own height, capped at half the diff viewport
+  // so a long one scrolls within instead of burying the code. The seam handle can
+  // still override that until the next expand or layer change recomputes it.
   const introExpanded = diff?.phase === "loaded" && activeLayer !== null && !layerIntroCollapsed;
-  useLayoutEffect(() => {
-    if (!introExpanded) return;
-    wantFitRef.current = true;
-    fitIntro();
-  }, [introExpanded, activeLayerId, fitIntro]);
-
-  // The group's own layout events: reapply a pending fit once its initial layout
-  // settles, but stand down the moment the user drags the seam themselves.
-  const onIntroLayoutChanged = useCallback(
-    (_layout: Layout, meta: LayoutChangedMeta) => {
-      if (meta.isUserInteraction) {
-        wantFitRef.current = false;
-      } else if (wantFitRef.current) {
-        fitIntro();
-      }
-    },
-    [fitIntro],
-  );
+  const introFit = useFitToContent({ enabled: introExpanded, refitOn: activeLayerId });
 
   if (diff === null) {
     return null;
@@ -424,19 +377,36 @@ export function DiffScreen(): ReactElement | null {
       // `fill` mode it fills the resizable panel's dragged height; otherwise it is a
       // content-height band. filePaths is the visible (soloed) set, so its file
       // links resolve to and navigate within what is actually on screen.
-      const renderIntro = (fill: boolean): ReactElement | null =>
-        activeLayer === null ? null : (
+      const renderIntro = (fill: boolean): ReactElement | null => {
+        if (activeLayer === null) {
+          return null;
+        }
+        // The inferred layer is not an authored chapter, so it carries no "Layer N of M"
+        // ordinal; the chevrons still walk it (last in the effective order) so prev
+        // reaches the real layers and next is a dead end.
+        const isUncovered = activeLayer.id === UNCOVERED_LAYER_ID;
+        const effIndex = effLayers.findIndex((layer) => layer.id === activeLayer.id);
+        return (
           <LayerIntro
             layer={activeLayer}
-            index={layers.findIndex((layer) => layer.id === activeLayer.id)}
-            total={layers.length}
+            ordinal={
+              isUncovered
+                ? null
+                : {
+                    index: layers.findIndex((layer) => layer.id === activeLayer.id),
+                    total: layers.length,
+                  }
+            }
+            hasPrev={effIndex > 0}
+            hasNext={effIndex >= 0 && effIndex < effLayers.length - 1}
             filePaths={visibleFilePaths}
             collapsed={layerIntroCollapsed}
             onToggleCollapsed={() => setLayerIntroCollapsed((value) => !value)}
             fill={fill}
-            contentRef={introContentRef}
+            fit={introFit.content}
           />
         );
+      };
       // A soloed layer resolves to zero visible files in two distinct ways: its
       // files all drifted out of the diff, or it is a bare parent-rollup node
       // with no diff of its own — `emptySoloReason` tells them apart so the copy
@@ -480,14 +450,12 @@ export function DiffScreen(): ReactElement | null {
           {resizableIntro ? (
             <ResizablePanelGroup
               orientation="vertical"
-              elementRef={introGroupElRef}
-              groupRef={introGroupRef}
-              onLayoutChanged={onIntroLayoutChanged}
+              {...introFit.group}
               className="min-h-0 flex-1 bg-diff-surface"
             >
               <ResizablePanel
                 id="intro"
-                panelRef={introPanelRef}
+                {...introFit.panel}
                 defaultSize="50%"
                 minSize="96px"
                 groupResizeBehavior="preserve-pixel-size"

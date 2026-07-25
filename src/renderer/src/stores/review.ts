@@ -23,6 +23,7 @@ import type { ReviewOpenFailure, ReviewOpenResponse } from "../../../shared/revi
 import type { SelectionMode, Session, SessionId, SessionSnapshot } from "../../../shared/session";
 import { parsePatch, type PatchFile } from "../lib/diff/patch";
 import { findLayer, soloFiles, stepLayer as stepLayerId } from "../lib/layers";
+import { effectiveLayers } from "../lib/coverage";
 import { indexOfComment, navigableEntries, orderedComments } from "../lib/diff/comment-navigation";
 import {
   exportSourceFor,
@@ -249,6 +250,16 @@ export type SessionsView = Pick<ReviewState, "sessions" | "activeSessionId">;
 
 export function selectActiveSlice(state: SessionsView): SessionSlice | null {
   return state.activeSessionId === null ? null : (state.sessions[state.activeSessionId] ?? null);
+}
+
+/** The authored layers plus the inferred "not covered by layers" layer, resolved against
+ * whatever diff is loaded. Navigation and soloing key off this so the synthetic layer
+ * steps and filters exactly like an authored one; it is never persisted (it stays out of
+ * `slice.layers`), only ever reachable through the ephemeral `activeLayerId`. An
+ * unloaded diff has no universe, so it degrades to the authored layers. */
+function sliceLayers(slice: SessionSlice): ReviewLayer[] {
+  const files = slice.diff.phase === "loaded" ? slice.diff.files : [];
+  return effectiveLayers(files, slice.layers);
 }
 
 /** What the current mode's state asks of the diff pane. */
@@ -1255,7 +1266,7 @@ export const useReviewStore = create<ReviewState>((set, get) => ({
     if (slice === undefined) {
       return;
     }
-    const next = stepLayerId(slice.layers, slice.activeLayerId, direction);
+    const next = stepLayerId(sliceLayers(slice), slice.activeLayerId, direction);
     if (next === null || next === slice.activeLayerId) {
       return;
     }
@@ -1279,10 +1290,11 @@ export const useReviewStore = create<ReviewState>((set, get) => ({
     // annotation unmounted, so there'd be nothing to scroll to; clear the solo
     // first (the panel lists every comment, soloed-out ones included). The full
     // diff is unaffected, so this only fires when a solo is actually hiding it.
+    const layers = sliceLayers(slice);
     const clearsSolo =
       slice.activeLayerId !== null &&
       slice.diff.phase === "loaded" &&
-      !soloFiles(slice.diff.files, findLayer(slice.layers, slice.activeLayerId), slice.layers).some(
+      !soloFiles(slice.diff.files, findLayer(layers, slice.activeLayerId), layers).some(
         (file) => file.path === comment.file,
       );
     // The active id is ephemeral (no write-back); the file focus moves with it so
@@ -1308,11 +1320,8 @@ export const useReviewStore = create<ReviewState>((set, get) => ({
     // the diff and this walk, so `n`/`p` never jumps to a comment that isn't on
     // screen. `frozen` places every anchor; otherwise placement is positional.
     const frozen = slice.reviewDiff?.kind === "frozenPatch";
-    const visible = soloFiles(
-      slice.diff.files,
-      findLayer(slice.layers, slice.activeLayerId),
-      slice.layers,
-    );
+    const layers = sliceLayers(slice);
+    const visible = soloFiles(slice.diff.files, findLayer(layers, slice.activeLayerId), layers);
     const entries = navigableEntries(orderedComments(visible, slice.comments, frozen));
     if (entries.length === 0) {
       return;

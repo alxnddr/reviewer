@@ -17,6 +17,7 @@ import { buildCommentItems, type CommentSlot } from "../lib/diff/comment-annotat
 import { MULTI_STATUS_PATCH } from "../lib/diff/fixtures";
 import { parsePatch } from "../lib/diff/patch";
 import { resolveLayerScroll, stepLayer } from "../lib/layers";
+import { UNCOVERED_LAYER_ID } from "../lib/coverage";
 import { createScrollCapture, SCROLL_CAPTURE_DEBOUNCE_MS } from "../lib/scroll";
 import { useReviewStore, WRITE_BACK_DEBOUNCE_MS, type SessionSlice } from "./review";
 
@@ -1539,7 +1540,10 @@ describe("useReviewStore layer navigation", () => {
     expect(active().activeLayerId).toBeNull();
   });
 
-  it("steps the authored order and clamps at both ends", () => {
+  it("steps the authored order then the inferred uncovered layer, clamping at both ends", () => {
+    // The three layers cover three single lines of a multi-file diff, so a coverable
+    // gap remains: the inferred "not covered by layers" layer is the last stop in the
+    // effective order, reachable by stepping past the last authored layer.
     const { stepLayer } = useReviewStore.getState();
     stepLayer(1);
     expect(active().activeLayerId).toBe("layer-a");
@@ -1548,9 +1552,11 @@ describe("useReviewStore layer navigation", () => {
     stepLayer(1);
     expect(active().activeLayerId).toBe("layer-c");
     stepLayer(1);
-    expect(active().activeLayerId).toBe("layer-c");
+    expect(active().activeLayerId).toBe(UNCOVERED_LAYER_ID);
+    stepLayer(1);
+    expect(active().activeLayerId).toBe(UNCOVERED_LAYER_ID);
     stepLayer(-1);
-    expect(active().activeLayerId).toBe("layer-b");
+    expect(active().activeLayerId).toBe("layer-c");
   });
 
   it("never mutates the persisted diff selection, file focus, or scroll", () => {
