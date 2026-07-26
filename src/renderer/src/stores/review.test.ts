@@ -17,6 +17,7 @@ import {
 import { buildCommentItems, type CommentSlot } from "../lib/diff/comment-annotations";
 import { MULTI_STATUS_PATCH } from "../lib/diff/fixtures";
 import { parsePatch } from "../lib/diff/patch";
+import { NO_COLLAPSED_FILES, NO_READ_FILES } from "../lib/read-progress";
 import { resolveLayerScroll, stepLayer } from "../lib/layers";
 import { UNCOVERED_LAYER_ID } from "../lib/coverage";
 import { createScrollCapture, SCROLL_CAPTURE_DEBOUNCE_MS } from "../lib/scroll";
@@ -665,6 +666,8 @@ describe("useReviewStore.selectAdjacentFile", () => {
       lastChapterId: null,
       activeLayerId: null,
       activeCommentId: null,
+      readFiles: NO_READ_FILES,
+      collapsedFiles: NO_COLLAPSED_FILES,
       needsDerive: false,
       requestTicket: 1,
     };
@@ -1486,21 +1489,18 @@ describe("useReviewStore layer navigation", () => {
       id: "layer-a",
       label: "Validation",
       summary: "Controller guards",
-      kind: "validation",
       ranges: [{ file: "added.txt", side: "additions", startLine: 1, endLine: 1 }],
     },
     {
       id: "layer-b",
       label: "Feature",
       summary: "New endpoint",
-      kind: "feature",
       ranges: [{ file: "notes.txt", side: "additions", startLine: 1, endLine: 1 }],
     },
     {
       id: "layer-c",
       label: "Cleanup",
       summary: "Dead code",
-      kind: "chore",
       ranges: [{ file: "doomed.txt", side: "deletions", startLine: 1, endLine: 1 }],
     },
   ];
@@ -1534,6 +1534,8 @@ describe("useReviewStore layer navigation", () => {
       lastChapterId: null,
       activeLayerId: null,
       activeCommentId: null,
+      readFiles: NO_READ_FILES,
+      collapsedFiles: NO_COLLAPSED_FILES,
       needsDerive: false,
       requestTicket: 1,
     };
@@ -1614,14 +1616,12 @@ describe("useReviewStore tour doc navigation", () => {
       id: "layer-a",
       label: "Greeting",
       summary: "New API",
-      kind: "feature",
       ranges: [{ file: "greet.ts", side: "additions", startLine: 2, endLine: 2 }],
     },
     {
       id: "layer-b",
       label: "Notes",
       summary: "Copy pass",
-      kind: "docs",
       ranges: [{ file: "notes.txt", side: "additions", startLine: 1, endLine: 1 }],
     },
   ];
@@ -1652,6 +1652,8 @@ describe("useReviewStore tour doc navigation", () => {
       lastChapterId: null,
       activeLayerId: null,
       activeCommentId: null,
+      readFiles: NO_READ_FILES,
+      collapsedFiles: NO_COLLAPSED_FILES,
       needsDerive: false,
       requestTicket: 1,
       ...overrides,
@@ -1833,6 +1835,8 @@ describe("useReviewStore comment navigation", () => {
       lastChapterId: null,
       activeLayerId: null,
       activeCommentId: null,
+      readFiles: NO_READ_FILES,
+      collapsedFiles: NO_COLLAPSED_FILES,
       needsDerive: false,
       requestTicket: 1,
     };
@@ -1878,7 +1882,6 @@ describe("useReviewStore comment navigation", () => {
         id: "only-greet",
         label: "Greeting",
         summary: "the greet file",
-        kind: "feature",
         ranges: [{ file: "greet.ts", side: "additions", startLine: 1, endLine: 1 }],
       },
     ];
@@ -1896,7 +1899,6 @@ describe("useReviewStore comment navigation", () => {
         id: "only-greet",
         label: "Greeting",
         summary: "the greet file",
-        kind: "feature",
         ranges: [{ file: "greet.ts", side: "additions", startLine: 1, endLine: 1 }],
       },
     ];
@@ -1958,7 +1960,6 @@ describe("review export actions", () => {
     id: "l1",
     label: "Validation",
     summary: "guards input",
-    kind: "validation",
     ranges: [{ file: "src/a.ts", side: "additions", startLine: 1, endLine: 1 }],
   };
 
@@ -1988,6 +1989,8 @@ describe("review export actions", () => {
       lastChapterId: null,
       activeLayerId: null,
       activeCommentId: null,
+      readFiles: NO_READ_FILES,
+      collapsedFiles: NO_COLLAPSED_FILES,
       needsDerive: false,
       requestTicket: 1,
     };
@@ -2155,7 +2158,6 @@ describe("exit gate", () => {
         id: "l2",
         label: "Gone",
         summary: "gone layer",
-        kind: "validation",
         ranges: [{ file: "src/gone.ts", side: "additions", startLine: 3, endLine: 3 }],
       },
     ],
@@ -2238,6 +2240,8 @@ describe("exit gate", () => {
       lastChapterId: null,
       activeLayerId: null,
       activeCommentId: null,
+      readFiles: NO_READ_FILES,
+      collapsedFiles: NO_COLLAPSED_FILES,
       needsDerive: false,
       requestTicket: 1,
     };
@@ -2441,5 +2445,137 @@ describe("exit gate", () => {
       phase: "failed",
       failure: { code: "notARepo", path: "/repo-a" },
     });
+  });
+});
+
+describe("reading progress", () => {
+  const layers: ReviewLayer[] = [
+    {
+      id: "greeting",
+      label: "Greeting",
+      summary: "s",
+      ranges: [
+        { file: "greet.ts", side: "additions", startLine: 4, endLine: 6 },
+        { file: "added.txt", side: "additions", startLine: 1, endLine: 1 },
+      ],
+    },
+    {
+      id: "notes",
+      label: "Notes",
+      summary: "s",
+      ranges: [{ file: "notes.txt", side: "additions", startLine: 6, endLine: 6 }],
+    },
+  ];
+
+  beforeEach(() => {
+    const files = parsePatch(MULTI_STATUS_PATCH, "read-test");
+    const seeded: SessionSlice = {
+      id: SESSION_ID,
+      repo: { path: "/repo", name: "repo" },
+      mode: "commits",
+      log: null,
+      branches: null,
+      brush: null,
+      base: null,
+      head: null,
+      selection: null,
+      diff: { phase: "loaded", loadId: 1, files },
+      selectedFilePath: "greet.ts",
+      scrollTop: 0,
+      commitSelection: null,
+      comments: [],
+      layers,
+      reviewDiff: null,
+      reviewSubrange: null,
+      reviewOrigin: null,
+      overview: null,
+      overviewOpen: false,
+      lastChapterId: null,
+      activeLayerId: null,
+      activeCommentId: null,
+      readFiles: NO_READ_FILES,
+      collapsedFiles: NO_COLLAPSED_FILES,
+      needsDerive: false,
+      requestTicket: 1,
+    };
+    useReviewStore.setState({
+      boot: "ready",
+      sessions: { [SESSION_ID]: seeded },
+      activeSessionId: SESSION_ID,
+    });
+  });
+
+  it("marking a file read folds it away, and unmarking opens it back up", () => {
+    useReviewStore.getState().setFileRead("greet.ts", true);
+    expect([...active().readFiles.keys()]).toEqual(["greet.ts"]);
+    expect(active().collapsedFiles.has("greet.ts")).toBe(true);
+
+    useReviewStore.getState().setFileRead("greet.ts", false);
+    expect(active().readFiles.size).toBe(0);
+    expect(active().collapsedFiles.has("greet.ts")).toBe(false);
+  });
+
+  it("folding a file by hand leaves the read mark alone, either way round", () => {
+    useReviewStore.getState().setFileCollapsed("greet.ts", true);
+    expect(active().readFiles.size).toBe(0);
+
+    useReviewStore.getState().setFileRead("greet.ts", true);
+    useReviewStore.getState().setFileCollapsed("greet.ts", false);
+    expect(active().collapsedFiles.has("greet.ts")).toBe(false);
+    expect([...active().readFiles.keys()]).toEqual(["greet.ts"]);
+  });
+
+  it("`r` flips the focused file when no path is named", () => {
+    useReviewStore.getState().toggleFileRead();
+    expect([...active().readFiles.keys()]).toEqual(["greet.ts"]);
+    useReviewStore.getState().toggleFileRead();
+    expect(active().readFiles.size).toBe(0);
+  });
+
+  it("marks a whole layer's extent, and only the files the diff carries", () => {
+    useReviewStore.getState().setLayerRead("greeting", true);
+    expect([...active().readFiles.keys()].sort()).toEqual(["added.txt", "greet.ts"]);
+    expect(active().collapsedFiles.has("notes.txt")).toBe(false);
+  });
+
+  it("clearing is scoped to the paths it was given", () => {
+    useReviewStore.getState().setLayerRead("greeting", true);
+    useReviewStore.getState().setLayerRead("notes", true);
+    useReviewStore.getState().clearFilesRead(["greet.ts"]);
+    expect([...active().readFiles.keys()].sort()).toEqual(["added.txt", "notes.txt"]);
+  });
+
+  it("never schedules a write-back: progress is view state, not session input", () => {
+    const bridge = makeBridge({});
+    vi.stubGlobal("window", { reviewer: bridge });
+    useReviewStore.getState().setFileRead("greet.ts", true);
+    useReviewStore.getState().setLayerRead("greeting", true);
+    useReviewStore.getState().flushWriteBacks();
+    expect(bridge.updateSession).not.toHaveBeenCalled();
+  });
+
+  it("a path the loaded diff does not carry is a no-op, never a mark for nothing", () => {
+    const before = active().readFiles;
+    useReviewStore.getState().setFileRead("nope.ts", true);
+    expect(active().readFiles).toBe(before);
+  });
+
+  it("focusing a comment opens the file it lives in, so its card is on the surface", () => {
+    const comment: Comment = {
+      id: ID_A,
+      file: "greet.ts",
+      side: "additions",
+      startLine: 4,
+      endLine: 4,
+      body: "b",
+    };
+    patchActive({ comments: [comment] });
+    useReviewStore.getState().setFileRead("greet.ts", true);
+    expect(active().collapsedFiles.has("greet.ts")).toBe(true);
+
+    useReviewStore.getState().focusComment(ID_A);
+    expect(active().collapsedFiles.has("greet.ts")).toBe(false);
+    // The mark itself survives: reading a finding again is not un-reading the file.
+    expect(active().readFiles.has("greet.ts")).toBe(true);
   });
 });

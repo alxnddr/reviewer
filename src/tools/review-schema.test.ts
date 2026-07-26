@@ -21,7 +21,6 @@ const VALID = {
       id: "one",
       label: "One",
       summary: "first",
-      kind: "feature",
       ranges: [{ file: "a.ts", side: "additions", startLine: 2, endLine: 4 }],
     },
   ],

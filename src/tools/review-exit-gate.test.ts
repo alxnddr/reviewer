@@ -79,13 +79,12 @@ const FOO_DRIFTED: ReviewArtifact["comments"][number] = {
   endLine: 9001,
 };
 const LAYERS: ReviewArtifact["layers"] = [
-  { id: "rollup", label: "Rollup", summary: "parent", kind: "feature", ranges: [] },
+  { id: "rollup", label: "Rollup", summary: "parent", ranges: [] },
   {
     id: "leaf",
     label: "Leaf",
     summary: "child",
     description: "Adds [bar](src/bar.ts).",
-    kind: "validation",
     parent: "rollup",
     ranges: [{ file: "src/bar.ts", side: "additions", startLine: 2, endLine: 2 }],
   },

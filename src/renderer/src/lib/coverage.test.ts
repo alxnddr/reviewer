@@ -32,7 +32,7 @@ const PATCH = [
 const FILES: PatchFile[] = parsePatch(PATCH, "test");
 
 function layer(id: string, ranges: ReviewLayer["ranges"]): ReviewLayer {
-  return { id, label: id, summary: id, kind: "feature", ranges };
+  return { id, label: id, summary: id, ranges };
 }
 
 // Covers only foo's three additions — leaves foo's deletion 11 and bar's additions 2..3.

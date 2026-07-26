@@ -33,6 +33,13 @@ export type DiffSearchState = {
 export function useDiffSearch(
   handleRef: RefObject<CodeViewHandle<CommentSlot> | null>,
   files: readonly PatchFile[],
+  /** Files whose body is folded away. A folded file's lines are still in the parsed
+   * patch — and so still findable — but they are not on the surface, so navigating to
+   * one has to open it first. */
+  collapsedPaths: ReadonlySet<string>,
+  /** Open a folded file. Called instead of scrolling; the expansion re-runs the
+   * navigation effect below, which then finds the line and lands on it. */
+  onExpand: (path: string, collapsed: boolean) => void,
 ): DiffSearchState {
   const [open, setOpen] = useState(false);
   const [query, setQueryText] = useState("");
@@ -76,6 +83,14 @@ export function useDiffSearch(
     if (match === undefined) {
       return;
     }
+    // A folded file has no line to select or scroll to. Open it and stop: the fold state
+    // is a dependency of this effect, so the expansion re-runs it and the *next* pass —
+    // with the body on the surface — does the landing. Two declarative passes rather than
+    // a scroll fired at a file that is still a bare header.
+    if (collapsedPaths.has(match.fileId)) {
+      onExpand(match.fileId, false);
+      return;
+    }
     handle.setSelectedLines({
       id: match.fileId,
       range: { start: match.lineNumber, end: match.lineNumber, side: match.side },
@@ -88,7 +103,7 @@ export function useDiffSearch(
       align: "center",
       behavior: "instant",
     });
-  }, [handleRef, open, matches, activeIndex]);
+  }, [handleRef, open, matches, activeIndex, collapsedPaths, onExpand]);
 
   const openSearch = useCallback(() => {
     setOpen(true);

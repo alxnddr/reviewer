@@ -3,8 +3,12 @@ import { FileTree, useFileTree } from "@pierre/trees/react";
 import type { GitStatus } from "@pierre/trees";
 import { Search } from "lucide-react";
 import { assertNever } from "../../../shared/assert";
+import { Button } from "@/components/ui/button";
 import { InputGroup, InputGroupAddon, InputGroupInput } from "@/components/ui/input-group";
+import { TooltipHint } from "@/components/ui/tooltip";
+import { ReadRing, readLabel } from "@/components/ReadRing";
 import type { FileChangeStatus, PatchFile } from "@/lib/diff/patch";
+import { NO_READ_FILES, readPaths, tallyRead } from "@/lib/read-progress";
 import { fuzzyMatches } from "@/lib/fuzzy";
 import { selectActiveSlice, useReviewStore } from "@/stores/review";
 
@@ -35,10 +39,15 @@ type FileTreePanelProps = {
  * which belongs to one subset, not the session. */
 export function FileTreePanel({ files, commentCounts }: FileTreePanelProps): ReactElement {
   const [filter, setFilter] = useState("");
+  const readFiles = useReviewStore((state) => selectActiveSlice(state)?.readFiles ?? NO_READ_FILES);
+  const clearFilesRead = useReviewStore((state) => state.clearFilesRead);
   const visibleFiles = useMemo(
     () => files.filter((file) => fuzzyMatches(filter, file.path)),
     [files, filter],
   );
+  // Over the panel's own listing, not the filtered view: a filter is a way of looking at
+  // the set, not a change to it, so typing in the box must not move the progress readout.
+  const tally = useMemo(() => tallyRead(files, readFiles), [files, readFiles]);
 
   return (
     <div data-file-tree className="flex min-h-0 flex-1 flex-col">
@@ -72,7 +81,50 @@ export function FileTreePanel({ files, commentCounts }: FileTreePanelProps): Rea
           key={visibleFiles.map((file) => file.path).join("\n")}
           files={visibleFiles}
           commentCounts={commentCounts}
+          readPaths={readPaths(visibleFiles, readFiles)}
         />
+      )}
+      {files.length > 0 && <ReadStatusLine files={files} onClear={clearFilesRead} tally={tally} />}
+    </div>
+  );
+}
+
+type ReadStatusLineProps = {
+  files: PatchFile[];
+  tally: ReturnType<typeof tallyRead>;
+  onClear: (paths: readonly string[]) => void;
+};
+
+/** The rail's foot: how far through this listing the reader is, in one quiet line under
+ * the tree — the place a desktop app has always put a count of what is above it.
+ *
+ * It is present from the first render rather than appearing once progress exists: a status
+ * line that materialises after the first click is a layout shift, and reading `0 of 12` is
+ * how a reader finds out there is progress to make at all.
+ *
+ * It counts what the tree lists, which under a soloed layer is that chapter — so it stays
+ * the answer to "how far through what I am looking at", and its reset can only ever undo
+ * what it counted. */
+function ReadStatusLine({ files, tally, onClear }: ReadStatusLineProps): ReactElement {
+  return (
+    <div className="flex h-8 shrink-0 items-center gap-1.5 border-t border-border px-2 text-2xs text-text-muted">
+      <ReadRing tally={tally} />
+      <span className="min-w-0 truncate tabular-nums">{readLabel(tally)}</span>
+      {tally.read > 0 && (
+        <TooltipHint
+          side="top"
+          align="end"
+          content={files.length === tally.total ? "Mark these files unread" : "Mark unread"}
+        >
+          <Button
+            variant="ghost"
+            size="xs"
+            onClick={() => onClear(files.map((file) => file.path))}
+            className="ml-auto shrink-0 text-text-muted hover:bg-border/60 hover:text-foreground dark:hover:bg-border/60"
+          >
+            Reset
+          </Button>
+        </TooltipHint>
       )}
     </div>
   );
@@ -81,9 +133,16 @@ export function FileTreePanel({ files, commentCounts }: FileTreePanelProps): Rea
 type ChangedFileTreeProps = {
   files: PatchFile[];
   commentCounts: Map<string, number>;
+  /** Which of these files the reader has been through, resolved against the loaded diff's
+   * content upstream so a row never has to re-derive a signature per render. */
+  readPaths: ReadonlySet<string>;
 };
 
-function ChangedFileTree({ files, commentCounts }: ChangedFileTreeProps): ReactElement {
+function ChangedFileTree({
+  files,
+  commentCounts,
+  readPaths: read,
+}: ChangedFileTreeProps): ReactElement {
   const selectedFilePath = useReviewStore(
     (state) => selectActiveSlice(state)?.selectedFilePath ?? null,
   );
@@ -95,6 +154,12 @@ function ChangedFileTree({ files, commentCounts }: ChangedFileTreeProps): ReactE
   // (scroll/expand/select) rather than a full remount that would drop tree state.
   const countsRef = useRef(commentCounts);
   countsRef.current = commentCounts;
+
+  // Read state rides the same ref, but unlike a comment count it cannot wait for the next
+  // incidental row render: the mark is the reader's own click, and feedback that arrives
+  // on the next scroll is feedback that reads as a bug. The effect below repaints for it.
+  const readRef = useRef(read);
+  readRef.current = read;
 
   // What the store already believes, read at callback time — the echo filter below.
   const selectedRef = useRef(selectedFilePath);
@@ -127,18 +192,43 @@ function ChangedFileTree({ files, commentCounts }: ChangedFileTreeProps): ReactE
         selectFile(path);
       }
     },
-    // Per-file comment count on the right of its row; files with none stay bare.
+    // One decoration slot per row, so it answers the one question a progress-tracking
+    // reader is scanning for: what is still owed here. An unread file owes its comments,
+    // so it wears the count; a read file owes nothing, so it wears the check instead —
+    // its comments were on screen in the file the reader just finished. A read file with
+    // findings keeps the count in its hover title, where it costs no width.
     renderRowDecoration: (context) => {
       if (context.item.kind !== "file") {
         return null;
       }
       const count = countsRef.current.get(context.item.path) ?? 0;
+      const comments = count === 1 ? "1 comment" : `${count} comments`;
+      if (readRef.current.has(context.item.path)) {
+        return { text: "✓", title: count === 0 ? "Read" : `Read · ${comments}` };
+      }
       if (count === 0) {
         return null;
       }
-      return { text: String(count), title: count === 1 ? "1 comment" : `${count} comments` };
+      return { text: String(count), title: comments };
     },
   });
+
+  // Repaint the rows when the read set changes. The decoration renderer was captured at
+  // construction and Pierre exposes no way to invalidate one row's decoration, so this
+  // re-renders the whole tree through the one public lever that always does
+  // (`setComposition` has no early-out) — handing back the composition it already holds,
+  // which changes nothing about the tree but its painted output. Selection, expansion and
+  // scroll all live in the controller and survive it; a remount would lose all three.
+  // Seeded with the mount value and value-compared, so the mount itself stays inert and a
+  // StrictMode replay with the same set does not repaint twice.
+  const lastPainted = useRef(read);
+  useEffect(() => {
+    if (read === lastPainted.current) {
+      return;
+    }
+    lastPainted.current = read;
+    model.setComposition(model.getComposition());
+  }, [model, read]);
 
   // Only a post-mount change of the focused file (j/k stepping) scrolls its row into
   // view; a fresh mount — a new session, load, soloed layer, or filter change — is

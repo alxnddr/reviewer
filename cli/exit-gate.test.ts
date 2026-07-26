@@ -54,7 +54,6 @@ const ENGINE_LAYER: ReviewLayer = {
   label: "Engine",
   summary: "Two entry points rewritten, far apart in the file",
   description: "Rewrites the [engine](src/engine.ts) entry points.",
-  kind: "feature",
   ranges: [
     { file: "src/engine.ts", side: "deletions", startLine: 2, endLine: 2 },
     { file: "src/engine.ts", side: "deletions", startLine: 18, endLine: 18 },
@@ -66,7 +65,6 @@ const UTIL_LAYER: ReviewLayer = {
   id: "util",
   label: "Util",
   summary: "The helper the engine leans on follows suit",
-  kind: "feature",
   ranges: [
     { file: "src/util.ts", side: "deletions", startLine: 2, endLine: 2 },
     { file: "src/util.ts", side: "additions", startLine: 2, endLine: 2 },
@@ -77,7 +75,6 @@ const CHANGELOG_LAYER: ReviewLayer = {
   id: "changelog",
   label: "Changelog",
   summary: "The change is announced",
-  kind: "docs",
   ranges: [{ file: "docs/CHANGELOG.md", side: "additions", startLine: 2, endLine: 3 }],
 };
 

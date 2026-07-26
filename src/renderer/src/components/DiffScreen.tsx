@@ -13,6 +13,7 @@ import { emptySoloReason, findLayer, layerOutline, soloFiles } from "@/lib/layer
 import { effectiveLayers } from "@/lib/coverage";
 import { useFitToContent } from "@/lib/fit-panel";
 import { unplaceableComments } from "@/lib/diff/comment-annotations";
+import { isComplete, NO_COLLAPSED_FILES, NO_READ_FILES, tallyRead } from "@/lib/read-progress";
 import { resolveExpandLoader } from "@/lib/diff/expand-context";
 import { DiffView } from "@/components/DiffView";
 import { LayerIntro } from "@/components/LayerIntro";
@@ -76,6 +77,28 @@ function useCommentStepShortcuts(): void {
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [stepComment, clearActiveComment]);
+}
+
+/** `r` marks the focused file read or unread — the keyboard half of the header control,
+ * and the sibling of j/k (files) and n/p (comments). Deliberately does not move: a reader
+ * who marks the file they are looking at is still looking at it, and a surface that jumped
+ * out from under that click would make the whole gesture something to be careful with. */
+function useReadShortcut(): void {
+  const toggleFileRead = useReviewStore((state) => state.toggleFileRead);
+
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent): void => {
+      if (event.metaKey || event.ctrlKey || event.altKey || isEditable(event.target)) {
+        return;
+      }
+      if (event.key === "r") {
+        event.preventDefault();
+        toggleFileRead();
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [toggleFileRead]);
 }
 
 function LoadingState(): ReactElement {
@@ -172,6 +195,12 @@ export function DiffScreen(): ReactElement | null {
   const reviewSubrange = useReviewStore(
     (state) => selectActiveSlice(state)?.reviewSubrange ?? null,
   );
+  const readFiles = useReviewStore((state) => selectActiveSlice(state)?.readFiles ?? NO_READ_FILES);
+  const collapsedPaths = useReviewStore(
+    (state) => selectActiveSlice(state)?.collapsedFiles ?? NO_COLLAPSED_FILES,
+  );
+  const setLayerRead = useReviewStore((state) => state.setLayerRead);
+  const setFileCollapsed = useReviewStore((state) => state.setFileCollapsed);
   const resetReviewSubrange = useReviewStore((state) => state.resetReviewSubrange);
   const diffStyle = useReviewStore((state) => state.diffStyle);
   const setScrollTop = useReviewStore((state) => state.setScrollTop);
@@ -186,6 +215,7 @@ export function DiffScreen(): ReactElement | null {
   const [layerIntroCollapsed, setLayerIntroCollapsed] = useState(false);
   useFileStepShortcuts();
   useCommentStepShortcuts();
+  useReadShortcut();
 
   // Bound to the active id (which is DiffView's mount key), so it stays stable for
   // the mounted view and captures land only in the session that scrolled.
@@ -234,6 +264,14 @@ export function DiffScreen(): ReactElement | null {
       clearActiveComment(activeSessionId);
     }
   }, [clearActiveComment, activeSessionId]);
+  const onSetFileCollapsed = useCallback(
+    (path: string, collapsed: boolean) => {
+      if (activeSessionId !== null) {
+        setFileCollapsed(path, collapsed, activeSessionId);
+      }
+    },
+    [setFileCollapsed, activeSessionId],
+  );
   const onResetReviewSubrange = useCallback(() => {
     if (activeSessionId !== null) {
       resetReviewSubrange(activeSessionId);
@@ -268,6 +306,13 @@ export function DiffScreen(): ReactElement | null {
   const visibleFiles = useMemo(
     () => (loadedFiles === null ? null : soloFiles(loadedFiles, activeLayer, effLayers)),
     [loadedFiles, activeLayer, effLayers],
+  );
+  // The soloed chapter's own progress. `visibleFiles` IS the layer's extent whenever one
+  // is soloed, so the band's ring counts exactly what the band's chapter put on screen —
+  // no second definition of "this layer's files" to fall out of step with the rail's.
+  const layerTally = useMemo(
+    () => tallyRead(visibleFiles ?? [], readFiles),
+    [visibleFiles, readFiles],
   );
   // The intro's file-link resolution + navigation set. Memoised on the stable
   // subset so LayerIntro's own derived state (the diff-file Set, the parsed
@@ -370,6 +415,8 @@ export function DiffScreen(): ReactElement | null {
           restoreScrollTop={scrollTop}
           activeLayerId={activeLayerId}
           activeCommentId={activeCommentId}
+          collapsedPaths={collapsedPaths}
+          onSetFileCollapsed={onSetFileCollapsed}
           loadDiffFiles={loadDiffFiles}
           onScrollTop={onScrollTop}
           onAddComment={onAddComment}
@@ -397,14 +444,12 @@ export function DiffScreen(): ReactElement | null {
             layer={activeLayer}
             hasOverview={hasOverview}
             ordinal={entry?.ordinal ?? null}
-            ancestors={(entry?.ancestors ?? []).map((ancestor) => ({
-              id: ancestor.id,
-              label: ancestor.label,
-            }))}
             // With a tour doc, "previous" from the first layer is the doc itself — the
             // review's real first stop — so the chevron only dead-ends without one.
             hasPrev={index > 0 || (hasOverview && index === 0)}
             hasNext={index >= 0 && index < effLayers.length - 1}
+            readTally={layerTally}
+            onToggleRead={() => setLayerRead(activeLayer.id, !isComplete(layerTally))}
             filePaths={visibleFilePaths}
             collapsed={layerIntroCollapsed}
             onToggleCollapsed={() => setLayerIntroCollapsed((value) => !value)}

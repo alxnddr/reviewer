@@ -17,13 +17,14 @@ import type {
   FileDiffContentsLoader,
   LineAnnotation,
 } from "@pierre/diffs";
-import { Check, Copy, Plus } from "lucide-react";
+import { Check, ChevronDown, ChevronRight, Copy, Plus } from "lucide-react";
 import type { ReviewAnchor } from "../../../shared/review";
 import { Button } from "@/components/ui/button";
 import { CommentEditor } from "@/components/CommentEditor";
 import { CommentThread } from "@/components/CommentThread";
 import { CommentNavIndicator } from "@/components/CommentNavIndicator";
 import { DiffSearch } from "@/components/DiffSearch";
+import { FileReadToggle } from "@/components/FileReadToggle";
 import { useDiffSearch } from "@/lib/diff/use-diff-search";
 import {
   indexOfComment,
@@ -68,6 +69,12 @@ type DiffViewProps = {
    * null. Its change scrolls the diff to that comment's line and rings its card;
    * the ring itself is driven through `buildCommentItems`. */
   activeCommentId: string | null;
+  /** Files rendered as a header band with the body folded away — the reader's own
+   * disclosures, plus the fold that rides on marking a file read. */
+  collapsedPaths: ReadonlySet<string>;
+  /** Fold a file away or open it back up: the header's disclosure, and what the surface
+   * calls before jumping to something inside a folded file. */
+  onSetFileCollapsed: (path: string, collapsed: boolean) => void;
   /** Loads full file text so Pierre can expand unchanged context around a hunk;
    * null when no live repo backs the diff (a frozen artifact) or the selection
    * has no two readable refs — the expander is then off and no git read fires. */
@@ -134,6 +141,8 @@ export function DiffView({
   restoreScrollTop,
   activeLayerId,
   activeCommentId,
+  collapsedPaths,
+  onSetFileCollapsed,
   loadDiffFiles,
   onScrollTop,
   onAddComment,
@@ -161,12 +170,22 @@ export function DiffView({
   // patch and navigates by driving the same handle used for file jumps. It
   // highlights the active match through Pierre's line selection (written
   // notify:false, so it never reaches `setSelection` above or the comment `+`).
-  const search = useDiffSearch(handleRef, files);
+  // Folded files stay searchable — the match is in the diff whether or not its body
+  // is on screen — so the hook is handed the fold state and the way to undo it.
+  const search = useDiffSearch(handleRef, files, collapsedPaths, onSetFileCollapsed);
 
   const items = useMemo(
     () =>
-      buildCommentItems(files, comments, { editingId, draft }, frozen, activeCommentId, diffStyle),
-    [files, comments, editingId, draft, frozen, activeCommentId, diffStyle],
+      buildCommentItems(
+        files,
+        comments,
+        { editingId, draft },
+        frozen,
+        activeCommentId,
+        diffStyle,
+        collapsedPaths,
+      ),
+    [files, comments, editingId, draft, frozen, activeCommentId, diffStyle, collapsedPaths],
   );
 
   // The floating counter's position, derived defensively: the same navigable order
@@ -453,12 +472,31 @@ export function DiffView({
         }}
         className="h-full overflow-y-auto"
         onSelectedLinesChange={setSelection}
+        // The file's own disclosure, at the head of its header band: a folded file is
+        // still a file in the diff, and the twisty is what says so. It leads the name
+        // for the same reason a tree's does — the thing that opens a row goes before
+        // the row's name, not after everything else on it.
+        renderHeaderPrefix={(item) => (
+          <FileFoldToggle
+            path={item.id}
+            collapsed={collapsedPaths.has(item.id)}
+            onToggle={onSetFileCollapsed}
+          />
+        )}
         renderHeaderFilenameSuffix={(item) =>
           binaryPaths.has(item.id) ? (
             <span className="font-mono text-xs text-text-muted">binary</span>
           ) : null
         }
-        renderHeaderMetadata={(item) => <CopyPathButton path={item.id} />}
+        // The header's trailing cluster: the path affordance first, then the read
+        // control at the outer edge — the band's most-reached-for corner, and where
+        // every reviewer's hand already goes for it.
+        renderHeaderMetadata={(item) => (
+          <span className="flex items-center gap-1">
+            <CopyPathButton path={item.id} />
+            <FileReadToggle path={item.id} />
+          </span>
+        )}
         renderAnnotation={renderAnnotation}
         renderGutterUtility={(getHoveredLine, item) => (
           // size-6 (24px) meets the hit-target floor; the glyph stays 12px so
@@ -510,6 +548,31 @@ export function DiffView({
         )}
       />
     </div>
+  );
+}
+
+type FileFoldToggleProps = {
+  path: string;
+  collapsed: boolean;
+  onToggle: (path: string, collapsed: boolean) => void;
+};
+
+/** The file's disclosure twisty. Folding is the reader's own — any file can be put away,
+ * read or not — but it is also the tail of marking a file read: a file you are done with
+ * stops spending pane height, and the ones still owed rise to meet you. The header stays,
+ * so a folded file is one click from being read again. */
+function FileFoldToggle({ path, collapsed, onToggle }: FileFoldToggleProps): ReactElement {
+  return (
+    <Button
+      variant="ghost"
+      size="icon-xs"
+      aria-expanded={!collapsed}
+      aria-label={collapsed ? `Expand ${path}` : `Collapse ${path}`}
+      className="text-text-muted"
+      onClick={() => onToggle(path, !collapsed)}
+    >
+      {collapsed ? <ChevronRight /> : <ChevronDown />}
+    </Button>
   );
 }
 

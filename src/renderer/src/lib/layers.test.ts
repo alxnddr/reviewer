@@ -48,7 +48,6 @@ function layer(id: string, overrides: Partial<ReviewLayer> = {}): ReviewLayer {
     id,
     label: `Layer ${id}`,
     summary: `Summary ${id}`,
-    kind: "feature",
     ranges: [{ file: "src/foo.ts", side: "additions", startLine: 11, endLine: 13 }],
     ...overrides,
   };

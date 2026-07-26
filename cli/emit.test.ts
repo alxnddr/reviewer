@@ -104,7 +104,6 @@ const VALID_DRAFT: Draft = {
       id: "l1",
       label: "Walk",
       summary: "the change",
-      kind: "feature",
       ranges: [
         { file: "alpha.ts", side: "additions", startLine: 2, endLine: 2 },
         { file: "beta.ts", side: "additions", startLine: 1, endLine: 2 },

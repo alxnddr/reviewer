@@ -25,6 +25,14 @@ import type { SelectionMode, Session, SessionId, SessionSnapshot } from "../../.
 import { parsePatch, type PatchFile } from "../lib/diff/patch";
 import { findLayer, soloFiles, stepLayer as stepLayerId } from "../lib/layers";
 import { effectiveLayers } from "../lib/coverage";
+import {
+  isFileRead,
+  markFilesRead,
+  NO_COLLAPSED_FILES,
+  NO_READ_FILES,
+  withCollapsed,
+  type ReadFiles,
+} from "../lib/read-progress";
 import { indexOfComment, navigableEntries, orderedComments } from "../lib/diff/comment-navigation";
 import {
   exportSourceFor,
@@ -140,6 +148,20 @@ export type SessionSlice = {
    * The one source the sidebar list, the floating counter, and `DiffView`'s
    * scroll-to-comment all read. */
   activeCommentId: string | null;
+  /** How much of the diff the reader has been through: each read file's path against the
+   * signature of the content they read (see `lib/read-progress.ts`). Derived view state
+   * exactly like `activeLayerId` and `activeCommentId` — absent from `persistedSession`,
+   * no write-back on its setters, and never part of the exported artifact: progress is one
+   * person's place in one sitting, not something the review claims about itself. It
+   * survives every tab switch (it lives in the slice, which is keyed by session id) and
+   * nothing else. */
+  readFiles: ReadFiles;
+  /** Files the code view is showing as a header band only, body folded away. Ephemeral and
+   * unpersisted like `readFiles`, and deliberately *not* derived from it: marking a file
+   * read folds it, so what is still owed rises up the pane, but the header stays a
+   * disclosure — a finished file opens back up in one click and stays open. Only a
+   * gesture ever folds or unfolds a file; nothing springs shut on its own. */
+  collapsedFiles: ReadonlySet<string>;
   /** True from hydration until first activation derives log/branches/diff; a
    * derived slice is never re-derived, so switching back costs zero bridge calls. */
   needsDerive: boolean;
@@ -262,6 +284,27 @@ type ReviewState = {
   stepComment: (direction: 1 | -1, sessionId?: SessionId) => void;
   /** Drop the focused comment back to none — dismisses the counter and the ring. */
   clearActiveComment: (sessionId?: SessionId) => void;
+  /** Mark one file of the loaded diff read or unread — the atom every other progress
+   * readout is derived from. Marks against the file's current content, so the mark can
+   * never outlive the code it was made about. Derived view state: no write-back, and a
+   * path the loaded diff does not carry is a no-op rather than a mark for nothing. */
+  setFileRead: (path: string, read: boolean, sessionId?: SessionId) => void;
+  /** The `r` gesture: flip the focused file (or a named one). Pure — it moves nothing,
+   * so the reader stays exactly where they were reading. */
+  toggleFileRead: (path?: string | null, sessionId?: SessionId) => void;
+  /** Mark a whole chapter read or unread: every file in the layer's *extent* — itself
+   * plus everything nested under it, the same subset soloing shows — so completing a
+   * group and completing its sections are the same act. The synthetic "not covered by
+   * layers" layer works here too, since it solos like any other. */
+  setLayerRead: (layerId: string, read: boolean, sessionId?: SessionId) => void;
+  /** Back to nothing read. Scoped to a file set (the tree's own listing, or the whole
+   * diff from the doc) so a reset offered beside a subset can never quietly wipe the
+   * rest of the review's progress. */
+  clearFilesRead: (paths: readonly string[], sessionId?: SessionId) => void;
+  /** Fold a file's body away in the code view, or open it back up — the file header's own
+   * disclosure. Independent of the read mark: marking read folds, but folding is not
+   * marking, and a finished file the reader opens again stays open. */
+  setFileCollapsed: (path: string, collapsed: boolean, sessionId?: SessionId) => void;
   setDiffStyle: (style: DiffStyle) => void;
   /** Export the curated review as a round-trip `.reviewer.json`: serialize
    * the authored projection and hand it to the native save seam in main. An
@@ -391,6 +434,42 @@ function setSlice(
     return;
   }
   set({ sessions: { ...sessions, [sessionId]: { ...slice, ...partial } } });
+}
+
+/** Every read-progress write funnels through here — one file, a chapter's worth, or a
+ * reset — so the rule that marking a file folds it away is stated once instead of at four
+ * call sites that could drift apart.
+ *
+ * Reading a file is finishing with it: its body is then pane real estate spent on
+ * settled work, so the fold is part of the same gesture and the files still owed rise up
+ * to meet the reader. Unmarking is its mirror and opens the file back up; the header stays
+ * a disclosure either way, so a finished file is always one click from being read again.
+ *
+ * Two more jobs beyond `setSlice`: a gesture that changed nothing (both helpers return
+ * their input on a no-op) never reaches the store, so a redundant click costs no render;
+ * and no write-back is ever scheduled, because progress and folding are derived view
+ * state and must not touch the session main persists. */
+function applyRead(
+  set: Setter,
+  get: Getter,
+  sessionId: SessionId,
+  files: readonly PatchFile[],
+  read: boolean,
+): void {
+  const slice = get().sessions[sessionId];
+  if (slice === undefined) {
+    return;
+  }
+  const readFiles = markFilesRead(slice.readFiles, files, read);
+  const collapsedFiles = withCollapsed(
+    slice.collapsedFiles,
+    files.map((file) => file.path),
+    read,
+  );
+  if (readFiles === slice.readFiles && collapsedFiles === slice.collapsedFiles) {
+    return;
+  }
+  setSlice(set, get, sessionId, { readFiles, collapsedFiles });
 }
 
 /** Matches main's debounce shape (sessions.ts): the first mutation in a window
@@ -663,6 +742,10 @@ function restoredSlice(session: Session): SessionSlice {
     activeLayerId: null,
     lastChapterId: null,
     activeCommentId: null,
+    // Progress starts empty on every launch, like the soloed layer and the focused
+    // comment beside it: a relaunch reopens the review at its overview, unread.
+    readFiles: NO_READ_FILES,
+    collapsedFiles: NO_COLLAPSED_FILES,
     needsDerive: true,
     requestTicket: 0,
   };
@@ -974,6 +1057,8 @@ export const useReviewStore = create<ReviewState>((set, get) => ({
       activeLayerId: null,
       lastChapterId: null,
       activeCommentId: null,
+      readFiles: NO_READ_FILES,
+      collapsedFiles: NO_COLLAPSED_FILES,
       needsDerive: false,
       requestTicket: 0,
     };
@@ -1426,11 +1511,16 @@ export const useReviewStore = create<ReviewState>((set, get) => ({
       !soloFiles(slice.diff.files, findLayer(layers, slice.activeLayerId), layers).some(
         (file) => file.path === comment.file,
       );
+    // A folded file renders no lines, so its comment cards are not mounted and there is
+    // nothing to scroll to — the same reason a solo that hides the file is cleared above.
+    // Unfold it rather than refuse the jump: the reader asked for this finding.
+    const collapsedFiles = withCollapsed(slice.collapsedFiles, [comment.file], false);
     // The active id is ephemeral (no write-back); the file focus moves with it so
     // the tree and j/k stay on the comment's file — that half persists.
     setSlice(set, get, id, {
       activeCommentId: commentId,
       selectedFilePath: comment.file,
+      ...(collapsedFiles === slice.collapsedFiles ? {} : { collapsedFiles }),
       // Stepping to a comment is diff navigation, so it leaves the doc — the card is
       // about to be scrolled to, and it lives on the diff surface.
       overviewOpen: false,
@@ -1480,6 +1570,97 @@ export const useReviewStore = create<ReviewState>((set, get) => ({
       return;
     }
     setSlice(set, get, id, { activeCommentId: null });
+  },
+
+  setFileRead: (path, read, sessionId) => {
+    const id = sessionId ?? get().activeSessionId;
+    if (id === null) {
+      return;
+    }
+    const slice = get().sessions[id];
+    if (slice === undefined || slice.diff.phase !== "loaded") {
+      return;
+    }
+    const file = slice.diff.files.find((candidate) => candidate.path === path);
+    if (file === undefined) {
+      return;
+    }
+    applyRead(set, get, id, [file], read);
+  },
+
+  toggleFileRead: (path, sessionId) => {
+    const id = sessionId ?? get().activeSessionId;
+    if (id === null) {
+      return;
+    }
+    const slice = get().sessions[id];
+    if (slice === undefined || slice.diff.phase !== "loaded") {
+      return;
+    }
+    // No argument means the file the reader is on — the one j/k and the tree agree is
+    // focused, which is the only file `r` could sensibly mean.
+    const target = path ?? slice.selectedFilePath;
+    const file = slice.diff.files.find((candidate) => candidate.path === target);
+    if (file === undefined) {
+      return;
+    }
+    applyRead(set, get, id, [file], !isFileRead(slice.readFiles, file));
+  },
+
+  setLayerRead: (layerId, read, sessionId) => {
+    const id = sessionId ?? get().activeSessionId;
+    if (id === null) {
+      return;
+    }
+    const slice = get().sessions[id];
+    if (slice === undefined || slice.diff.phase !== "loaded") {
+      return;
+    }
+    const layers = sliceLayers(slice);
+    const layer = findLayer(layers, layerId);
+    if (layer === null) {
+      return;
+    }
+    // The extent, via the same `soloFiles` the diff and the tree render — so "mark this
+    // chapter read" covers exactly what soloing it puts on screen, no more.
+    applyRead(set, get, id, soloFiles(slice.diff.files, layer, layers), read);
+  },
+
+  clearFilesRead: (paths, sessionId) => {
+    const id = sessionId ?? get().activeSessionId;
+    if (id === null) {
+      return;
+    }
+    const slice = get().sessions[id];
+    if (slice === undefined || slice.diff.phase !== "loaded") {
+      return;
+    }
+    const wanted = new Set(paths);
+    applyRead(
+      set,
+      get,
+      id,
+      slice.diff.files.filter((file) => wanted.has(file.path)),
+      false,
+    );
+  },
+
+  setFileCollapsed: (path, collapsed, sessionId) => {
+    const id = sessionId ?? get().activeSessionId;
+    if (id === null) {
+      return;
+    }
+    const slice = get().sessions[id];
+    if (slice === undefined) {
+      return;
+    }
+    // Folding alone, leaving the read mark exactly as it was: a reader who opens a
+    // finished file back up has not un-finished it, and one who folds an unread file away
+    // has not claimed to have read it.
+    const collapsedFiles = withCollapsed(slice.collapsedFiles, [path], collapsed);
+    if (collapsedFiles !== slice.collapsedFiles) {
+      setSlice(set, get, id, { collapsedFiles });
+    }
   },
 
   clearOpenFailure: () => {

@@ -3,6 +3,7 @@ import type { Comment, ReviewLayer } from "../../../shared/review";
 import { UNCOVERED_LAYER_ID } from "./coverage";
 import { parsePatch, type PatchFile } from "./diff/patch";
 import { snippetForAnchor } from "./diff/snippet";
+import { NO_READ_FILES } from "./read-progress";
 import { buildOverview } from "./overview";
 
 // A three-file diff read by the real parser, so every count below is measured against a
@@ -42,7 +43,7 @@ const PATCH = [
 const FILES: PatchFile[] = parsePatch(PATCH, "test");
 
 function layer(id: string, ranges: ReviewLayer["ranges"], extra: Partial<ReviewLayer> = {}) {
-  return { id, label: id, summary: `${id} summary`, kind: "feature", ranges, ...extra };
+  return { id, label: id, summary: `${id} summary`, ranges, ...extra };
 }
 
 function comment(file: string, startLine: number, endLine: number, id: string): Comment {
@@ -57,7 +58,13 @@ const BAR = layer("bar", [{ file: "src/bar.ts", side: "additions", startLine: 2,
 
 describe("buildOverview", () => {
   it("counts each chapter's own footprint, not the whole file's", () => {
-    const model = buildOverview({ layers: [FOO], files: FILES, comments: [], frozen: false });
+    const model = buildOverview({
+      layers: [FOO],
+      files: FILES,
+      comments: [],
+      frozen: false,
+      readFiles: NO_READ_FILES,
+    });
     const [chapter] = model.chapters;
 
     // FOO walks two of foo.ts's three additions plus its one deletion — the file's third
@@ -65,7 +72,7 @@ describe("buildOverview", () => {
     expect(chapter?.additions).toBe(2);
     expect(chapter?.deletions).toBe(1);
     expect(chapter?.files).toEqual([
-      { path: "src/foo.ts", status: "modified", additions: 2, deletions: 1 },
+      { path: "src/foo.ts", status: "modified", additions: 2, deletions: 1, read: false },
     ]);
     // The headline still describes the whole diff.
     expect(model.files).toBe(3);
@@ -79,6 +86,7 @@ describe("buildOverview", () => {
       files: FILES,
       comments: [],
       frozen: false,
+      readFiles: NO_READ_FILES,
     });
 
     expect(model.chapters.map((chapter) => chapter.layer.id)).toEqual([
@@ -100,6 +108,7 @@ describe("buildOverview", () => {
       files: FILES,
       comments: [comment("src/foo.ts", 11, 11, "c1"), comment("src/bar.ts", 2, 2, "c2")],
       frozen: false,
+      readFiles: NO_READ_FILES,
     });
 
     expect(model.chapters[0]?.comments).toBe(1);
@@ -119,6 +128,7 @@ describe("buildOverview", () => {
       files: FILES,
       comments: [],
       frozen: false,
+      readFiles: NO_READ_FILES,
     });
 
     expect(model.chapters[0]?.snippet?.file).toBe("src/foo.ts");
@@ -132,7 +142,7 @@ describe("buildOverview", () => {
     expect(model.chapters[1]?.snippet).toBeNull();
     // The layer still claims the file; it is listed, marked absent from this diff.
     expect(model.chapters[1]?.files).toEqual([
-      { path: "src/vanished.ts", status: null, additions: 0, deletions: 0 },
+      { path: "src/vanished.ts", status: null, additions: 0, deletions: 0, read: false },
     ]);
   });
 
@@ -148,6 +158,7 @@ describe("buildOverview", () => {
       files: FILES,
       comments: [comment("src/bar.ts", 2, 2, "c1")],
       frozen: false,
+      readFiles: NO_READ_FILES,
     });
 
     // The parent has no ranges of its own; its extent is the child's, so its figures are
@@ -177,6 +188,7 @@ describe("buildOverview", () => {
       files: FILES,
       comments: [],
       frozen: false,
+      readFiles: NO_READ_FILES,
     });
 
     // The inferred chapter is no authored step, so it wears no number at all.
@@ -192,7 +204,13 @@ describe("buildOverview", () => {
   });
 
   it("reads without a diff: the chapters and their files survive, the counts stand down", () => {
-    const model = buildOverview({ layers: [FOO], files: [], comments: [], frozen: false });
+    const model = buildOverview({
+      layers: [FOO],
+      files: [],
+      comments: [],
+      frozen: false,
+      readFiles: NO_READ_FILES,
+    });
 
     expect(model.chapters[0]?.files.map((file) => file.path)).toEqual(["src/foo.ts"]);
     expect(model.chapters[0]?.additions).toBe(0);
@@ -209,12 +227,19 @@ describe("buildOverview", () => {
       files: FILES,
       comments: [],
       frozen: true,
+      readFiles: NO_READ_FILES,
     });
 
     // The frozen rule still needs the file to be in the diff (lib/layers.ts), so this one
     // is honestly outdated; a frozen chapter over a present file is not.
     expect(model.chapters[0]?.outdated).toBe(true);
-    const present = buildOverview({ layers: [FOO], files: FILES, comments: [], frozen: true });
+    const present = buildOverview({
+      layers: [FOO],
+      files: FILES,
+      comments: [],
+      frozen: true,
+      readFiles: NO_READ_FILES,
+    });
     expect(present.chapters[0]?.outdated).toBe(false);
   });
 });

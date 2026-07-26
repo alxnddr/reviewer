@@ -131,7 +131,6 @@ function buildUncoveredLayer(
     // The reading-band body (LayerIntro falls back to `summary` since there is no
     // authored `description`): a plain sentence, no file links to resolve.
     summary: `${count(unwalked.length, "file")} that no layer covers.`,
-    kind: "uncovered",
     ranges,
   };
 }

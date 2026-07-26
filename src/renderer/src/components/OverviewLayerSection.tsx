@@ -1,11 +1,12 @@
 import { useState, type ReactElement } from "react";
-import { AlertTriangle, ArrowRight, MessageSquare } from "lucide-react";
+import { AlertTriangle, MessageSquare } from "lucide-react";
 import type { OverviewChapter, OverviewFileEntry } from "@/lib/overview";
-import { UNCOVERED_LAYER_ID } from "@/lib/coverage";
+import type { ReadTally } from "@/lib/read-progress";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { TooltipHint } from "@/components/ui/tooltip";
 import { FileTypeIcon } from "@/components/FileTypeIcon";
+import { ReadRing } from "@/components/ReadRing";
 import { ReviewProse } from "@/components/ReviewProse";
 
 // One layer as a section of the overview document: its number and title, its own prose in
@@ -24,6 +25,10 @@ import { ReviewProse } from "@/components/ReviewProse";
 /** Files past this fold behind a disclosure: a layer that spans twenty paths would
  * otherwise bury the next section, and the count is the part that matters at a glance. */
 const FILES_SHOWN = 6;
+
+/** One file, read — the tally a single file's tick is drawn from, so the doc's rows use the
+ * same glyph as every aggregate rather than a second check of their own. */
+const READ_ONE: ReadTally = { read: 1, total: 1 };
 
 function countLabel(n: number, noun: string): string {
   return `${n} ${noun}${n === 1 ? "" : "s"}`;
@@ -76,6 +81,12 @@ function FileRow({ entry, onOpen }: FileRowProps): ReactElement {
         missing ? "cursor-default" : "hover:bg-border/50",
       )}
     >
+      {/* A read file's tick sits ahead of its glyph, in a slot every row holds open: the
+          column then reads down the section as a checklist of what is left, and a row does
+          not shift sideways at the moment it is finished. */}
+      <span className="flex size-3 shrink-0 items-center justify-center">
+        {entry.read && <ReadRing tally={READ_ONE} />}
+      </span>
       {/* The type glyph the file tree draws for the same path, so a file looks like itself
           wherever it is named. It goes dim on a file the diff no longer carries — the row
           is a record of what the layer claims, not a live link. */}
@@ -136,10 +147,6 @@ function rankStyle(depth: number): { section: string; heading: string; ordinal: 
 
 type OverviewLayerSectionProps = {
   chapter: OverviewChapter;
-  /** The layer the reader most recently came out of — the doc scrolls to it on return,
-   * and it says so, since an unexplained scroll into the middle of a document reads as a
-   * bug rather than as a bookmark. */
-  lastRead: boolean;
   /** Every path in the loaded diff — what a `[label](path)` in this layer's prose may
    * resolve to. The whole diff, not the layer's own files: the prose is read here, on the
    * doc, where the whole change is navigable. */
@@ -155,20 +162,22 @@ type OverviewLayerSectionProps = {
   onSelectFile: (path: string) => void;
   /** Open this layer focused on its first comment; absent when it holds none. */
   onOpenComments: (() => void) | null;
+  /** Flip the whole chapter's files between read and unread — the doc's own copy of the
+   * chapter band's control, for the reader taking stock rather than reading. */
+  onToggleRead: () => void;
 };
 
 export function OverviewLayerSection({
   chapter,
-  lastRead,
   filePaths,
   onOpen,
   onOpenFile,
   onSelectFile,
   onOpenComments,
+  onToggleRead,
 }: OverviewLayerSectionProps): ReactElement {
   const [expanded, setExpanded] = useState(false);
   const { layer, files, hasChildren } = chapter;
-  const uncovered = layer.id === UNCOVERED_LAYER_ID;
   const shown = expanded ? files : files.slice(0, FILES_SHOWN);
   const rest = files.length - shown.length;
   const rank = rankStyle(chapter.depth);
@@ -193,11 +202,6 @@ export function OverviewLayerSection({
             {layer.label}
           </button>
         </TooltipHint>
-        {!uncovered && (
-          <span className="shrink-0 rounded border border-border px-1.5 py-px text-xs font-normal text-text-muted">
-            {layer.kind}
-          </span>
-        )}
         {chapter.outdated && (
           <span className="shrink-0 rounded border border-border bg-border/60 px-1.5 py-px text-xs font-normal text-foreground">
             Outdated
@@ -242,6 +246,34 @@ export function OverviewLayerSection({
       {/* The measured facts and the way in, closing the section: what it covers, what it
           holds, and the door to the code. */}
       <div className="mt-4 flex flex-wrap items-center gap-x-3 gap-y-2 text-xs text-text-faint tabular-nums">
+        {/* The chapter's own progress, and the way to settle it in one go — first in the
+            fact row, because on a page read top to bottom this is the fact the reader is
+            keeping. It is a button here, unlike the rail's status mark, because the doc has
+            the width for a hit target and this is where a reader takes stock of chapters
+            rather than reading one. A chapter with nothing in this diff shows nothing. */}
+        {chapter.read.total > 0 && (
+          <TooltipHint
+            side="top"
+            align="start"
+            content={
+              chapter.read.read === chapter.read.total
+                ? "Mark this layer’s files unread"
+                : "Mark this layer’s files read"
+            }
+          >
+            <button
+              type="button"
+              aria-pressed={chapter.read.read === chapter.read.total}
+              onClick={onToggleRead}
+              className="-mx-1 flex items-center gap-1.5 rounded px-1 tabular-nums hover:bg-border/50 hover:text-foreground"
+            >
+              <ReadRing tally={chapter.read} />
+              {chapter.read.read === chapter.read.total
+                ? "Read"
+                : `${chapter.read.read} of ${chapter.read.total} read`}
+            </button>
+          </TooltipHint>
+        )}
         <span>
           {countLabel(files.length, "file")}
           {hasChildren && " across the sections below"}
@@ -249,28 +281,22 @@ export function OverviewLayerSection({
         {(chapter.additions > 0 || chapter.deletions > 0) && (
           <LineCounts additions={chapter.additions} deletions={chapter.deletions} />
         )}
+        {/* The findings, at the row's outer edge — the one door this row still needs. The
+            heading above is already the way into the layer, so a second "open this layer"
+            button here was the same click twice; what only this control can do is land on
+            the first finding rather than the top of the section. */}
         {onOpenComments !== null && (
-          <TooltipHint content="Read the first of them" side="top" align="center">
+          <TooltipHint content="Open the layer on the first of them" side="top" align="end">
             <button
               type="button"
               onClick={onOpenComments}
-              className="flex items-center gap-1 rounded px-1 text-xs text-text-muted tabular-nums hover:bg-border/50 hover:text-foreground"
+              className="ml-auto flex shrink-0 items-center gap-1 rounded px-1 text-xs text-text-muted tabular-nums hover:bg-border/50 hover:text-foreground"
             >
               <MessageSquare aria-hidden="true" className="size-3.5" />
               {countLabel(chapter.comments, "comment")}
             </button>
           </TooltipHint>
         )}
-        {lastRead && <span className="text-text-muted">last read</span>}
-        <Button
-          variant="ghost"
-          size="xs"
-          onClick={onOpen}
-          className="ml-auto shrink-0 text-text-muted hover:bg-border/50 hover:text-foreground dark:hover:bg-border/50"
-        >
-          Open in the diff
-          <ArrowRight aria-hidden="true" data-icon="inline-end" />
-        </Button>
       </div>
     </section>
   );

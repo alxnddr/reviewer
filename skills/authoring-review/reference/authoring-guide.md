@@ -40,14 +40,12 @@ or paste a patch.
       "id": "core",
       "label": "Core",
       "summary": "one-line list label",
-      "kind": "feature",
       "ranges": []
     },
     {
       "id": "core-parse",
       "label": "Parsing",
       "summary": "one-line list label",
-      "kind": "validation",
       "parent": "core",
       "description": "The chapter intro the app shows above the diff for this layer.\n\nA second paragraph may reference a file with [parser](src/foo.ts) or a symbol with `parseThing`.",
       "ranges": [{ "file": "src/foo.ts", "side": "additions", "startLine": 11, "endLine": 13 }]
@@ -61,8 +59,6 @@ Field rules (`rvw schema --json` emits the authoritative shape; `rvw check` enfo
 - `side` is **`additions`** or **`deletions`** — never `old`/`new`.
 - `startLine`/`endLine` are 1-based and **ascending** (`endLine >= startLine`). The number is the
   line in the file on that side — an addition's line in the new file, a deletion's line in the old.
-- `kind` is a free label you choose (`feature`, `validation`, `refactor`, …); the app maps it to
-  an icon. Pick the word that names the slice.
 - `parent` (optional) points at another layer's `id`, nesting this one under it. See "Nesting
   layers" for the rules the gate enforces.
 - `description` is optional but is what makes a layer worth reading — author one per substantive
@@ -77,13 +73,13 @@ and the one screen where the whole review can be *read* rather than clicked thro
 "what is this change, and how should I read it?"
 
 The app renders your `title` and `body`, then continues the same document with **one section per
-layer**, in your authored order. Each section is assembled from the layer itself: its label, `kind`,
+layer**, in your authored order. Each section is assembled from the layer itself: its label,
 its `summary` as the deck, **its whole `description` read in full**, the files it covers with that
 layer's own `+/−` counts, and its comment count. A nested layer is numbered under its parent
 (`4.1`, `4.2.1`) and set at a smaller heading rank, which is how the doc shows what belongs to
 what — it never indents a section, so every one is read at the same width. A section's title and
 its file rows open that layer in the diff; the reader comes back from the rail or the band's
-breadcrumb.
+overview button.
 
 So write the part only you can write, and let the app compute the rest:
 

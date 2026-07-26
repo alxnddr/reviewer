@@ -107,8 +107,8 @@ reader of _this_ change, not for the filesystem.
   in the overview doc as well as above the diff, so write it to stand on its own.
 
 Alphabetical files, one layer per file, a `summary` that echoes the filename — that is a
-directory listing, not a review. Each layer: `id`, `label`, one-line `summary`, author-chosen
-`kind`, ascending `ranges` (each `file` + `side` + `startLine`/`endLine`), and a `description`.
+directory listing, not a review. Each layer: `id`, `label`, one-line `summary`, ascending `ranges`
+(each `file` + `side` + `startLine`/`endLine`), and a `description`.
 
 Every range/comment `side` + line span must fall inside a hunk of the diff, and every
 `[label](path)` link in a `description` **or in the overview `body`** must target a file present in

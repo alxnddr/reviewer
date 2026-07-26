@@ -57,7 +57,7 @@ function artifact(embeddedPatch: string | undefined, layers: ReviewLayer[]): Rev
 }
 
 function layer(id: string, ranges: ReviewLayer["ranges"]): ReviewLayer {
-  return { id, label: id, summary: id, kind: "feature", ranges };
+  return { id, label: id, summary: id, ranges };
 }
 
 function reportOf(result: CoverageResult) {

@@ -49,7 +49,6 @@ const VALID: ReviewArtifact = {
       id: "leaf",
       label: "Leaf",
       summary: "child",
-      kind: "feature",
       description: "Adds [bar](src/bar.ts).",
       ranges: [{ file: "src/bar.ts", side: "additions", startLine: 2, endLine: 2 }],
     },
@@ -195,7 +194,6 @@ const FULLY_COVERED: ReviewArtifact = {
       id: "all",
       label: "All",
       summary: "covers everything",
-      kind: "feature",
       ranges: [
         { file: "src/foo.ts", side: "additions", startLine: 11, endLine: 13 },
         { file: "src/foo.ts", side: "deletions", startLine: 11, endLine: 11 },

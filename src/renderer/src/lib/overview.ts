@@ -4,6 +4,14 @@ import { coverageSummary } from "./coverage";
 import type { FileChangeStatus, PatchFile } from "./diff/patch";
 import { snippetForAnchor, type DiffSnippet } from "./diff/snippet";
 import { layerOutline, layerOwning, resolveLayerScroll } from "./layers";
+import {
+  layerTally,
+  nextUnreadLayer,
+  readPaths,
+  tallyRead,
+  type ReadFiles,
+  type ReadTally,
+} from "./read-progress";
 
 // The tour doc's model: the artifact's authored prose (the overview body, each layer's
 // `summary` and `description`) is the only part a human writes — every *number* the doc
@@ -27,6 +35,10 @@ export type OverviewFileEntry = {
   status: FileChangeStatus | null;
   additions: number;
   deletions: number;
+  /** Whether the reader has marked this file read. Always false for a file the loaded diff
+   * no longer carries: a mark is made against content, and there is none here to have
+   * read. */
+  read: boolean;
 };
 
 /** A chapter of the doc: one layer, projected against the loaded diff. Every figure is the
@@ -53,6 +65,11 @@ export type OverviewChapter = {
   /** The first of them, so the section's comment count is a door onto the finding itself
    * rather than a number. Null when the chapter holds none. */
   firstCommentId: string | null;
+  /** How far through this chapter's extent the reader is — the same tally the rail's ring
+   * and the chapter band's control read, from the same `layerTally`. Counted over the
+   * files the loaded diff actually carries, so a chapter can be finished without chasing
+   * code that has drifted out from under it. */
+  read: ReadTally;
   /** Its extent's first range no longer places against the loaded diff — the same flag the
    * rail shows, so a drifted chapter reads as drifted in both places. */
   outdated: boolean;
@@ -72,6 +89,13 @@ export type OverviewModel = {
   comments: number;
   /** Percent of changed lines the layers walk — the same number `rvw coverage` prints. */
   linePct: number;
+  /** The reader's own progress over the whole diff, and where to pick it back up: the
+   * first chapter in reading order with something left in it, or null when the review is
+   * read out. Derived here beside every other figure the doc prints, for the same reason —
+   * the doc is where the review is taken in as a whole, so it is where "how far am I" and
+   * "where was I" have to be answered from one source. */
+  read: ReadTally;
+  resumeLayerId: string | null;
 };
 
 export type OverviewInput = {
@@ -82,6 +106,9 @@ export type OverviewInput = {
   comments: readonly Comment[];
   /** A frozen review places every anchor, so nothing reads as outdated. */
   frozen: boolean;
+  /** The reader's marks. The one input here that is not the artifact or the diff — and the
+   * reason the doc can be a dashboard as well as a document. */
+  readFiles: ReadFiles;
 };
 
 /** How many of a file's changed lines, per side, this chapter's ranges cover. */
@@ -147,8 +174,15 @@ function firstSnippet(
 /** The whole tour, derived. Every count here is measured against the diff on screen, so
  * an overview opened on a drifted branch honestly shows fewer files and flags the
  * chapters that no longer place, rather than reprinting what the artifact once claimed. */
-export function buildOverview({ layers, files, comments, frozen }: OverviewInput): OverviewModel {
+export function buildOverview({
+  layers,
+  files,
+  comments,
+  frozen,
+  readFiles,
+}: OverviewInput): OverviewModel {
   const byPath = new Map(files.map((file) => [file.path, file]));
+  const read = readPaths(files, readFiles);
   const changedByPath = new Map(files.map((file) => [file.path, changedLines(file)]));
 
   // The authored chapters plus the inferred "not covered by layers" one — the same
@@ -197,6 +231,7 @@ export function buildOverview({ layers, files, comments, frozen }: OverviewInput
         status: byPath.get(path)?.status ?? null,
         additions: counts.additions,
         deletions: counts.deletions,
+        read: read.has(path),
       });
     }
     // Comments held anywhere in the extent, in comment order so "the first one" is a
@@ -216,6 +251,7 @@ export function buildOverview({ layers, files, comments, frozen }: OverviewInput
       deletions,
       comments: held.length,
       firstCommentId: held[0]?.id ?? null,
+      read: layerTally(files, layer, layers, readFiles),
       outdated: resolveLayerScroll(layer, layers, files, frozen).kind === "outdated",
       snippet: firstSnippet(ranges, byPath),
     };
@@ -235,5 +271,10 @@ export function buildOverview({ layers, files, comments, frozen }: OverviewInput
     deletions,
     comments: comments.length,
     linePct: summary.linePct,
+    read: tallyRead(files, readFiles),
+    // Over the *effective* list, so a review whose only unread work sits in files no layer
+    // walks resumes into the inferred "not covered" chapter rather than reporting itself
+    // finished — the same list the rail offers as stops.
+    resumeLayerId: nextUnreadLayer(files, effective, readFiles),
   };
 }

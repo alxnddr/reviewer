@@ -97,7 +97,6 @@ export const ReviewLayer = z.object({
   label: z.string().min(1),
   summary: z.string().min(1),
   description: z.string().min(1).optional(),
-  kind: z.string().min(1),
   ranges: z.array(ReviewAnchor),
   parent: z.string().min(1).optional(),
 });

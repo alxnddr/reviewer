@@ -6,7 +6,13 @@ import {
   buildPathsPatch,
   MULTI_STATUS_PATCH,
 } from "../lib/diff/fixtures";
-import { parsePatch } from "../lib/diff/patch";
+import { parsePatch, type PatchFile } from "../lib/diff/patch";
+import {
+  markFilesRead,
+  NO_COLLAPSED_FILES,
+  NO_READ_FILES,
+  withCollapsed,
+} from "../lib/read-progress";
 import { useReviewStore, type SessionSlice } from "../stores/review";
 
 const HOUR_MS = 3600 * 1000;
@@ -183,7 +189,6 @@ function fixtureLayers(): ReviewLayer[] {
       summary: "New shout() built on greet()",
       description:
         "This layer introduces the public greeting surface. `greet.ts` gains a `shout()` helper that composes over the existing `greet()`, so the two share one formatting path rather than drifting apart.\n\nThe fixture file [added.txt](added.txt) ships alongside as the smoke test — open it to confirm the new entry point reads cleanly. Callers still reach the API through `greet.ts`; nothing downstream changes shape.",
-      kind: "feature",
       ranges: [
         { file: "greet.ts", side: "additions", startLine: 4, endLine: 6 },
         { file: "added.txt", side: "additions", startLine: 1, endLine: 2 },
@@ -195,7 +200,6 @@ function fixtureLayers(): ReviewLayer[] {
       summary: "The bookkeeping around the new entry point",
       description:
         "Three small slices that share nothing but their smallness: a copy pass, a rename, and a deletion. They are grouped so the reading order can put them together and move on — read the group if you want the whole sweep, or a section if you own that file.",
-      kind: "chore",
       ranges: [],
     },
     {
@@ -205,7 +209,6 @@ function fixtureLayers(): ReviewLayer[] {
       parent: "layer-housekeeping",
       description:
         "Small copy pass over [notes.txt](notes.txt): the second item is capitalised and a new trailing entry is appended. No code path depends on this file — it is reading material only.",
-      kind: "docs",
       ranges: [{ file: "notes.txt", side: "additions", startLine: 6, endLine: 6 }],
     },
     {
@@ -213,7 +216,6 @@ function fixtureLayers(): ReviewLayer[] {
       label: "Reword the greeting",
       summary: "hello → hi (greet.ts, shared with the API layer)",
       parent: "layer-housekeeping",
-      kind: "refactor",
       ranges: [{ file: "greet.ts", side: "additions", startLine: 2, endLine: 2 }],
     },
     {
@@ -221,7 +223,6 @@ function fixtureLayers(): ReviewLayer[] {
       label: "Delete dead file",
       summary: "Remove doomed.txt",
       parent: "layer-housekeeping",
-      kind: "chore",
       ranges: [{ file: "doomed.txt", side: "deletions", startLine: 1, endLine: 2 }],
     },
     {
@@ -230,7 +231,6 @@ function fixtureLayers(): ReviewLayer[] {
       summary: "Range drifted — file no longer in the diff",
       description:
         "This layer targeted [config/legacy.ts](config/legacy.ts), which has since dropped out of the diff — so its file link is inert and soloing it lands on the dead-end. The prose still explains the intent even when the code is gone.",
-      kind: "validation",
       ranges: [{ file: "config/legacy.ts", side: "additions", startLine: 10, endLine: 12 }],
     },
   ];
@@ -251,6 +251,21 @@ function fixtureOverview(): ReviewOverview {
       "> The fixture prose deliberately walks every block the grammar renders, so the doc is its own preview.",
       "```ts\nexport function shout(name: string): string {\n  return `${greet(name).toUpperCase()}!`;\n}\n```",
     ].join("\n\n"),
+  };
+}
+
+/** Marks the named files read, exactly as the app does: signed against their own content
+ * and folded away in the code view, so a preview can't show a state the real gestures
+ * cannot produce. */
+function readFixture(
+  files: PatchFile[],
+  paths: string[],
+): Pick<SessionSlice, "readFiles" | "collapsedFiles"> {
+  const wanted = new Set(paths);
+  const marked = files.filter((file) => wanted.has(file.path));
+  return {
+    readFiles: markFilesRead(NO_READ_FILES, marked, true),
+    collapsedFiles: withCollapsed(NO_COLLAPSED_FILES, paths, true),
   };
 }
 
@@ -281,6 +296,8 @@ function siblingSlice(ordinal: number, name: string): SessionSlice {
     lastChapterId: null,
     activeLayerId: null,
     activeCommentId: null,
+    readFiles: NO_READ_FILES,
+    collapsedFiles: NO_COLLAPSED_FILES,
     needsDerive: true,
     requestTicket: 0,
   };
@@ -329,6 +346,8 @@ function seedSession(overrides: Partial<SessionSlice>): void {
     lastChapterId: null,
     activeLayerId: null,
     activeCommentId: null,
+    readFiles: NO_READ_FILES,
+    collapsedFiles: NO_COLLAPSED_FILES,
     needsDerive: false,
     requestTicket: 1,
     ...overrides,
@@ -488,7 +507,6 @@ export function applyPreviewState(): void {
             label: "Generated surface",
             summary: "Every module gains a constant table",
             description: "The bulk of the change.",
-            kind: "refactor",
             ranges: Array.from({ length: 9 }, (_, index) => range(index)),
           },
           {
@@ -497,7 +515,6 @@ export function applyPreviewState(): void {
             summary: "Everything that had to move once the tables existed",
             description:
               "The generated surface is inert until something reads it. This group is that something: the callers first, then the tests that pin them.",
-            kind: "feature",
             ranges: [],
           },
           {
@@ -505,7 +522,6 @@ export function applyPreviewState(): void {
             label: "Callers",
             summary: "Point the callers at the table",
             description: "Two call sites, one direct and one behind a re-export.",
-            kind: "feature",
             parent: "rollup",
             ranges: [],
           },
@@ -513,7 +529,6 @@ export function applyPreviewState(): void {
             id: "rollup-a1",
             label: "The direct call",
             summary: "The module that reads the table itself",
-            kind: "feature",
             parent: "rollup-a",
             ranges: [range(9)],
           },
@@ -521,7 +536,6 @@ export function applyPreviewState(): void {
             id: "rollup-a2",
             label: "The re-export",
             summary: "The barrel that forwards it",
-            kind: "feature",
             parent: "rollup-a",
             ranges: [range(10)],
           },
@@ -529,7 +543,6 @@ export function applyPreviewState(): void {
             id: "rollup-b",
             label: "Tests",
             summary: "Cover the new table",
-            kind: "validation",
             parent: "rollup",
             ranges: [range(11)],
           },
@@ -539,6 +552,36 @@ export function applyPreviewState(): void {
           body: "A wide, mechanical change: every module under `src/` gains a generated constant table, then two follow-on slices wire the callers and the tests.\n\nRead the generated surface once, then skim — the interesting review is in the follow-on layers.",
         },
         overviewOpen: true,
+      });
+      break;
+    }
+    case "reading": {
+      // Part-way through the walkthrough: the first chapter finished (its files folded away
+      // in the code view), the second started. What the rail's rings, the band's control,
+      // the tree's ticks and its status line all have to read correctly at once.
+      const files = parsePatch(MULTI_STATUS_PATCH, "preview:reading");
+      seedSession({
+        diff: { phase: "loaded", loadId: 1, files },
+        selectedFilePath: files[0]?.path ?? null,
+        comments: fixtureComments(),
+        layers: fixtureLayers(),
+        ...readFixture(files, ["added.txt", "notes.txt"]),
+      });
+      break;
+    }
+    case "reading-overview": {
+      // The same progress, seen from the hub: the headline's own tally, a ring per section,
+      // ticks down the file lists, and a footer that offers the chapter to resume into
+      // rather than the first one.
+      const files = parsePatch(MULTI_STATUS_PATCH, "preview:reading-overview");
+      seedSession({
+        diff: { phase: "loaded", loadId: 1, files },
+        selectedFilePath: files[0]?.path ?? null,
+        comments: fixtureComments(),
+        layers: fixtureLayers(),
+        overview: fixtureOverview(),
+        overviewOpen: true,
+        ...readFixture(files, ["added.txt", "notes.txt"]),
       });
       break;
     }

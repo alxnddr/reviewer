@@ -30,7 +30,6 @@ const VALID_ARTIFACT = JSON.stringify({
       id: "leaf",
       label: "Leaf",
       summary: "child",
-      kind: "feature",
       // A stop, so it points at code: a layer with no ranges of its own is a heading, and
       // a heading with nothing under it is what the gate refuses.
       ranges: [{ file: "src/bar.ts", side: "additions", startLine: 2, endLine: 2 }],

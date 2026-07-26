@@ -121,7 +121,7 @@ function draftCovering(
         }))
       : [],
   );
-  return { layers: [{ id: "l1", label: "Walk", summary: "the change", kind: "feature", ranges }] };
+  return { layers: [{ id: "l1", label: "Walk", summary: "the change", ranges }] };
 }
 
 function draftFile(draft: { layers: ReviewLayer[] }): string {
@@ -277,7 +277,6 @@ describe("capture ↔ frozen-artifact parity", () => {
         id: "l1",
         label: "Walk",
         summary: "the change",
-        kind: "feature",
         ranges: [{ file: "alpha.ts", side: "additions", startLine: 2, endLine: 2 }],
       },
     ];

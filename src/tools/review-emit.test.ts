@@ -32,13 +32,12 @@ const COMMENTS = [
   { file: "src/foo.ts", side: "additions", startLine: 11, endLine: 13, body: "why" },
 ];
 const LAYERS = [
-  { id: "rollup", label: "Rollup", summary: "parent", kind: "feature", ranges: [] },
+  { id: "rollup", label: "Rollup", summary: "parent", ranges: [] },
   {
     id: "leaf",
     label: "Leaf",
     summary: "child",
     description: "Adds [bar](src/bar.ts).",
-    kind: "validation",
     parent: "rollup",
     ranges: [{ file: "src/bar.ts", side: "additions", startLine: 2, endLine: 2 }],
   },
@@ -140,7 +139,6 @@ describe("emitReviewArtifact", () => {
             label: "Leaf",
             summary: "child",
             description: "See [ghost](does/not/exist.ts).",
-            kind: "validation",
             ranges: [{ file: "src/bar.ts", side: "additions", startLine: 2, endLine: 2 }],
           },
         ],

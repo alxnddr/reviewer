@@ -11,10 +11,12 @@ import type { PatchFile } from "@/lib/diff/patch";
 import type { FitToContentRefs } from "@/lib/fit-panel";
 import { layerOutline, resolveLayerScroll } from "@/lib/layers";
 import { coverageSummary } from "@/lib/coverage";
+import { layerTally, NO_READ_FILES, type ReadTally } from "@/lib/read-progress";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { TooltipHint } from "@/components/ui/tooltip";
-import { useReviewStore } from "@/stores/review";
+import { ReadRing, readLabel } from "@/components/ReadRing";
+import { selectActiveSlice, useReviewStore } from "@/stores/review";
 
 // The review's table of contents, as a tree. `layers` nests, so the rail is a tree widget
 // and not a flat list pretending: a row indents under its parent, a parent discloses, and
@@ -35,6 +37,11 @@ import { useReviewStore } from "@/stores/review";
 const INDENT_PX = 12;
 /** The twisty's slot, held open on childless rows so labels line up within a level. */
 const TWISTY_PX = 16;
+
+/** Nothing measured: the doc's row, and any layer the loaded diff carries no file for. A
+ * shared constant so those rows hand `ReadRing` one stable reference rather than a fresh
+ * object per render. */
+const NO_TALLY: ReadTally = { read: 0, total: 0 };
 
 function rowDomId(id: string): string {
   return `layer-row-${id}`;
@@ -66,6 +73,10 @@ type Row = {
    * section's files) or on the trail up to it. Carried in ink rather than fill, so "part
    * of what you are looking at" never reads as a second selection. */
   related: boolean;
+  /** How much of this row's extent the reader has been through. Status, not a control —
+   * the chapter band is where a layer is marked, and a 12px target inside a 28px row that
+   * already means "solo this" would be a second gesture nobody could aim. */
+  read: ReadTally;
 };
 
 type LayerRowProps = {
@@ -160,6 +171,17 @@ function TreeRow({ row, selected, expanded, onSelect, onToggle }: LayerRowProps)
           Outdated
         </span>
       )}
+      {/* Where the reader is in this chapter, at the row's outer edge — a pie part-way
+          through, a check when it is done. An untouched row shows nothing: a rail of empty
+          circles would be a column of noise on a review nobody has started, and the whole
+          point of a status mark is that it means something when it is there. */}
+      {row.read.read > 0 && (
+        <TooltipHint side="right" align="center" content={readLabel(row.read)}>
+          <span className="flex shrink-0 items-center">
+            <ReadRing tally={row.read} />
+          </span>
+        </TooltipHint>
+      )}
     </div>
   );
 }
@@ -205,6 +227,7 @@ export function LayerList({
 }: LayerListProps): ReactElement | null {
   const setActiveLayer = useReviewStore((state) => state.setActiveLayer);
   const openOverview = useReviewStore((state) => state.openOverview);
+  const readFiles = useReviewStore((state) => selectActiveSlice(state)?.readFiles ?? NO_READ_FILES);
 
   // The computed coverage of the loaded diff by these layers — same core the `rvw
   // coverage` CLI reports, so the header number and the CLI never disagree. `uncovered`
@@ -235,6 +258,20 @@ export function LayerList({
     return ids;
   }, [layers, files, frozen]);
 
+  // Each layer's progress over its extent, resolved once per (layers, diff, marks) rather
+  // than per row per render — `layerTally` walks the subtree's ranges, which is the same
+  // O(files × ranges) scan the outdated pass above pays for.
+  const tallies = useMemo(() => {
+    const byId = new Map<string, ReadTally>();
+    for (const layer of layers) {
+      byId.set(layer.id, layerTally(files, layer, layers, readFiles));
+    }
+    if (uncovered !== null) {
+      byId.set(uncovered.id, layerTally(files, uncovered, layers, readFiles));
+    }
+    return byId;
+  }, [layers, files, readFiles, uncovered]);
+
   const rows = useMemo((): Row[] => {
     // What the soloed layer implicates: everything inside its extent (those files are on
     // screen) and everything on the trail up to it (that is where it sits). Both read in
@@ -261,6 +298,7 @@ export function LayerList({
         hidden,
         outdated: outdatedIds.has(entry.layer.id),
         related: related.has(entry.layer.id),
+        read: tallies.get(entry.layer.id) ?? NO_TALLY,
       };
     });
     return [
@@ -277,6 +315,9 @@ export function LayerList({
               hidden: false,
               outdated: false,
               related: false,
+              // The doc is prose, not files: it is read when the reader has read it, which
+              // nothing can measure. It carries no mark rather than a false one.
+              read: NO_TALLY,
             },
           ]
         : []),
@@ -295,10 +336,11 @@ export function LayerList({
               hidden: false,
               outdated: false,
               related: false,
+              read: tallies.get(uncovered.id) ?? NO_TALLY,
             },
           ]),
     ];
-  }, [outline, collapsed, outdatedIds, hasOverview, uncovered, activeLayerId]);
+  }, [outline, collapsed, outdatedIds, hasOverview, uncovered, activeLayerId, tallies]);
 
   const selectedId = overviewOpen ? OVERVIEW_ROW_ID : activeLayerId;
 

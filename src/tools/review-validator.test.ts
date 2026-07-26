@@ -51,7 +51,6 @@ function validArtifact(overrides: Partial<ReviewArtifact> = {}): ReviewArtifact 
         id: "rollup",
         label: "Rollup",
         summary: "parent",
-        kind: "feature",
         ranges: [],
       },
       {
@@ -61,7 +60,6 @@ function validArtifact(overrides: Partial<ReviewArtifact> = {}): ReviewArtifact 
         // A resolving link plus an inert code span: only the broken-link case is a
         // problem, so the code span must not be flagged.
         description: "Touches [bar](src/bar.ts) via `helper`.",
-        kind: "validation",
         parent: "rollup",
         ranges: [{ file: "src/bar.ts", side: "additions", startLine: 2, endLine: 2 }],
       },
@@ -117,13 +115,12 @@ describe("parseReviewArtifact + validatePlacement", () => {
   it("flags an unresolved description link while leaving a parent rollup's empty ranges valid", () => {
     const artifact = validArtifact({
       layers: [
-        { id: "rollup", label: "Rollup", summary: "parent", kind: "feature", ranges: [] },
+        { id: "rollup", label: "Rollup", summary: "parent", ranges: [] },
         {
           id: "leaf",
           label: "Leaf",
           summary: "child",
           description: "See [ghost](does/not/exist.ts).",
-          kind: "validation",
           parent: "rollup",
           ranges: [{ file: "src/bar.ts", side: "additions", startLine: 2, endLine: 2 }],
         },
@@ -171,14 +168,12 @@ describe("parseReviewArtifact + validatePlacement", () => {
           id: "drifted",
           label: "Drifted",
           summary: "range past the hunk",
-          kind: "feature",
           ranges: [{ file: "src/foo.ts", side: "additions", startLine: 90, endLine: 90 }],
         },
         {
           id: "absent",
           label: "Absent",
           summary: "range on a file not in the diff",
-          kind: "feature",
           ranges: [{ file: "src/gone.ts", side: "additions", startLine: 1, endLine: 1 }],
         },
       ],
@@ -261,7 +256,6 @@ describe("the outline contract", () => {
     id: "group",
     label: "Group",
     summary: "a theme",
-    kind: "feature",
     ranges: [],
     ...extra,
   });
@@ -269,7 +263,6 @@ describe("the outline contract", () => {
     id: "child",
     label: "Child",
     summary: "the code",
-    kind: "feature",
     ranges: [{ file: "src/bar.ts", side: "additions" as const, startLine: 2, endLine: 2 }],
     ...extra,
   });

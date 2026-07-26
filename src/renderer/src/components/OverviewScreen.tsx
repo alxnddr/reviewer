@@ -2,8 +2,10 @@ import { useEffect, useMemo, type ReactElement } from "react";
 import { ArrowRight, ListTree } from "lucide-react";
 import type { Comment, ReviewLayer } from "../../../shared/review";
 import { buildOverview } from "@/lib/overview";
+import { NO_READ_FILES } from "@/lib/read-progress";
 import { Button } from "@/components/ui/button";
 import { TooltipHint } from "@/components/ui/tooltip";
+import { ReadRing, readLabel } from "@/components/ReadRing";
 import { OverviewLayerSection, layerSectionDomId } from "@/components/OverviewLayerSection";
 import { ReviewProse } from "@/components/ReviewProse";
 import { selectActiveSlice, useReviewStore } from "@/stores/review";
@@ -58,7 +60,10 @@ export function OverviewScreen(): ReactElement | null {
     (state) => selectActiveSlice(state)?.reviewDiff?.kind === "frozenPatch",
   );
   const lastChapterId = useReviewStore((state) => selectActiveSlice(state)?.lastChapterId ?? null);
+  const readFiles = useReviewStore((state) => selectActiveSlice(state)?.readFiles ?? NO_READ_FILES);
   const setActiveLayer = useReviewStore((state) => state.setActiveLayer);
+  const setLayerRead = useReviewStore((state) => state.setLayerRead);
+  const clearFilesRead = useReviewStore((state) => state.clearFilesRead);
   const selectFile = useReviewStore((state) => state.selectFile);
   const focusComment = useReviewStore((state) => state.focusComment);
 
@@ -79,8 +84,8 @@ export function OverviewScreen(): ReactElement | null {
 
   const files = diff !== null && diff.phase === "loaded" ? diff.files : null;
   const model = useMemo(
-    () => buildOverview({ layers, files: files ?? [], comments, frozen }),
-    [layers, files, comments, frozen],
+    () => buildOverview({ layers, files: files ?? [], comments, frozen, readFiles }),
+    [layers, files, comments, frozen, readFiles],
   );
   const filePaths = useMemo(() => (files ?? []).map((file) => file.path), [files]);
 
@@ -89,6 +94,7 @@ export function OverviewScreen(): ReactElement | null {
   }
   const loaded = files !== null;
   const firstLayerId = layers[0]?.id ?? null;
+  const resumeLayerId = model.resumeLayerId;
 
   // A layer is opened by soloing it; the file and comment doors do that first, then point
   // the diff at the exact place the reader clicked.
@@ -150,6 +156,18 @@ export function OverviewScreen(): ReactElement | null {
                       </TooltipHint>,
                     ]
                   : []),
+                // The reader's own place, last in the row: everything before it is a fact
+                // about the change and holds still, this one is about them and moves. It
+                // only appears once there is something to report — an unread review's
+                // headline should describe the change, not open with a zero.
+                ...(loaded && model.read.read > 0
+                  ? [
+                      <span key="read" className="flex items-center gap-1.5">
+                        <ReadRing tally={model.read} />
+                        {readLabel(model.read)}
+                      </span>,
+                    ]
+                  : []),
               ]}
             </StatRow>
           </div>
@@ -175,11 +193,13 @@ export function OverviewScreen(): ReactElement | null {
                 <OverviewLayerSection
                   key={chapter.layer.id}
                   chapter={chapter}
-                  lastRead={chapter.layer.id === lastChapterId}
                   filePaths={filePaths}
                   onOpen={() => openLayer(chapter.layer.id)}
                   onOpenFile={(path) => openLayerFile(chapter.layer.id, path)}
                   onSelectFile={(path) => selectFile(path)}
+                  onToggleRead={() =>
+                    setLayerRead(chapter.layer.id, chapter.read.read < chapter.read.total)
+                  }
                   onOpenComments={
                     chapter.firstCommentId === null
                       ? null
@@ -196,17 +216,52 @@ export function OverviewScreen(): ReactElement | null {
             </div>
           )}
 
-          <div className="mt-8 flex items-center gap-2">
-            {firstLayerId !== null && (
-              <Button onClick={() => setActiveLayer(firstLayerId)}>
-                Open the first layer
+          {/* The way on. What it offers is the one thing a returning reader wants and the
+              doc alone can answer: not "start here" but "you were here" — the first chapter
+              in reading order with anything left in it.
+
+              It says only whether this is a beginning or a resumption, never which chapter.
+              A layer label is written to be a heading, not a button: it can run to a
+              sentence, and a primary button that grows with its target either wraps the
+              footer or elides the very words it was added for. The reader is about to land
+              on that chapter with its title in the band and its row lit in the rail — the
+              button does not need to promise it in advance. */}
+          <div className="mt-8 flex flex-wrap items-center gap-2">
+            {resumeLayerId !== null ? (
+              <Button onClick={() => setActiveLayer(resumeLayerId)}>
+                {model.read.read === 0 ? "Start reviewing" : "Continue reviewing"}
                 <ArrowRight aria-hidden="true" data-icon="inline-end" />
               </Button>
+            ) : (
+              firstLayerId !== null && (
+                <Button onClick={() => setActiveLayer(firstLayerId)}>
+                  Open the first layer
+                  <ArrowRight aria-hidden="true" data-icon="inline-end" />
+                </Button>
+              )
             )}
             <Button variant="outline" onClick={() => setActiveLayer(null)}>
               Browse all files
             </Button>
+            {model.read.read > 0 && (
+              <Button
+                variant="ghost"
+                onClick={() => clearFilesRead(filePaths)}
+                className="ml-auto text-text-muted hover:bg-border/50 hover:text-foreground dark:hover:bg-border/50"
+              >
+                Mark all unread
+              </Button>
+            )}
           </div>
+          {/* The end of the walkthrough, stated once, where the reader lands when they come
+              back to the hub after the last chapter. It replaces the resume button rather
+              than joining it, so "finished" is a shape the page takes, not a badge it adds. */}
+          {loaded && model.read.total > 0 && model.read.read === model.read.total && (
+            <p className="mt-3 flex items-center gap-1.5 text-sm text-text-muted">
+              <ReadRing tally={model.read} />
+              {`Every file in this review is read — all ${model.read.total} of them.`}
+            </p>
+          )}
         </div>
       </div>
     </div>

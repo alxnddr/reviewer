@@ -105,7 +105,6 @@ describe("rvw runs from a repo that is not the Reviewer checkout", () => {
             id: "all",
             label: "All",
             summary: "the change",
-            kind: "feature",
             ranges: [
               { file: "a.txt", side: "additions", startLine: 2, endLine: 4 },
               { file: "a.txt", side: "deletions", startLine: 2, endLine: 2 },

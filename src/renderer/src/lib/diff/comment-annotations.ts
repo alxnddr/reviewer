@@ -79,7 +79,14 @@ function fnv1a(input: string): number {
  * Folding in the resolved per-file answer rather than the raw `diffStyle` also means
  * a file the switch cannot affect (a new or deleted one, always single-column) keeps
  * its version and is never needlessly re-rendered. */
-function annotationsVersion(annotations: readonly DiffLineAnnotation<CommentSlot>[]): number {
+function annotationsVersion(
+  annotations: readonly DiffLineAnnotation<CommentSlot>[],
+  /** Folding changes what the item renders more than any annotation can — the whole body
+   * appears or goes away — and CodeView reconciles a reused item on this number alone, so
+   * it has to be in here or a folded file would keep painting its code until something
+   * else happened to bump the version. */
+  collapsed: boolean,
+): number {
   const parts = annotations.map((annotation) => {
     const slot = annotation.metadata;
     const wide = slot.twoColumn ? 1 : 0;
@@ -87,7 +94,7 @@ function annotationsVersion(annotations: readonly DiffLineAnnotation<CommentSlot
       ? `c|${annotation.side}|${annotation.lineNumber}|${slot.comment.id}|${slot.outdated ? 1 : 0}|${slot.editing ? 1 : 0}|${slot.active ? 1 : 0}|${wide}|${slot.comment.body}`
       : `d|${annotation.side}|${annotation.lineNumber}|${slot.anchor.startLine}-${slot.anchor.endLine}|${wide}`;
   });
-  return fnv1a(parts.join("\n"));
+  return fnv1a(`${collapsed ? "1" : "0"}\n${parts.join("\n")}`);
 }
 
 export function groupByFile(comments: readonly Comment[]): Map<string, Comment[]> {
@@ -117,10 +124,15 @@ export function buildCommentItems(
    * for its measure. Typed as the bare union rather than the store's `DiffStyle` so
    * this stays a leaf of the lib layer; the store imports from here, not the reverse. */
   diffStyle: "split" | "unified" = "unified",
+  /** Files whose body is folded away, leaving the header band alone. Owned by the session
+   * (the reader's disclosures, plus the fold that rides on marking a file read), applied
+   * here because the fold is a property of the rendered item. */
+  collapsedPaths: ReadonlySet<string> = new Set(),
 ): CodeViewDiffItem<CommentSlot>[] {
   const byFile = groupByFile(comments);
   return files.map((file) => {
     const twoColumn = rendersTwoColumns(file, diffStyle);
+    const collapsed = collapsedPaths.has(file.path);
     const annotations: DiffLineAnnotation<CommentSlot>[] = [];
     for (const comment of byFile.get(file.path) ?? []) {
       const resolution = resolveAnchor(
@@ -152,7 +164,8 @@ export function buildCommentItems(
       type: "diff",
       fileDiff: file.fileDiff,
       annotations,
-      version: annotationsVersion(annotations),
+      collapsed,
+      version: annotationsVersion(annotations, collapsed),
     };
   });
 }
