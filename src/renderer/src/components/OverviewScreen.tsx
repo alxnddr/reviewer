@@ -5,7 +5,7 @@ import { buildOverview } from "@/lib/overview";
 import { NO_READ_FILES } from "@/lib/read-progress";
 import { Button } from "@/components/ui/button";
 import { GLASS_PRIMARY } from "@/components/Glass";
-import { ReadRing, readLabel } from "@/components/ReadRing";
+import { ReadRing } from "@/components/ReadRing";
 import { OverviewLayerSection, layerSectionDomId } from "@/components/OverviewLayerSection";
 import { ReviewProse } from "@/components/ReviewProse";
 import { cn } from "@/lib/utils";
@@ -102,31 +102,20 @@ export function OverviewScreen(): ReactElement | null {
   const firstLayerId = layers[0]?.id ?? null;
   const resumeLayerId = model.resumeLayerId;
 
-  // The file count and the reader's progress are one item, not two, because they were only
-  // ever one number: `model.files` and `model.read.total` are both the length of the same
-  // array, so "11 files · 3 of 11 files read" printed eleven twice and made the row look
-  // like it held more facts than it did.
+  // Just the file count, never the read tally. The rail's foot carries "3 of 11 files read"
+  // permanently, one pane away and always on screen; growing this slot into the same
+  // sentence mid-review meant the number was on the page twice and the headline changed
+  // shape under the reader as they worked. What this row is for is describing the change —
+  // how much of it they have been through is the sidebar's standing job.
   //
-  // Untouched it is the plain total — an unread review's headline should describe the
-  // change, not open with a zero. The moment anything is read the same slot grows the
-  // numerator and the ring, so the count the reader already knew turns into their place in
-  // it rather than being joined by a second number reciting it back.
-  //
-  // Layer coverage is deliberately not here. It is a figure about how well the review was
-  // *authored*, and this headline is read by someone about to do the reading — a percentage
-  // they cannot act on and did not ask for. The rail states it where it belongs, next to
-  // the layers themselves, and the "Not covered" chapter says the same thing in a form the
-  // reader can actually open.
+  // Layer coverage is deliberately not here either. It is a figure about how well the review
+  // was *authored*, and this headline is read by someone about to do the reading — a
+  // percentage they cannot act on and did not ask for. The rail states it where it belongs,
+  // next to the layers themselves, and the "Not covered" chapter says the same thing in a
+  // form the reader can actually open.
   const stats: ReactElement[] = loaded
     ? [
-        model.read.read > 0 ? (
-          <span key="files" className="flex items-center gap-1.5">
-            <ReadRing tally={model.read} />
-            {readLabel(model.read)}
-          </span>
-        ) : (
-          <span key="files">{countLabel(model.files, "file")}</span>
-        ),
+        <span key="files">{countLabel(model.files, "file")}</span>,
         <span key="lines">
           <span className="text-diff-add-fg">+{model.additions}</span>{" "}
           <span className="text-diff-del-fg">−{model.deletions}</span>

@@ -267,8 +267,11 @@ function ChangedFileTree({
     lastScrolledPath.current = selectedFilePath;
   }, [model, selectedFilePath]);
 
+  // Top inset only: the tree needs air under the filter box, but the bottom of the listing
+  // is already closed by the status line's own top border — padding there just strands the
+  // last row above a rule and makes the panel look like it stopped short of its section.
   return (
-    <div className="min-h-0 flex-1 py-2">
+    <div className="min-h-0 flex-1 pt-2">
       <FileTree model={model} className="h-full" />
     </div>
   );

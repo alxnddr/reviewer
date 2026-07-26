@@ -12,7 +12,7 @@
     "build:cli": "bun build cli/index.ts --target=node --outfile dist/rvw.js && printf '{\"type\":\"module\"}\\n' > dist/package.json",
     "start": "electron-vite preview",
     "build": "electron-vite build",
-    "build:mac": "bun run build:cli && electron-vite build && electron-builder --mac",
+    "build:mac": "bun run build:cli && electron-vite build && electron-builder --mac --publish never",
     "postinstall": "electron-builder install-app-deps",
     "gen:icon": "node scripts/gen-icon.mjs",
     "typecheck": "tsgo --noEmit -p tsconfig.node.json && tsgo --noEmit -p tsconfig.web.json && tsgo --noEmit -p tsconfig.tools.json",
