@@ -25,8 +25,12 @@ import { CommentThread } from "@/components/CommentThread";
 import { CommentNavIndicator } from "@/components/CommentNavIndicator";
 import { DiffSearch } from "@/components/DiffSearch";
 import { useDiffSearch } from "@/lib/diff/use-diff-search";
-import { indexOfComment, navigableEntries, orderedComments } from "@/lib/diff/comment-navigation";
-import { commentLocation } from "@/lib/comment-body";
+import {
+  indexOfComment,
+  navigableEntries,
+  orderedComments,
+  type CommentNavEntry,
+} from "@/lib/diff/comment-navigation";
 import {
   buildCommentItems,
   pickAddAnchor,
@@ -160,8 +164,9 @@ export function DiffView({
   const search = useDiffSearch(handleRef, files);
 
   const items = useMemo(
-    () => buildCommentItems(files, comments, { editingId, draft }, frozen, activeCommentId),
-    [files, comments, editingId, draft, frozen, activeCommentId],
+    () =>
+      buildCommentItems(files, comments, { editingId, draft }, frozen, activeCommentId, diffStyle),
+    [files, comments, editingId, draft, frozen, activeCommentId, diffStyle],
   );
 
   // The floating counter's position, derived defensively: the same navigable order
@@ -231,7 +236,7 @@ export function DiffView({
       const slot = annotation.metadata;
       if (slot.kind === "draft") {
         return (
-          <CommentAnnotationFrame>
+          <CommentAnnotationFrame twoColumn={slot.twoColumn}>
             <CommentEditor
               initialBody=""
               saveLabel="Comment"
@@ -246,7 +251,7 @@ export function DiffView({
       }
       if (slot.editing) {
         return (
-          <CommentAnnotationFrame>
+          <CommentAnnotationFrame twoColumn={slot.twoColumn}>
             <CommentEditor
               initialBody={slot.comment.body}
               saveLabel="Save"
@@ -260,7 +265,7 @@ export function DiffView({
         );
       }
       return (
-        <CommentAnnotationFrame>
+        <CommentAnnotationFrame twoColumn={slot.twoColumn}>
           <CommentThread
             comment={slot.comment}
             outdated={slot.outdated}
@@ -302,38 +307,16 @@ export function DiffView({
   // the same value and stays inert, where a boolean guard would flip and jump.
   const lastJumpedPath = useRef(selectedFilePath);
 
-  // Scroll to the focused comment (a sidebar click or an `n`/`p` step). Declared
-  // BEFORE the file-jump effect below and seeding `lastJumpedPath`: `focusComment`
-  // sets `activeCommentId` and `selectedFilePath` in one store write, so both change
-  // in the same commit — running first and claiming the jump makes the file-jump
-  // effect a no-op, so exactly one precise scroll fires (line/centre, not
-  // file/start). Value-compare-seeded like the jumps, so a mount / StrictMode replay
-  // is inert (the persisted-scroll restore owns the mount; the ring still paints from
-  // `items`, so a tab bounce keeps the highlight without a competing scroll). A
-  // placed comment centres on its line; an outdated one has no line, so its file
-  // header is brought into view where it renders; an id with no host item here
-  // (soloed out, unplaceable, or discarded) is a no-op.
-  const lastFocusedCommentId = useRef(activeCommentId);
-  useEffect(() => {
-    if (activeCommentId === lastFocusedCommentId.current) {
-      return;
-    }
-    lastFocusedCommentId.current = activeCommentId;
-    if (activeCommentId === null) {
-      return;
-    }
+  // Put a comment's host row under the reader's eye. A placed comment centres on its
+  // own line; an outdated one has no line on this diff — it renders at the file
+  // header — so its file is brought to the top instead. Pure viewport: it touches no
+  // store state, which is what lets the stepper's counter re-run it as a re-centre
+  // after the reader has scrolled off, without re-triggering the focus effect below.
+  const scrollToComment = useCallback((entry: CommentNavEntry): void => {
     const handle = handleRef.current;
     if (handle === null) {
       return;
     }
-    const entry = orderedComments(files, comments, frozen).find(
-      (candidate) => candidate.comment.id === activeCommentId,
-    );
-    if (entry === undefined) {
-      return;
-    }
-    // Claim the jump so the file-jump effect (next) doesn't also scroll to the file.
-    lastJumpedPath.current = entry.comment.file;
     if (entry.status === "placed" && entry.line !== null) {
       handle.scrollTo({
         type: "line",
@@ -351,7 +334,36 @@ export function DiffView({
         behavior: "instant",
       });
     }
-  }, [activeCommentId, files, comments, frozen]);
+  }, []);
+
+  // Scroll to the focused comment (a sidebar click or an `n`/`p` step). Declared
+  // BEFORE the file-jump effect below and seeding `lastJumpedPath`: `focusComment`
+  // sets `activeCommentId` and `selectedFilePath` in one store write, so both change
+  // in the same commit — running first and claiming the jump makes the file-jump
+  // effect a no-op, so exactly one precise scroll fires (line/centre, not
+  // file/start). Value-compare-seeded like the jumps, so a mount / StrictMode replay
+  // is inert (the persisted-scroll restore owns the mount; the ring still paints from
+  // `items`, so a tab bounce keeps the highlight without a competing scroll). An id
+  // with no host item here (soloed out, unplaceable, or discarded) is a no-op.
+  const lastFocusedCommentId = useRef(activeCommentId);
+  useEffect(() => {
+    if (activeCommentId === lastFocusedCommentId.current) {
+      return;
+    }
+    lastFocusedCommentId.current = activeCommentId;
+    if (activeCommentId === null) {
+      return;
+    }
+    const entry = orderedComments(files, comments, frozen).find(
+      (candidate) => candidate.comment.id === activeCommentId,
+    );
+    if (entry === undefined) {
+      return;
+    }
+    // Claim the jump so the file-jump effect (next) doesn't also scroll to the file.
+    lastJumpedPath.current = entry.comment.file;
+    scrollToComment(entry);
+  }, [activeCommentId, files, comments, frozen, scrollToComment]);
 
   useEffect(() => {
     if (selectedFilePath === lastJumpedPath.current) {
@@ -408,10 +420,9 @@ export function DiffView({
         <CommentNavIndicator
           position={navIndex + 1}
           count={navEntries.length}
-          location={commentLocation(navActive.comment)}
-          outdated={navActive.status === "outdated"}
           onPrevious={() => onStepComment(-1)}
           onNext={() => onStepComment(1)}
+          onRecenter={() => scrollToComment(navActive)}
           onClose={onClearActiveComment}
         />
       )}
@@ -541,10 +552,31 @@ function CopyPathButton({ path }: CopyPathButtonProps): ReactElement {
   );
 }
 
-type CommentAnnotationFrameProps = { children: ReactNode };
+type CommentAnnotationFrameProps = { twoColumn: boolean; children: ReactNode };
 
-/** Insets the comment surface off the code column and caps its measure so a long
- * thread stays readable — the annotation slot itself spans the full line width. */
-function CommentAnnotationFrame({ children }: CommentAnnotationFrameProps): ReactElement {
-  return <div className="max-w-2xl px-4 py-2 pl-14">{children}</div>;
+/** The band a comment sits in, and the inset that keeps it readable.
+ *
+ * Two elements, because they do opposite jobs. The outer one takes the annotation
+ * slot's full line width and paints `--comment-band`: on a light theme the card
+ * wants to be white — paper, at full text contrast — and a white card on a white
+ * diff has nothing left to make it *noticeable*, so the emphasis moves off the card
+ * and onto the row holding it. The inner one caps the measure.
+ *
+ * The cap is set against the *lane*, so it follows how this particular file is
+ * painting — `twoColumn`, not the view's mode, since a new or deleted file stays
+ * single-column even in split (see `rendersTwoColumns`). Beside two columns a
+ * comment belongs to the file, not to one column of it, and has to read as clearly
+ * out-spanning a lane: anything near a single lane width looks like a mistake, so it
+ * takes `5xl` and claims well past the half. Against one column there is nothing to
+ * out-span and the cap goes back to serving the prose — `2xl` is around 75
+ * characters, and the width the split case needs would only be line length here. */
+function CommentAnnotationFrame({
+  twoColumn,
+  children,
+}: CommentAnnotationFrameProps): ReactElement {
+  return (
+    <div className="bg-comment-band py-3 pr-4 pl-14">
+      <div className={twoColumn ? "max-w-5xl" : "max-w-2xl"}>{children}</div>
+    </div>
+  );
 }

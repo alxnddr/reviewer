@@ -8,6 +8,7 @@ import {
   ReviewDiff,
   ReviewLayer,
   ReviewOrigin,
+  ReviewOverview,
   reviewDiffFor,
   reviewOriginFor,
   type ImportedReview,
@@ -44,6 +45,8 @@ export type SessionStore = {
   update: (session: Session) => void;
   delete: (id: SessionId) => void;
   setActive: (id: SessionId) => void;
+  /** Re-seats the persisted array to the tab strip's order after a drag. */
+  reorder: (ids: SessionId[]) => void;
   /** Persists a pending debounced write now; used by the will-quit path. */
   flush: () => void;
 };
@@ -88,6 +91,7 @@ const SessionWithViewStateSalvage = z.object({
   scrollTop: z.number().finite().nonnegative().catch(0),
   comments: z.array(Comment).catch([]),
   layers: z.array(ReviewLayer).catch([]),
+  overview: ReviewOverview.nullable().catch(null),
   reviewDiff: ReviewDiff.nullable().catch(null),
   reviewSubrange: CommitSelection.nullable().catch(null),
   reviewOrigin: ReviewOrigin.nullable().catch(null),
@@ -103,16 +107,30 @@ function migrateRawSession(raw: unknown, version: StoreVersion): unknown {
   return { comments: [], layers: [], ...raw };
 }
 
-/** A fresh session's inputs at creation defaults; `comments`/`layers`/`reviewDiff`/
- * `reviewOrigin` are the only fields an open path seeds (a repo open passes empties
- * + nulls, a review open its imported content, pinned diff, and authored origin). */
-function buildSession(
-  source: SessionSource,
-  comments: Comment[],
-  layers: ReviewLayer[],
-  reviewDiff: ReviewDiff | null,
-  reviewOrigin: ReviewOrigin | null,
-): Session {
+/** The review content an open path seeds a fresh session with — everything a session
+ * cannot derive from git. Passed as one value rather than a positional run of arrays
+ * and nulls, so adding a field (the tour `overview`) can't silently shift a caller's
+ * arguments. A repo open seeds `EMPTY_REVIEW_SEED`; a review open seeds its imported
+ * content, pinned diff, and authored origin. */
+type ReviewSeed = {
+  comments: Comment[];
+  layers: ReviewLayer[];
+  overview: ReviewOverview | null;
+  reviewDiff: ReviewDiff | null;
+  reviewOrigin: ReviewOrigin | null;
+};
+
+const EMPTY_REVIEW_SEED: ReviewSeed = {
+  comments: [],
+  layers: [],
+  overview: null,
+  reviewDiff: null,
+  reviewOrigin: null,
+};
+
+/** A fresh session: git-derived state starts at the creation defaults, and the seed
+ * carries whatever review content the open path brought with it. */
+function buildSession(source: SessionSource, seed: ReviewSeed): Session {
   return {
     id: randomUUID(),
     source,
@@ -122,11 +140,12 @@ function buildSession(
     commitSelection: null,
     selectedFilePath: null,
     scrollTop: 0,
-    comments,
-    layers,
-    reviewDiff,
+    comments: seed.comments,
+    layers: seed.layers,
+    overview: seed.overview,
+    reviewDiff: seed.reviewDiff,
     reviewSubrange: null,
-    reviewOrigin,
+    reviewOrigin: seed.reviewOrigin,
   };
 }
 
@@ -236,16 +255,19 @@ export function createSessionStore(options: SessionStoreOptions = {}): SessionSt
   return {
     list: () => ({ sessions: state.sessions, activeSessionId: state.activeSessionId }),
 
-    create: (source) => addSession(buildSession(source, [], [], null, null)),
+    create: (source) => addSession(buildSession(source, EMPTY_REVIEW_SEED)),
 
     createFromReview: (review) =>
       addSession(
         buildSession(
           { kind: "local", repo: review.source.repo },
-          review.comments,
-          review.layers,
-          reviewDiffFor(review),
-          reviewOriginFor(review),
+          {
+            comments: review.comments,
+            layers: review.layers,
+            overview: review.overview,
+            reviewDiff: reviewDiffFor(review),
+            reviewOrigin: reviewOriginFor(review),
+          },
         ),
       ),
 
@@ -282,6 +304,29 @@ export function createSessionStore(options: SessionStoreOptions = {}): SessionSt
         return;
       }
       state = { ...state, activeSessionId: id };
+      schedulePersist();
+    },
+
+    reorder: (ids) => {
+      // The renderer names an order; main still owns the membership. Sessions are
+      // taken in the order given, then anything the request didn't mention is
+      // appended in its existing order — a tab opened between the drag starting
+      // and this arriving is kept rather than silently dropped.
+      const byId = new Map(state.sessions.map((session) => [session.id, session]));
+      const reordered: Session[] = [];
+      for (const id of ids) {
+        const session = byId.get(id);
+        if (session !== undefined) {
+          reordered.push(session);
+          byId.delete(id);
+        }
+      }
+      for (const session of state.sessions) {
+        if (byId.has(session.id)) {
+          reordered.push(session);
+        }
+      }
+      state = { ...state, sessions: reordered };
       schedulePersist();
     },
 

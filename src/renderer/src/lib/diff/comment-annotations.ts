@@ -21,8 +21,34 @@ import { resolveAnchor } from "./anchor";
  * placed or outdated authored/manual comment; a `draft` slot is the not-yet-saved
  * new comment whose editor occupies the picked line. */
 export type CommentSlot =
-  | { kind: "comment"; comment: Comment; outdated: boolean; editing: boolean; active: boolean }
-  | { kind: "draft"; anchor: ReviewAnchor };
+  | {
+      kind: "comment";
+      comment: Comment;
+      outdated: boolean;
+      editing: boolean;
+      active: boolean;
+      twoColumn: boolean;
+    }
+  | { kind: "draft"; anchor: ReviewAnchor; twoColumn: boolean };
+
+/** Whether this file is actually painting two columns right now — which is not the
+ * same question as "is split mode on". Pierre's own rule (`FileDiff`,
+ * `applyPreNodeAttributes`) is
+ *
+ *     split: diffStyle === "unified" ? false : additions != null && deletions != null
+ *
+ * so a file with only one side — a new file, a deleted one — stays single-column
+ * even in split mode, and a pure rename renders no code at all. The comment frame
+ * sizes itself against the lane it sits beside, so it has to ask the same question
+ * per file rather than reading the view's mode and getting it wrong on exactly the
+ * files where the mode does not apply. */
+function rendersTwoColumns(file: PatchFile, diffStyle: "split" | "unified"): boolean {
+  if (diffStyle === "unified") {
+    return false;
+  }
+  const type = file.fileDiff.type;
+  return type === "change" || type === "rename-changed";
+}
 
 /** An in-flight new comment: the file it was opened on and the picked range. */
 export type CommentDraft = { fileId: string; anchor: ReviewAnchor };
@@ -45,13 +71,21 @@ function fnv1a(input: string): number {
 }
 
 /** Fold everything the item renders into one number. Body is included so an edit
- * bumps the version; `editing`/draft are included so opening an editor does too. */
+ * bumps the version; `editing`/draft are included so opening an editor does too.
+ * `twoColumn` is in here because the comment frame sizes itself against the lane it
+ * sits beside — it changes what the slot renders without changing a single comment,
+ * and CodeView re-renders a reused item's slots only on a version change, so leaving
+ * it out would strand every mounted card at its old width across a style switch.
+ * Folding in the resolved per-file answer rather than the raw `diffStyle` also means
+ * a file the switch cannot affect (a new or deleted one, always single-column) keeps
+ * its version and is never needlessly re-rendered. */
 function annotationsVersion(annotations: readonly DiffLineAnnotation<CommentSlot>[]): number {
   const parts = annotations.map((annotation) => {
     const slot = annotation.metadata;
+    const wide = slot.twoColumn ? 1 : 0;
     return slot.kind === "comment"
-      ? `c|${annotation.side}|${annotation.lineNumber}|${slot.comment.id}|${slot.outdated ? 1 : 0}|${slot.editing ? 1 : 0}|${slot.active ? 1 : 0}|${slot.comment.body}`
-      : `d|${annotation.side}|${annotation.lineNumber}|${slot.anchor.startLine}-${slot.anchor.endLine}`;
+      ? `c|${annotation.side}|${annotation.lineNumber}|${slot.comment.id}|${slot.outdated ? 1 : 0}|${slot.editing ? 1 : 0}|${slot.active ? 1 : 0}|${wide}|${slot.comment.body}`
+      : `d|${annotation.side}|${annotation.lineNumber}|${slot.anchor.startLine}-${slot.anchor.endLine}|${wide}`;
   });
   return fnv1a(parts.join("\n"));
 }
@@ -79,9 +113,14 @@ export function buildCommentItems(
   ui: CommentUiState,
   frozen: boolean,
   activeCommentId: string | null = null,
+  /** Resolved per file into each slot's `twoColumn`, which is what the frame reads
+   * for its measure. Typed as the bare union rather than the store's `DiffStyle` so
+   * this stays a leaf of the lib layer; the store imports from here, not the reverse. */
+  diffStyle: "split" | "unified" = "unified",
 ): CodeViewDiffItem<CommentSlot>[] {
   const byFile = groupByFile(comments);
   return files.map((file) => {
+    const twoColumn = rendersTwoColumns(file, diffStyle);
     const annotations: DiffLineAnnotation<CommentSlot>[] = [];
     for (const comment of byFile.get(file.path) ?? []) {
       const resolution = resolveAnchor(
@@ -97,6 +136,7 @@ export function buildCommentItems(
           outdated: resolution.status === "outdated",
           editing: ui.editingId === comment.id,
           active: activeCommentId === comment.id,
+          twoColumn,
         },
       });
     }
@@ -104,7 +144,7 @@ export function buildCommentItems(
       annotations.push({
         side: ui.draft.anchor.side,
         lineNumber: ui.draft.anchor.startLine,
-        metadata: { kind: "draft", anchor: ui.draft.anchor },
+        metadata: { kind: "draft", anchor: ui.draft.anchor, twoColumn },
       });
     }
     return {

@@ -17,6 +17,7 @@ import {
   type ReviewDiff,
   type ReviewLayer,
   type ReviewOrigin,
+  type ReviewOverview,
   type ReviewSource,
 } from "../../../shared/review";
 import type { ReviewOpenFailure, ReviewOpenResponse } from "../../../shared/review-open";
@@ -91,6 +92,23 @@ export type SessionSlice = {
    * persisted update never wipes it. */
   comments: Comment[];
   layers: ReviewLayer[];
+  /** The authored tour doc, or null for a review that carries none (and for every plain
+   * repo session). Carried through hydration and write-back verbatim, like the
+   * comments/layers beside it, so a round-trip export re-emits it. */
+  overview: ReviewOverview | null;
+  /** Whether the tour doc — stop zero of the walkthrough — is the surface on screen.
+   * Derived view state exactly like `activeLayerId`: never persisted, and every setter
+   * that targets the diff (soloing a layer, focusing a comment, picking a file) clears
+   * it, so "the doc is open" and "a layer is soloed" can never both read true. A
+   * restored review session starts here whenever it has a doc to show — the review
+   * begins at its overview, not mid-diff. Invariant: true implies
+   * `activeLayerId === null`, which makes the rail's selection unambiguous. */
+  overviewOpen: boolean;
+  /** The last chapter the reader entered, or null before they enter any. Ephemeral like
+   * the two above, and never a second source of truth for what is soloed — it exists so
+   * returning to the doc lands on the chapter you just read instead of the top of a long
+   * page, which is the one thing a hub-and-spoke walkthrough must not lose. */
+  lastChapterId: string | null;
   /** The review's pinned diff, or null for a plain repo session. When set,
    * it drives the rendered diff so the anchors place on their exact authored lines. A
    * `frozenPatch` pin renders its embedded diff verbatim (anchors resolve frozen); a
@@ -166,6 +184,10 @@ type ReviewState = {
   /** Deletes the session in main and removes the slice; closing the active tab
    * activates the right neighbor, else the left, else lands on the empty state. */
   closeSession: (sessionId?: SessionId) => void;
+  /** Re-seats the tab strip after a drag. Key insertion order IS tab order, so the
+   * record is rebuilt rather than annotated — ⌘1…9 and ⌃Tab then follow the new
+   * arrangement for free, since both read that same order. */
+  reorderSessions: (ids: SessionId[]) => void;
   /** ⌘1…⌘8 are positional; ⌘9 is the last tab (macOS tabbed-app convention). */
   activateTabByOrdinal: (ordinal: TabOrdinal) => void;
   /** ⌃Tab / ⌃⇧Tab; wraps at both ends. */
@@ -212,9 +234,20 @@ type ReviewState = {
   discardComment: (commentId: string, sessionId?: SessionId) => void;
   /** Solo a layer by id, or pass null to clear back to the full diff.
    * Derived view state only: no write-back, and `selection`/`selectedFilePath`/
-   * `scrollTop` are left untouched — the diff the session persists never moves. */
+   * `scrollTop` are left untouched — the diff the session persists never moves.
+   * Always leaves the tour doc: choosing what the diff shows means you are done reading
+   * the trailhead. */
   setActiveLayer: (layerId: string | null, sessionId?: SessionId) => void;
-  /** Walk the authored layer order, clamping at both ends; snappy and additive,
+  /** Open the tour doc — the review's first stop. Clears the soloed layer so the rail has
+   * exactly one selected stop, and lands on the section the reader last came out of. A
+   * no-op on a session with no doc. */
+  openOverview: (sessionId?: SessionId) => void;
+  /** Leave the tour doc for the full diff — the "browse all files" way out, and what the
+   * `o` toggle does from inside the doc. */
+  closeOverview: (sessionId?: SessionId) => void;
+  /** Walk the walkthrough: the tour doc (when the review has one) is stop zero, then the
+   * authored layer order, clamping at both ends. Stepping back off the first layer opens
+   * the doc; stepping forward from it enters the first layer. Snappy and additive,
    * exactly like `setActiveLayer` (no write-back, no session mutation). */
   stepLayer: (direction: 1 | -1, sessionId?: SessionId) => void;
   /** Focus a comment by id: mark it active (drives the scroll-to + card ring + the
@@ -446,6 +479,7 @@ function persistedSession(slice: SessionSlice): Session {
     scrollTop: slice.scrollTop,
     comments: slice.comments,
     layers: slice.layers,
+    overview: slice.overview,
     reviewDiff: slice.reviewDiff,
     reviewSubrange: slice.reviewSubrange,
     reviewOrigin: slice.reviewOrigin,
@@ -618,10 +652,16 @@ function restoredSlice(session: Session): SessionSlice {
     commitSelection: session.commitSelection,
     comments: session.comments,
     layers: session.layers,
+    overview: session.overview,
+    // A review that carries a tour doc opens on it: the doc is where the review starts,
+    // and a restore (or a fresh open, which lands here too) should read the same way as
+    // the first open did. A session with no doc restores straight onto its diff.
+    overviewOpen: session.overview !== null,
     reviewDiff: session.reviewDiff,
     reviewSubrange: session.reviewSubrange,
     reviewOrigin: session.reviewOrigin,
     activeLayerId: null,
+    lastChapterId: null,
     activeCommentId: null,
     needsDerive: true,
     requestTicket: 0,
@@ -833,6 +873,26 @@ export const useReviewStore = create<ReviewState>((set, get) => ({
     }
   },
 
+  reorderSessions: (ids) => {
+    const current = get().sessions;
+    const reordered: Record<SessionId, SessionSlice> = {};
+    for (const id of ids) {
+      const slice = current[id];
+      if (slice !== undefined) {
+        reordered[id] = slice;
+      }
+    }
+    // A session that opened mid-drag isn't in `ids`; keep it at the back rather
+    // than dropping it, matching how main resolves the same gap.
+    for (const [id, slice] of Object.entries(current)) {
+      if (reordered[id] === undefined) {
+        reordered[id] = slice;
+      }
+    }
+    set({ sessions: reordered });
+    void window.reviewer?.reorderSessions({ ids: Object.keys(reordered) });
+  },
+
   activateTabByOrdinal: (ordinal) => {
     const order = Object.keys(get().sessions);
     const id = ordinal === 9 ? order[order.length - 1] : order[ordinal - 1];
@@ -906,10 +966,13 @@ export const useReviewStore = create<ReviewState>((set, get) => ({
       commitSelection: null,
       comments: [],
       layers: [],
+      overview: null,
+      overviewOpen: false,
       reviewDiff: null,
       reviewSubrange: null,
       reviewOrigin: null,
       activeLayerId: null,
+      lastChapterId: null,
       activeCommentId: null,
       needsDerive: false,
       requestTicket: 0,
@@ -1130,8 +1193,13 @@ export const useReviewStore = create<ReviewState>((set, get) => ({
       return;
     }
     // Plain file navigation dismisses the comment step-through: the reader is
-    // browsing files now, not walking comments.
-    setSlice(set, get, id, { selectedFilePath: path, activeCommentId: null });
+    // browsing files now, not walking comments — and it leaves the tour doc, since a
+    // picked file is a request to see the diff (the doc's own file chips route here).
+    setSlice(set, get, id, {
+      selectedFilePath: path,
+      activeCommentId: null,
+      overviewOpen: false,
+    });
     scheduleSessionWriteBack(get, id);
   },
 
@@ -1155,7 +1223,11 @@ export const useReviewStore = create<ReviewState>((set, get) => ({
     const next = files[nextIndex];
     if (next && next.path !== slice.selectedFilePath) {
       // j/k is plain file navigation — it dismisses the comment step-through.
-      setSlice(set, get, id, { selectedFilePath: next.path, activeCommentId: null });
+      setSlice(set, get, id, {
+        selectedFilePath: next.path,
+        activeCommentId: null,
+        overviewOpen: false,
+      });
       scheduleSessionWriteBack(get, id);
     }
   },
@@ -1248,13 +1320,45 @@ export const useReviewStore = create<ReviewState>((set, get) => ({
       return;
     }
     const slice = get().sessions[id];
-    if (slice === undefined || slice.activeLayerId === layerId) {
+    if (slice === undefined || (slice.activeLayerId === layerId && !slice.overviewOpen)) {
       return;
     }
     // No write-back: the active layer is a derived view, never a persisted input
     // (it is absent from `persistedSession`), so soloing costs zero bridge calls
     // and a relaunch always reopens on the full diff.
-    setSlice(set, get, id, { activeLayerId: layerId });
+    setSlice(set, get, id, {
+      activeLayerId: layerId,
+      overviewOpen: false,
+      ...(layerId === null ? {} : { lastChapterId: layerId }),
+    });
+  },
+
+  openOverview: (sessionId) => {
+    const id = sessionId ?? get().activeSessionId;
+    if (id === null) {
+      return;
+    }
+    const slice = get().sessions[id];
+    if (slice === undefined || slice.overview === null) {
+      return;
+    }
+    // The doc is a stop, not an overlay: it clears the solo rather than hiding it, so
+    // there is exactly one selected row in the rail and no remembered state to surprise
+    // the reader when they come back down into the diff. `lastChapterId` is untouched —
+    // it is the doc's own scroll target, so returning lands on the layer just read.
+    setSlice(set, get, id, { overviewOpen: true, activeLayerId: null });
+  },
+
+  closeOverview: (sessionId) => {
+    const id = sessionId ?? get().activeSessionId;
+    if (id === null) {
+      return;
+    }
+    const slice = get().sessions[id];
+    if (slice === undefined || !slice.overviewOpen) {
+      return;
+    }
+    setSlice(set, get, id, { overviewOpen: false });
   },
 
   stepLayer: (direction, sessionId) => {
@@ -1266,11 +1370,36 @@ export const useReviewStore = create<ReviewState>((set, get) => ({
     if (slice === undefined) {
       return;
     }
-    const next = stepLayerId(sliceLayers(slice), slice.activeLayerId, direction);
+    const layers = sliceLayers(slice);
+    if (slice.overviewOpen) {
+      // From stop zero, forward enters the first chapter; back is the start of the
+      // walkthrough, so it stays put rather than wrapping to the end.
+      const first = direction === 1 ? (layers[0]?.id ?? null) : null;
+      if (first !== null) {
+        setSlice(set, get, id, {
+          activeLayerId: first,
+          overviewOpen: false,
+          lastChapterId: first,
+        });
+      }
+      return;
+    }
+    // Stepping back off the first chapter returns to the doc — the walkthrough's real
+    // first stop — instead of dead-ending where the reader can still go somewhere.
+    if (
+      direction === -1 &&
+      slice.overview !== null &&
+      slice.activeLayerId !== null &&
+      layers[0]?.id === slice.activeLayerId
+    ) {
+      setSlice(set, get, id, { overviewOpen: true, activeLayerId: null });
+      return;
+    }
+    const next = stepLayerId(layers, slice.activeLayerId, direction);
     if (next === null || next === slice.activeLayerId) {
       return;
     }
-    setSlice(set, get, id, { activeLayerId: next });
+    setSlice(set, get, id, { activeLayerId: next, lastChapterId: next });
   },
 
   focusComment: (commentId, sessionId) => {
@@ -1302,6 +1431,9 @@ export const useReviewStore = create<ReviewState>((set, get) => ({
     setSlice(set, get, id, {
       activeCommentId: commentId,
       selectedFilePath: comment.file,
+      // Stepping to a comment is diff navigation, so it leaves the doc — the card is
+      // about to be scrolled to, and it lives on the diff surface.
+      overviewOpen: false,
       ...(clearsSolo ? { activeLayerId: null } : {}),
     });
     scheduleSessionWriteBack(get, id);
@@ -1387,6 +1519,7 @@ export const useReviewStore = create<ReviewState>((set, get) => ({
     const artifact = serializeReview({
       source: origin.source,
       patch: origin.patch,
+      overview: slice.overview,
       comments: slice.comments,
       layers: slice.layers,
     });
@@ -1430,6 +1563,7 @@ export const useReviewStore = create<ReviewState>((set, get) => ({
     const response = await bridge.saveReviewMarkdown({
       content: reviewToMarkdown({
         source: origin.source,
+        overview: slice.overview,
         layers: slice.layers,
         comments,
       }),

@@ -2,6 +2,7 @@ import type { ReactElement } from "react";
 import { XIcon } from "lucide-react";
 import { GitFailureText } from "@/components/GitFailureText";
 import { Button } from "@/components/ui/button";
+import { TooltipHint } from "@/components/ui/tooltip";
 import { gitFailureMessage } from "@/lib/git-failure-message";
 import { useReviewStore } from "@/stores/review";
 
@@ -23,9 +24,11 @@ export function OpenFailureBanner(): ReactElement | null {
       className="flex shrink-0 items-center gap-3 border-b border-border bg-sidebar py-1.5 pr-3 pl-4"
     >
       {/* A clipped message needs an affordance. */}
-      <p className="min-w-0 truncate text-sm" title={gitFailureMessage(failure)}>
-        <GitFailureText failure={failure} />
-      </p>
+      <TooltipHint content={gitFailureMessage(failure)} whenTruncated side="bottom" align="start">
+        <p className="min-w-0 truncate text-sm">
+          <GitFailureText failure={failure} />
+        </p>
+      </TooltipHint>
       <Button
         variant="ghost"
         size="icon-sm"

@@ -38,10 +38,11 @@ type EmitFlags = {
   readonly json?: boolean;
 };
 
-/** The two keys of an authored draft. Both stay `unknown` — untrusted hand-authored content
- * the single `emitReviewArtifact` authority schema-checks (parse-don't-trust); a shape check
- * here would be a drifting duplicate of `ReviewArtifact`. */
-type EmitDraft = { comments?: unknown; layers?: unknown };
+/** The keys of an authored draft: the required `comments`/`layers` and the optional
+ * `overview` tour doc. All stay `unknown` — untrusted hand-authored content the single
+ * `emitReviewArtifact` authority schema-checks (parse-don't-trust); a shape check here
+ * would be a drifting duplicate of `ReviewArtifact`. */
+type EmitDraft = { comments?: unknown; layers?: unknown; overview?: unknown };
 
 export const emitCommand = buildCommand<EmitFlags, [], LocalContext>({
   docs: {
@@ -138,7 +139,7 @@ export const emitCommand = buildCommand<EmitFlags, [], LocalContext>({
       this.process.exitCode = EXIT_CANNOT_RUN;
       return;
     }
-    const { comments, layers } = json as EmitDraft;
+    const { comments, layers, overview } = json as EmitDraft;
 
     // `capture.repoPath` is the canonical work-tree toplevel, so `source.repo.path` is the same
     // absolute root whatever dir `--repo` named, and `name` is its basename (matches RepoInfo).
@@ -149,6 +150,7 @@ export const emitCommand = buildCommand<EmitFlags, [], LocalContext>({
       patch: capture.patch,
       comments,
       layers,
+      overview,
     });
 
     if (!result.ok) {

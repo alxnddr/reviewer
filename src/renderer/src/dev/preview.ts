@@ -1,8 +1,9 @@
 import type { BranchList, LogEntry } from "../../../shared/git";
-import type { Comment, ReviewLayer } from "../../../shared/review";
+import type { Comment, ReviewLayer, ReviewOverview } from "../../../shared/review";
 import {
   buildHugeAdditionPatch,
   buildManyFilesPatch,
+  buildPathsPatch,
   MULTI_STATUS_PATCH,
 } from "../lib/diff/fixtures";
 import { parsePatch } from "../lib/diff/patch";
@@ -85,6 +86,92 @@ function fixtureComments(): Comment[] {
   ];
 }
 
+/** The paths a review-sized comment load spreads over: deep and shallow, two files
+ * sharing a name, one long enough that its directory has to give way in the rail. */
+const MANY_COMMENT_PATHS = [
+  "src/renderer/src/components/CommentsPanel.tsx",
+  "src/renderer/src/components/CommentThread.tsx",
+  "src/renderer/src/lib/diff/comment-navigation.ts",
+  "src/shared/review.ts",
+  "README.md",
+];
+
+/** A review's worth of comments over `MANY_COMMENT_PATHS`: several per file, bodies
+ * from a few words to a full paragraph, inline `code` runs, two anchors that drifted
+ * off the diff (outdated) and two on a file the diff never carried (stranded). What
+ * the sidebar list has to stay scannable under. */
+function manyFixtureComments(): Comment[] {
+  const bodies: [file: string, startLine: number, endLine: number, body: string][] = [
+    [
+      "src/renderer/src/components/CommentsPanel.tsx",
+      4,
+      9,
+      "`bodyPreview` folds every run of whitespace, so a body that opens with a fenced block loses the fence and reads as prose. Worth keeping the first line only.",
+    ],
+    ["src/renderer/src/components/CommentsPanel.tsx", 14, 14, "Name this."],
+    [
+      "src/renderer/src/components/CommentsPanel.tsx",
+      22,
+      26,
+      "The grouping walks the ordered list twice — once here and once in `orderedComments`. One pass would do.",
+    ],
+    [
+      "src/renderer/src/components/CommentsPanel.tsx",
+      900,
+      902,
+      "This anchor drifted off the diff — it should pin to the file header.",
+    ],
+    [
+      "src/renderer/src/components/CommentThread.tsx",
+      7,
+      7,
+      "Why does the card own its own focus ring instead of taking the shell's?",
+    ],
+    [
+      "src/renderer/src/components/CommentThread.tsx",
+      31,
+      35,
+      "Discarding mid-edit drops the draft with no confirmation. The editor is the one place in the app where a click can destroy typed text.",
+    ],
+    [
+      "src/renderer/src/lib/diff/comment-navigation.ts",
+      12,
+      18,
+      "`orderedComments` re-resolves every anchor on each call and the panel calls it per render — memoised at the call site today, which is the wrong place for it to be true.",
+    ],
+    ["src/renderer/src/lib/diff/comment-navigation.ts", 44, 44, "Stable sort assumed here."],
+    [
+      "src/renderer/src/lib/diff/comment-navigation.ts",
+      777,
+      780,
+      "Left over from the pre-frozen-review placement rule.",
+    ],
+    [
+      "src/shared/review.ts",
+      3,
+      6,
+      "The schema says `body` is a human sentence but nothing enforces a length — an agent emitting a whole essay here renders a card taller than the diff it annotates.",
+    ],
+    ["src/shared/review.ts", 20, 22, "`side` should default to `additions`."],
+    ["README.md", 2, 2, "Say what `rvw open` does before the install instructions."],
+    [
+      "src/main/review/save.ts",
+      40,
+      44,
+      "The write-back debounce outlives the session it belongs to.",
+    ],
+    ["src/main/review/save.ts", 61, 61, "Swallowed error."],
+  ];
+  return bodies.map(([file, startLine, endLine, body], index) => ({
+    file,
+    side: "additions",
+    startLine,
+    endLine,
+    body,
+    id: `c0000000-0000-4000-8000-${String(index + 100).padStart(12, "0")}`,
+  }));
+}
+
 /** Ordered layers over MULTI_STATUS_PATCH: authored reading order, an overlapping
  * file (greet.ts appears in two layers), and a last layer whose range references a
  * file the diff no longer carries — the outdated fail-soft state. */
@@ -103,9 +190,19 @@ function fixtureLayers(): ReviewLayer[] {
       ],
     },
     {
+      id: "layer-housekeeping",
+      label: "Housekeeping",
+      summary: "The bookkeeping around the new entry point",
+      description:
+        "Three small slices that share nothing but their smallness: a copy pass, a rename, and a deletion. They are grouped so the reading order can put them together and move on — read the group if you want the whole sweep, or a section if you own that file.",
+      kind: "chore",
+      ranges: [],
+    },
+    {
       id: "layer-notes",
       label: "Refresh the notes",
       summary: "Capitalise and extend the list",
+      parent: "layer-housekeeping",
       description:
         "Small copy pass over [notes.txt](notes.txt): the second item is capitalised and a new trailing entry is appended. No code path depends on this file — it is reading material only.",
       kind: "docs",
@@ -115,6 +212,7 @@ function fixtureLayers(): ReviewLayer[] {
       id: "layer-rename",
       label: "Reword the greeting",
       summary: "hello → hi (greet.ts, shared with the API layer)",
+      parent: "layer-housekeeping",
       kind: "refactor",
       ranges: [{ file: "greet.ts", side: "additions", startLine: 2, endLine: 2 }],
     },
@@ -122,6 +220,7 @@ function fixtureLayers(): ReviewLayer[] {
       id: "layer-cleanup",
       label: "Delete dead file",
       summary: "Remove doomed.txt",
+      parent: "layer-housekeeping",
       kind: "chore",
       ranges: [{ file: "doomed.txt", side: "deletions", startLine: 1, endLine: 2 }],
     },
@@ -135,6 +234,24 @@ function fixtureLayers(): ReviewLayer[] {
       ranges: [{ file: "config/legacy.ts", side: "additions", startLine: 10, endLine: 12 }],
     },
   ];
+}
+
+/** The tour doc over the same fixture: a title, prose that exercises the whole grammar —
+ * both reference forms (a resolving `[label](path)` link and an inline `code` span that
+ * names a file), emphasis, a heading, a list, a quote, and a fence — and nothing about
+ * the layers: the doc's layer sections are derived from them. */
+function fixtureOverview(): ReviewOverview {
+  return {
+    title: "Add a shout() greeting and refresh the notes",
+    body: [
+      "The greeting API grows a second entry point. `greet.ts` keeps its existing `greet()` and gains `shout()` on top of it, so both share **one formatting path** instead of drifting apart as callers pick sides.",
+      "Everything else in the range is bookkeeping: [notes.txt](notes.txt) gets a copy pass, `added.txt` lands as the smoke test for the new entry point, and a dead file goes away. Read the greeting layer first — the rest only makes sense once the shape of the API is in your head.",
+      "## Reading order",
+      "- `greet.ts` first — the API is the argument of the change\n- [notes.txt](notes.txt) after, *only* if you own the docs\n- the deletion last; it explains itself",
+      "> The fixture prose deliberately walks every block the grammar renders, so the doc is its own preview.",
+      "```ts\nexport function shout(name: string): string {\n  return `${greet(name).toUpperCase()}!`;\n}\n```",
+    ].join("\n\n"),
+  };
 }
 
 /** A derived sibling slice for the tab-strip states; id must be a unique uuid. */
@@ -159,6 +276,9 @@ function siblingSlice(ordinal: number, name: string): SessionSlice {
     reviewDiff: null,
     reviewSubrange: null,
     reviewOrigin: null,
+    overview: null,
+    overviewOpen: false,
+    lastChapterId: null,
     activeLayerId: null,
     activeCommentId: null,
     needsDerive: true,
@@ -204,6 +324,9 @@ function seedSession(overrides: Partial<SessionSlice>): void {
     reviewDiff: null,
     reviewSubrange: null,
     reviewOrigin: null,
+    overview: null,
+    overviewOpen: false,
+    lastChapterId: null,
     activeLayerId: null,
     activeCommentId: null,
     needsDerive: false,
@@ -307,6 +430,18 @@ export function applyPreviewState(): void {
       });
       break;
     }
+    case "comments-many": {
+      // A review-sized comment load: what the sidebar list is really sized for.
+      const files = parsePatch(buildPathsPatch(MANY_COMMENT_PATHS, 40), "preview:comments-many");
+      const comments = manyFixtureComments();
+      seedSession({
+        diff: { phase: "loaded", loadId: 1, files },
+        selectedFilePath: files[0]?.path ?? null,
+        comments,
+        activeCommentId: comments[6]?.id ?? null,
+      });
+      break;
+    }
     case "layers": {
       const files = parsePatch(MULTI_STATUS_PATCH, "preview:layers");
       seedSession({
@@ -314,6 +449,96 @@ export function applyPreviewState(): void {
         selectedFilePath: files[0]?.path ?? null,
         comments: fixtureComments(),
         layers: fixtureLayers(),
+      });
+      break;
+    }
+    case "overview": {
+      // Where a review with a tour doc opens: the doc on the content surface, the rail's
+      // Overview row selected beside it.
+      const files = parsePatch(MULTI_STATUS_PATCH, "preview:overview");
+      seedSession({
+        diff: { phase: "loaded", loadId: 1, files },
+        selectedFilePath: files[0]?.path ?? null,
+        comments: fixtureComments(),
+        layers: fixtureLayers(),
+        overview: fixtureOverview(),
+        overviewOpen: true,
+        lastChapterId: null,
+      });
+      break;
+    }
+    case "overview-wide": {
+      // A doc whose layers span more files than a section lists, plus a rollup with its
+      // sections under it: the file lists collapse, and the nesting is named in words
+      // rather than indented, so every section keeps the same reading width.
+      const files = parsePatch(buildManyFilesPatch(14, 4), "preview:overview-wide");
+      const range = (index: number) =>
+        ({
+          file: `src/file-${String(index).padStart(2, "0")}.ts`,
+          side: "additions",
+          startLine: 1,
+          endLine: 4,
+        }) as const;
+      seedSession({
+        diff: { phase: "loaded", loadId: 1, files },
+        selectedFilePath: files[0]?.path ?? null,
+        layers: [
+          {
+            id: "wide",
+            label: "Generated surface",
+            summary: "Every module gains a constant table",
+            description: "The bulk of the change.",
+            kind: "refactor",
+            ranges: Array.from({ length: 9 }, (_, index) => range(index)),
+          },
+          {
+            id: "rollup",
+            label: "Follow-on wiring",
+            summary: "Everything that had to move once the tables existed",
+            description:
+              "The generated surface is inert until something reads it. This group is that something: the callers first, then the tests that pin them.",
+            kind: "feature",
+            ranges: [],
+          },
+          {
+            id: "rollup-a",
+            label: "Callers",
+            summary: "Point the callers at the table",
+            description: "Two call sites, one direct and one behind a re-export.",
+            kind: "feature",
+            parent: "rollup",
+            ranges: [],
+          },
+          {
+            id: "rollup-a1",
+            label: "The direct call",
+            summary: "The module that reads the table itself",
+            kind: "feature",
+            parent: "rollup-a",
+            ranges: [range(9)],
+          },
+          {
+            id: "rollup-a2",
+            label: "The re-export",
+            summary: "The barrel that forwards it",
+            kind: "feature",
+            parent: "rollup-a",
+            ranges: [range(10)],
+          },
+          {
+            id: "rollup-b",
+            label: "Tests",
+            summary: "Cover the new table",
+            kind: "validation",
+            parent: "rollup",
+            ranges: [range(11)],
+          },
+        ],
+        overview: {
+          title: "Generate the constant tables",
+          body: "A wide, mechanical change: every module under `src/` gains a generated constant table, then two follow-on slices wire the callers and the tests.\n\nRead the generated surface once, then skim — the interesting review is in the follow-on layers.",
+        },
+        overviewOpen: true,
       });
       break;
     }

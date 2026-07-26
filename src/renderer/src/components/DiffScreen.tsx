@@ -9,8 +9,8 @@ import {
 import { assertNever } from "../../../shared/assert";
 import type { DiffSelection } from "../../../shared/git";
 import type { Comment, ReviewAnchor, ReviewLayer } from "../../../shared/review";
-import { emptySoloReason, findLayer, soloFiles } from "@/lib/layers";
-import { effectiveLayers, UNCOVERED_LAYER_ID } from "@/lib/coverage";
+import { emptySoloReason, findLayer, layerOutline, soloFiles } from "@/lib/layers";
+import { effectiveLayers } from "@/lib/coverage";
 import { useFitToContent } from "@/lib/fit-panel";
 import { unplaceableComments } from "@/lib/diff/comment-annotations";
 import { resolveExpandLoader } from "@/lib/diff/expand-context";
@@ -158,6 +158,9 @@ export function DiffScreen(): ReactElement | null {
   const activeCommentId = useReviewStore(
     (state) => selectActiveSlice(state)?.activeCommentId ?? null,
   );
+  // Whether this review carries a tour doc: the chapter band then shows the breadcrumb
+  // back to it, and stepping back off the first chapter lands there.
+  const hasOverview = useReviewStore((state) => selectActiveSlice(state)?.overview != null);
   // A frozen review pins its embedded patch: its anchors place directly, never
   // re-resolved against a re-derived diff.
   const frozen = useReviewStore(
@@ -259,6 +262,9 @@ export function DiffScreen(): ReactElement | null {
     () => findLayer(effLayers, activeLayerId),
     [effLayers, activeLayerId],
   );
+  // What each authored layer is and the number it wears — the same outline the rail and
+  // the doc read, so the band's number and breadcrumb can never disagree with theirs.
+  const outline = useMemo(() => layerOutline(layers), [layers]);
   const visibleFiles = useMemo(
     () => (loadedFiles === null ? null : soloFiles(loadedFiles, activeLayer, effLayers)),
     [loadedFiles, activeLayer, effLayers],
@@ -381,24 +387,24 @@ export function DiffScreen(): ReactElement | null {
         if (activeLayer === null) {
           return null;
         }
-        // The inferred layer is not an authored chapter, so it carries no "Layer N of M"
-        // ordinal; the chevrons still walk it (last in the effective order) so prev
+        // The inferred layer is not an authored step, so it carries no number and hangs
+        // off nothing; the chevrons still walk it (last in the effective order) so prev
         // reaches the real layers and next is a dead end.
-        const isUncovered = activeLayer.id === UNCOVERED_LAYER_ID;
-        const effIndex = effLayers.findIndex((layer) => layer.id === activeLayer.id);
+        const entry = outline.find((candidate) => candidate.layer.id === activeLayer.id) ?? null;
+        const index = effLayers.findIndex((layer) => layer.id === activeLayer.id);
         return (
           <LayerIntro
             layer={activeLayer}
-            ordinal={
-              isUncovered
-                ? null
-                : {
-                    index: layers.findIndex((layer) => layer.id === activeLayer.id),
-                    total: layers.length,
-                  }
-            }
-            hasPrev={effIndex > 0}
-            hasNext={effIndex >= 0 && effIndex < effLayers.length - 1}
+            hasOverview={hasOverview}
+            ordinal={entry?.ordinal ?? null}
+            ancestors={(entry?.ancestors ?? []).map((ancestor) => ({
+              id: ancestor.id,
+              label: ancestor.label,
+            }))}
+            // With a tour doc, "previous" from the first layer is the doc itself — the
+            // review's real first stop — so the chevron only dead-ends without one.
+            hasPrev={index > 0 || (hasOverview && index === 0)}
+            hasNext={index >= 0 && index < effLayers.length - 1}
             filePaths={visibleFilePaths}
             collapsed={layerIntroCollapsed}
             onToggleCollapsed={() => setLayerIntroCollapsed((value) => !value)}
@@ -407,14 +413,13 @@ export function DiffScreen(): ReactElement | null {
           />
         );
       };
-      // A soloed layer resolves to zero visible files in two distinct ways: its
-      // files all drifted out of the diff, or it is a bare parent-rollup node
-      // with no diff of its own — `emptySoloReason` tells them apart so the copy
-      // never reads a legitimate rollup as broken. Either way, name
-      // the state and offer the escape back to the full diff; the layer stays
-      // listed and steppable in the panel, never dropped.
+      // A soloed layer resolves to zero visible files in two distinct ways: its files all
+      // drifted out of the diff, or it names no code at all — `emptySoloReason` tells them
+      // apart so the copy never reads an empty layer as a broken one. Either way, name the
+      // state and offer the escape back to the full diff; the layer stays listed and
+      // steppable in the panel, never dropped.
       if (activeLayer !== null && visibleFiles !== null && visibleFiles.length === 0) {
-        const reason = emptySoloReason(activeLayer, layers);
+        const reason = emptySoloReason(activeLayer, effLayers);
         return (
           <div className="flex h-full flex-col">
             <div className="flex min-h-0 flex-1 flex-col bg-diff-surface">
@@ -423,13 +428,13 @@ export function DiffScreen(): ReactElement | null {
               <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-4">
                 <div className="max-w-96 text-center">
                   <h2 className="text-base">
-                    {reason === "rollup"
+                    {reason === "empty"
                       ? "Nothing to show for this layer"
                       : "Layer not in this diff"}
                   </h2>
                   <p className="mt-1 text-sm text-text-muted">
-                    {reason === "rollup"
-                      ? "This layer has no changes of its own."
+                    {reason === "empty"
+                      ? "This layer points at no code."
                       : "This layer’s files are no longer in the current diff."}
                   </p>
                 </div>

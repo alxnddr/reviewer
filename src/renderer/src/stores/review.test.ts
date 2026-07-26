@@ -11,6 +11,7 @@ import {
   type ImportedReview,
   type ReviewLayer,
   type ReviewOrigin,
+  type ReviewOverview,
   type ReviewStamp,
 } from "../../../shared/review";
 import { buildCommentItems, type CommentSlot } from "../lib/diff/comment-annotations";
@@ -80,6 +81,7 @@ function makeBridge(overrides: Partial<ReviewerBridge>): ReviewerBridge {
         scrollTop: 0,
         comments: [],
         layers: [],
+        overview: null,
         reviewDiff: null,
         reviewSubrange: null,
         reviewOrigin: null,
@@ -88,6 +90,7 @@ function makeBridge(overrides: Partial<ReviewerBridge>): ReviewerBridge {
     updateSession: vi.fn().mockResolvedValue(undefined),
     deleteSession: vi.fn().mockResolvedValue(undefined),
     setActiveSession: vi.fn().mockResolvedValue(undefined),
+    reorderSessions: vi.fn().mockResolvedValue(undefined),
     onOpenRepoCommand: vi.fn().mockReturnValue(() => {}),
     onOpenReviewCommand: vi.fn().mockReturnValue(() => {}),
     onExportReviewJsonCommand: vi.fn().mockReturnValue(() => {}),
@@ -157,6 +160,7 @@ function storedSession(id: string, repoPath: string, overrides: Partial<Session>
     scrollTop: 0,
     comments: [],
     layers: [],
+    overview: null,
     reviewDiff: null,
     reviewSubrange: null,
     reviewOrigin: null,
@@ -656,6 +660,9 @@ describe("useReviewStore.selectAdjacentFile", () => {
       reviewDiff: null,
       reviewSubrange: null,
       reviewOrigin: null,
+      overview: null,
+      overviewOpen: false,
+      lastChapterId: null,
       activeLayerId: null,
       activeCommentId: null,
       needsDerive: false,
@@ -1190,6 +1197,7 @@ describe("debounced write-back", () => {
       scrollTop: 0,
       comments: [],
       layers: [],
+      overview: null,
       reviewDiff: null,
       reviewSubrange: null,
       reviewOrigin: null,
@@ -1521,6 +1529,9 @@ describe("useReviewStore layer navigation", () => {
       reviewDiff: null,
       reviewSubrange: null,
       reviewOrigin: null,
+      overview: null,
+      overviewOpen: false,
+      lastChapterId: null,
       activeLayerId: null,
       activeCommentId: null,
       needsDerive: false,
@@ -1594,6 +1605,179 @@ describe("useReviewStore layer navigation", () => {
   });
 });
 
+describe("useReviewStore tour doc navigation", () => {
+  // The walkthrough with a doc in front of it: the doc is stop zero, then two layers,
+  // then (this diff leaves a gap) the inferred uncovered layer.
+  const OVERVIEW: ReviewOverview = { title: "Add the greeting API", body: "What and why." };
+  const LAYERS: ReviewLayer[] = [
+    {
+      id: "layer-a",
+      label: "Greeting",
+      summary: "New API",
+      kind: "feature",
+      ranges: [{ file: "greet.ts", side: "additions", startLine: 2, endLine: 2 }],
+    },
+    {
+      id: "layer-b",
+      label: "Notes",
+      summary: "Copy pass",
+      kind: "docs",
+      ranges: [{ file: "notes.txt", side: "additions", startLine: 1, endLine: 1 }],
+    },
+  ];
+
+  function seedTour(overrides: Partial<SessionSlice> = {}): void {
+    const files = parsePatch(MULTI_STATUS_PATCH, "test");
+    const seeded: SessionSlice = {
+      id: SESSION_ID,
+      repo: { path: "/repo", name: "repo" },
+      mode: "commits",
+      log: null,
+      branches: null,
+      brush: null,
+      base: null,
+      head: null,
+      selection: null,
+      diff: { phase: "loaded", loadId: 1, files },
+      selectedFilePath: "greet.ts",
+      scrollTop: 0,
+      commitSelection: null,
+      comments: [],
+      layers: LAYERS,
+      reviewDiff: null,
+      reviewSubrange: null,
+      reviewOrigin: null,
+      overview: OVERVIEW,
+      overviewOpen: true,
+      lastChapterId: null,
+      activeLayerId: null,
+      activeCommentId: null,
+      needsDerive: false,
+      requestTicket: 1,
+      ...overrides,
+    };
+    useReviewStore.setState({
+      boot: "ready",
+      sessions: { [SESSION_ID]: seeded },
+      activeSessionId: SESSION_ID,
+    });
+  }
+
+  it("a restored review with a doc opens on it; one without opens on its diff", async () => {
+    const withDoc: Session = {
+      id: SESSION_ID,
+      source: { kind: "local", repo: { path: "/repo", name: "repo" } },
+      mode: "commits",
+      base: null,
+      head: null,
+      commitSelection: null,
+      selectedFilePath: null,
+      scrollTop: 0,
+      comments: [],
+      layers: LAYERS,
+      overview: OVERVIEW,
+      reviewDiff: null,
+      reviewSubrange: null,
+      reviewOrigin: null,
+    };
+    const bridge = makeBridge({
+      listSessions: vi.fn().mockResolvedValue({ sessions: [withDoc], activeSessionId: SESSION_ID }),
+    });
+    vi.stubGlobal("window", { reviewer: bridge });
+    useReviewStore.setState({ boot: "pending" });
+    await useReviewStore.getState().hydrate();
+    expect(active().overviewOpen).toBe(true);
+
+    const withoutDoc: Session = { ...withDoc, overview: null };
+    const plainBridge = makeBridge({
+      listSessions: vi
+        .fn()
+        .mockResolvedValue({ sessions: [withoutDoc], activeSessionId: SESSION_ID }),
+    });
+    vi.stubGlobal("window", { reviewer: plainBridge });
+    useReviewStore.setState({ boot: "pending" });
+    await useReviewStore.getState().hydrate();
+    expect(active().overviewOpen).toBe(false);
+  });
+
+  it("entering a chapter leaves the doc, and the doc clears the solo when re-entered", () => {
+    seedTour();
+    useReviewStore.getState().setActiveLayer("layer-b");
+    expect(active().overviewOpen).toBe(false);
+    expect(active().activeLayerId).toBe("layer-b");
+
+    useReviewStore.getState().openOverview();
+    // Exactly one selected stop: the doc's own invariant.
+    expect(active().overviewOpen).toBe(true);
+    expect(active().activeLayerId).toBeNull();
+  });
+
+  it("steps the doc as stop zero: forward enters chapter one, back off it returns", () => {
+    seedTour();
+    const { stepLayer } = useReviewStore.getState();
+
+    stepLayer(-1);
+    expect(active().overviewOpen).toBe(true); // already at the start
+
+    stepLayer(1);
+    expect(active()).toMatchObject({ overviewOpen: false, activeLayerId: "layer-a" });
+    stepLayer(1);
+    expect(active().activeLayerId).toBe("layer-b");
+    stepLayer(-1);
+    expect(active().activeLayerId).toBe("layer-a");
+    stepLayer(-1);
+    expect(active()).toMatchObject({ overviewOpen: true, activeLayerId: null });
+  });
+
+  it("without a doc, stepping back off the first chapter still clamps", () => {
+    seedTour({ overview: null, overviewOpen: false, activeLayerId: "layer-a" });
+    useReviewStore.getState().stepLayer(-1);
+    expect(active()).toMatchObject({ overviewOpen: false, activeLayerId: "layer-a" });
+  });
+
+  it("remembers the chapter last entered so the doc can return the reader to it", () => {
+    seedTour();
+    useReviewStore.getState().setActiveLayer("layer-b");
+    useReviewStore.getState().openOverview();
+    expect(active().lastChapterId).toBe("layer-b");
+    // Clearing back to the full diff is not a chapter, so it leaves the bookmark alone.
+    useReviewStore.getState().setActiveLayer(null);
+    expect(active().lastChapterId).toBe("layer-b");
+  });
+
+  it("any navigation that targets the diff leaves the doc", () => {
+    seedTour();
+    useReviewStore.getState().selectFile("notes.txt");
+    expect(active().overviewOpen).toBe(false);
+
+    const comment: Comment = {
+      file: "greet.ts",
+      side: "additions",
+      startLine: 2,
+      endLine: 2,
+      body: "why",
+      id: "22222222-2222-4222-8222-222222222222",
+    };
+    seedTour({ comments: [comment] });
+    useReviewStore.getState().focusComment(comment.id);
+    expect(active().overviewOpen).toBe(false);
+  });
+
+  it("is derived view state: neither the doc nor the bookmark reaches the persisted session", () => {
+    seedTour();
+    const bridge = makeBridge({});
+    vi.stubGlobal("window", { reviewer: bridge });
+    useReviewStore.getState().setActiveLayer("layer-a");
+    useReviewStore.getState().setScrollTop(120);
+    useReviewStore.getState().flushWriteBacks();
+    const persisted = vi.mocked(bridge.updateSession).mock.calls[0]?.[0];
+    expect(persisted).not.toHaveProperty("overviewOpen");
+    expect(persisted).not.toHaveProperty("lastChapterId");
+    // The authored doc itself does persist — it is review content, like the layers.
+    expect(persisted?.overview).toEqual(OVERVIEW);
+  });
+});
+
 describe("useReviewStore comment navigation", () => {
   // MULTI_STATUS_PATCH file order: added.txt, doomed.txt, greet.ts, img.png,
   // newname.txt, notes.txt. Three placed comments, one per file, so document order
@@ -1644,6 +1828,9 @@ describe("useReviewStore comment navigation", () => {
       reviewDiff: null,
       reviewSubrange: null,
       reviewOrigin: null,
+      overview: null,
+      overviewOpen: false,
+      lastChapterId: null,
       activeLayerId: null,
       activeCommentId: null,
       needsDerive: false,
@@ -1796,6 +1983,9 @@ describe("review export actions", () => {
       reviewDiff: null,
       reviewSubrange: null,
       reviewOrigin: null,
+      overview: null,
+      overviewOpen: false,
+      lastChapterId: null,
       activeLayerId: null,
       activeCommentId: null,
       needsDerive: false,
@@ -2043,6 +2233,9 @@ describe("exit gate", () => {
       reviewDiff: null,
       reviewSubrange: null,
       reviewOrigin: reviewOriginFor(review),
+      overview: null,
+      overviewOpen: false,
+      lastChapterId: null,
       activeLayerId: null,
       activeCommentId: null,
       needsDerive: false,
@@ -2161,7 +2354,7 @@ describe("exit gate", () => {
     // Both layers fail soft on a step (outdated, no throw) yet neither leaves the
     // walkthrough — stepping still visits the full authored order.
     for (const layer of current.layers) {
-      expect(resolveLayerScroll(layer, files, frozen).kind).toBe("outdated");
+      expect(resolveLayerScroll(layer, current.layers, files, frozen).kind).toBe("outdated");
     }
     expect(stepLayer(current.layers, null, 1)).toBe("l1");
     expect(stepLayer(current.layers, "l1", 1)).toBe("l2");
@@ -2207,7 +2400,7 @@ describe("exit gate", () => {
     // Every layer's first range places too — the layer surface agrees with the
     // comment surface under a frozen patch.
     for (const layer of current.layers) {
-      expect(resolveLayerScroll(layer, files, frozen).kind).toBe("placed");
+      expect(resolveLayerScroll(layer, current.layers, files, frozen).kind).toBe("placed");
     }
   });
 

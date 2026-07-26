@@ -1,6 +1,6 @@
 import * as z from "zod";
 import { BranchName, CommitSelection, RepoInfo } from "./git";
-import { Comment, ReviewDiff, ReviewLayer, ReviewOrigin } from "./review";
+import { Comment, ReviewDiff, ReviewLayer, ReviewOrigin, ReviewOverview } from "./review";
 
 // The Session domain contract: main owns the persisted per-repo review
 // state; the renderer holds a hydrated copy and writes back over IPC. Persisted
@@ -42,6 +42,11 @@ export const Session = z.object({
   // [] for a session with no review yet — modelled empty, never absent.
   comments: z.array(Comment),
   layers: z.array(ReviewLayer),
+  // The authored tour doc the review opens on, carried like comments/layers so a
+  // relaunch reopens on it and a round-trip export re-emits it. Null for a session
+  // whose review has none (and for every plain repo session); `.default(null)` lets a
+  // session written before the field parse strictly rather than fall to salvage.
+  overview: ReviewOverview.nullable().default(null),
   // The review's pinned diff: drives the rendered diff to the one the
   // anchors were authored against, so comments place without a manual re-pick. A
   // review session keeps this pin for its whole life (the selector only narrows
@@ -90,3 +95,10 @@ export type SessionCreateRequest = z.infer<typeof SessionCreateRequest>;
 
 export const SessionIdRequest = z.object({ id: SessionId });
 export type SessionIdRequest = z.infer<typeof SessionIdRequest>;
+
+/** A dragged tab strip's new order, as the full id list. Sending the whole order
+ * rather than a from/to pair keeps main's array a pure function of what the
+ * renderer last showed, so a dropped or reordered-twice message can't leave the
+ * two sides disagreeing about where a tab sits. */
+export const SessionOrderRequest = z.object({ ids: z.array(SessionId) });
+export type SessionOrderRequest = z.infer<typeof SessionOrderRequest>;

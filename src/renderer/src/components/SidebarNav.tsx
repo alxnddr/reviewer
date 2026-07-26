@@ -10,6 +10,7 @@ import { SelectionPanel } from "@/components/SelectionPanel";
 import { commentCountsByFile } from "@/lib/diff/comment-navigation";
 import { Button } from "@/components/ui/button";
 import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from "@/components/ui/resizable";
+import { TooltipHint } from "@/components/ui/tooltip";
 import { emptySoloReason, findLayer, soloFiles } from "@/lib/layers";
 import { effectiveLayers } from "@/lib/coverage";
 import { useFitToContent } from "@/lib/fit-panel";
@@ -152,6 +153,8 @@ export function SidebarNav(): ReactElement {
     (state) => selectActiveSlice(state)?.reviewDiff?.kind === "frozenPatch",
   );
   const activeLayerId = useReviewStore((state) => selectActiveSlice(state)?.activeLayerId ?? null);
+  const hasOverview = useReviewStore((state) => selectActiveSlice(state)?.overview != null);
+  const overviewOpen = useReviewStore((state) => selectActiveSlice(state)?.overviewOpen ?? false);
   const comments = useReviewStore((state) => selectActiveSlice(state)?.comments ?? EMPTY_COMMENTS);
   const activeCommentId = useReviewStore(
     (state) => selectActiveSlice(state)?.activeCommentId ?? null,
@@ -180,8 +183,13 @@ export function SidebarNav(): ReactElement {
   // until the layer set itself changes (a reload can grow or shrink the list) and the
   // fit recomputes. Soloing a layer does not refit — the rows don't move, and a drag
   // the reviewer just made should hold.
-  const layersVisible = showTree && layers.length > 0 && layersExpanded;
+  const layersVisible = showTree && (layers.length > 0 || hasOverview) && layersExpanded;
   const layersFit = useFitToContent({ enabled: layersVisible, refitOn: layers });
+  // The comment overview sizes the same way: opened, it is as tall as its rows need
+  // and no taller — a short review's list left a band of empty rail above the tree —
+  // capped at half the stack it shares with the tree, and draggable from there.
+  const commentsVisible = showTree && comments.length > 0 && commentsExpanded;
+  const commentsFit = useFitToContent({ enabled: commentsVisible, refitOn: comments });
 
   // A review session names its fixed endpoints (with a subrange badge when narrowed),
   // never a repo picker's selection; a repo session describes its live selection.
@@ -199,9 +207,13 @@ export function SidebarNav(): ReactElement {
             className="h-8 w-full justify-start gap-2 px-2 font-normal hover:bg-border/60 dark:hover:bg-border/60"
             onClick={() => setView("selector")}
             aria-label="Change the diff selection"
-            title={label.title}
           >
-            <span className="min-w-0 flex-1 truncate text-left text-sm">{label.node}</span>
+            {/* The hint hangs off the label itself, not the button: the button is a
+                full-width hit target that never clips, so only the label can say
+                whether anything was actually cut off. */}
+            <TooltipHint content={label.title} whenTruncated side="bottom" align="start">
+              <span className="min-w-0 flex-1 truncate text-left text-sm">{label.node}</span>
+            </TooltipHint>
             <ChevronDown aria-hidden="true" className="shrink-0 opacity-60" />
           </Button>
         ) : (
@@ -229,14 +241,14 @@ export function SidebarNav(): ReactElement {
           const effLayers = effectiveLayers(diff.files, layers);
           const activeLayer = findLayer(effLayers, activeLayerId);
           const treeFiles = soloFiles(diff.files, activeLayer, effLayers);
-          // An empty subset means either the layer's files all drifted out or
-          // it is a bare parent-rollup node with no diff of its own;
-          // `emptySoloReason` keeps the hint from reading a legitimate rollup as
-          // broken, mirroring the diff surface's dead-end copy.
+          // An empty subset means either the layer's files all drifted out of the diff or
+          // the layer names none at all; `emptySoloReason` keeps the hint from reading a
+          // layer with nothing of its own as broken, mirroring the diff surface's
+          // dead-end copy.
           const tree =
             activeLayer !== null && treeFiles.length === 0 ? (
               <p className="px-3 py-3 text-xs text-text-muted">
-                {emptySoloReason(activeLayer, layers) === "rollup"
+                {emptySoloReason(activeLayer, effLayers) === "empty"
                   ? "This layer has no changes of its own."
                   : "This layer’s files are no longer in the current diff."}
               </p>
@@ -250,12 +262,15 @@ export function SidebarNav(): ReactElement {
                 commentCounts={commentCounts}
               />
             );
-          // The layers + tree stack the comment overview sits above. Its own inner
-          // resize group is untouched — the comment panel wraps it, it never merges in.
+          // The walkthrough heads the rail: an artifact's layers are the reading order
+          // it was written in, so the list the reader steps sits above the comment
+          // overview and the tree, not under them.
           const layersList = (
             <LayerList
               layers={layers}
               activeLayerId={activeLayerId}
+              hasOverview={hasOverview}
+              overviewOpen={overviewOpen}
               files={diff.files}
               frozen={frozen}
               expanded={layersExpanded}
@@ -263,38 +278,6 @@ export function SidebarNav(): ReactElement {
               fit={layersFit.content}
             />
           );
-          // Open, the list is a resizable panel over the tree, seam and all. Collapsed —
-          // or on a diff with no layers at all — it's the bare bar (or nothing) above a
-          // plain stack, so the resize math is only paid for when the list is on screen.
-          const restStack =
-            layers.length === 0 ? (
-              tree
-            ) : !layersExpanded ? (
-              <div className="flex min-h-0 flex-1 flex-col">
-                {layersList}
-                {tree}
-              </div>
-            ) : (
-              <ResizablePanelGroup
-                orientation="vertical"
-                {...layersFit.group}
-                className="min-h-0 flex-1"
-              >
-                <ResizablePanel
-                  id="layers"
-                  {...layersFit.panel}
-                  defaultSize="50%"
-                  minSize="64px"
-                  groupResizeBehavior="preserve-pixel-size"
-                >
-                  {layersList}
-                </ResizablePanel>
-                <ResizableHandle />
-                <ResizablePanel id="tree" minSize="120px">
-                  <div className="flex h-full min-h-0 flex-col">{tree}</div>
-                </ResizablePanel>
-              </ResizablePanelGroup>
-            );
           // The overview reads the full diff (not the soloed subset) — clicking a
           // soloed-out comment clears the solo in the store.
           const renderComments = (fill: boolean): ReactElement | null => (
@@ -307,17 +290,24 @@ export function SidebarNav(): ReactElement {
               expanded={commentsExpanded}
               onToggleExpanded={() => setCommentsExpanded((value) => !value)}
               fill={fill}
+              {...(fill ? { fit: commentsFit.content } : {})}
             />
           );
-          // Expanded (with comments to show), the overview is its own resizable panel
-          // above the rest, draggable at the seam. Collapsed — or on a diff with no
-          // comments — it's just the shrink-0 count bar over the plain stack, so the
-          // resize math is only paid for when the list is actually open.
-          if (comments.length > 0 && commentsExpanded) {
-            return (
-              <ResizablePanelGroup orientation="vertical" className="min-h-0 flex-1">
+          // What sits under the walkthrough: the comment overview over the tree.
+          // Expanded (with comments to show), the overview is its own resizable panel,
+          // draggable at the seam. Collapsed — or on a diff with no comments — it's
+          // just the shrink-0 count bar over the tree, so the resize math is only paid
+          // for when the list is actually open.
+          const restStack =
+            comments.length > 0 && commentsExpanded ? (
+              <ResizablePanelGroup
+                orientation="vertical"
+                {...commentsFit.group}
+                className="min-h-0 flex-1"
+              >
                 <ResizablePanel
                   id="comments"
+                  {...commentsFit.panel}
                   defaultSize="240px"
                   minSize="72px"
                   groupResizeBehavior="preserve-pixel-size"
@@ -325,17 +315,51 @@ export function SidebarNav(): ReactElement {
                   {renderComments(true)}
                 </ResizablePanel>
                 <ResizableHandle />
-                <ResizablePanel id="rest" minSize="120px">
-                  <div className="flex h-full min-h-0 flex-col">{restStack}</div>
+                <ResizablePanel id="tree" minSize="120px">
+                  <div className="flex h-full min-h-0 flex-col">{tree}</div>
                 </ResizablePanel>
               </ResizablePanelGroup>
+            ) : (
+              <div className="flex min-h-0 flex-1 flex-col">
+                {renderComments(false)}
+                {tree}
+              </div>
+            );
+          // Open, the layer list is a resizable panel over that stack, seam and all.
+          // Collapsed — or on a diff with no layers at all — it's the bare bar (or
+          // nothing) above it, so the resize math is only paid for when the list is on
+          // screen.
+          if (layers.length === 0 && !hasOverview) {
+            return restStack;
+          }
+          if (!layersExpanded) {
+            return (
+              <div className="flex min-h-0 flex-1 flex-col">
+                {layersList}
+                {restStack}
+              </div>
             );
           }
           return (
-            <div className="flex min-h-0 flex-1 flex-col">
-              {renderComments(false)}
-              {restStack}
-            </div>
+            <ResizablePanelGroup
+              orientation="vertical"
+              {...layersFit.group}
+              className="min-h-0 flex-1"
+            >
+              <ResizablePanel
+                id="layers"
+                {...layersFit.panel}
+                defaultSize="50%"
+                minSize="64px"
+                groupResizeBehavior="preserve-pixel-size"
+              >
+                {layersList}
+              </ResizablePanel>
+              <ResizableHandle />
+              <ResizablePanel id="rest" minSize="120px">
+                <div className="flex h-full min-h-0 flex-col">{restStack}</div>
+              </ResizablePanel>
+            </ResizablePanelGroup>
           );
         })()
       ) : (

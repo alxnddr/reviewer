@@ -11,6 +11,7 @@ import {
   ComboboxItem,
   ComboboxList,
 } from "@/components/ui/combobox";
+import { TooltipHint } from "@/components/ui/tooltip";
 import { selectActiveSlice, useReviewStore } from "@/stores/review";
 
 type BranchFieldProps = {
@@ -45,19 +46,19 @@ function BranchField({ label, branches, value, onChange }: BranchFieldProps): Re
         }}
         onInputValueChange={setQuery}
       >
-        <ComboboxInput
-          placeholder="Select branch"
-          title={value ?? undefined}
-          className="h-8 font-mono text-sm"
-        />
+        {/* A long branch name scrolls out of the field, so the full value stays
+            recoverable — but only once it actually does. */}
+        <TooltipHint content={value} whenTruncated side="top" align="start">
+          <ComboboxInput placeholder="Select branch" className="h-8 font-mono text-sm" />
+        </TooltipHint>
         <ComboboxContent>
           <ComboboxEmpty>No branches match.</ComboboxEmpty>
           <ComboboxList>
             {(branch: BranchName): ReactNode => (
               <ComboboxItem key={branch} value={branch} className="font-mono text-sm">
-                <span className="truncate" title={branch}>
-                  {branch}
-                </span>
+                <TooltipHint content={branch} whenTruncated side="right" align="center">
+                  <span className="truncate">{branch}</span>
+                </TooltipHint>
               </ComboboxItem>
             )}
           </ComboboxList>

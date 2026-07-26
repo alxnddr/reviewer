@@ -54,6 +54,7 @@ const bridge: ReviewerBridge = {
   updateSession: (session) => invoke(IpcChannel.sessionsUpdate, session),
   deleteSession: (request) => invoke(IpcChannel.sessionsDelete, request),
   setActiveSession: (request) => invoke(IpcChannel.sessionsSetActive, request),
+  reorderSessions: (request) => invoke(IpcChannel.sessionsReorder, request),
   onOpenRepoCommand: (listener) => subscribeCommand(IpcEvent.menuOpenRepo, listener),
   onOpenReviewCommand: (listener) => subscribeCommand(IpcEvent.menuOpenReview, listener),
   onExportReviewJsonCommand: (listener) =>

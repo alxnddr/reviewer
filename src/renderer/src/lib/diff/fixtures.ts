@@ -101,6 +101,30 @@ export function buildManyFilesPatch(fileCount: number, linesPerFile: number): st
   }).join("");
 }
 
+/** One generated addition per named path. The numbered builder above produces one
+ * flat shape (`src/file-NN.ts`); a preview that has to show how a list narrows real
+ * paths needs names and directories of differing depth, so it names them itself. */
+export function buildPathsPatch(paths: readonly string[], linesPerFile: number): string {
+  return paths
+    .map((path, fileIndex) => {
+      const lines = Array.from(
+        { length: linesPerFile },
+        (_, line) => `+export const v${fileIndex}_${line} = ${line};`,
+      );
+      return [
+        `diff --git a/${path} b/${path}`,
+        "new file mode 100644",
+        "index 0000000..1111111",
+        "--- /dev/null",
+        `+++ b/${path}`,
+        `@@ -0,0 +1,${linesPerFile} @@`,
+        ...lines,
+        "",
+      ].join("\n");
+    })
+    .join("");
+}
+
 /** A single-file addition of `lineCount` generated lines — the huge-file case. */
 export function buildHugeAdditionPatch(lineCount: number): string {
   const lines = Array.from({ length: lineCount }, (_, index) => `+const value${index} = ${index};`);

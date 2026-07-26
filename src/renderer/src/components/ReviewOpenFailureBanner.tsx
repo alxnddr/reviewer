@@ -1,6 +1,7 @@
 import type { ReactElement } from "react";
 import { XIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { TooltipHint } from "@/components/ui/tooltip";
 import { reviewOpenFailureMessage } from "@/lib/review-open-failure-message";
 import { useReviewStore } from "@/stores/review";
 
@@ -23,9 +24,9 @@ export function ReviewOpenFailureBanner(): ReactElement | null {
       className="flex shrink-0 items-center gap-3 border-b border-border bg-sidebar py-1.5 pr-3 pl-4"
     >
       {/* A clipped message needs an affordance. */}
-      <p className="min-w-0 truncate text-sm" title={message}>
-        {message}
-      </p>
+      <TooltipHint content={message} whenTruncated side="bottom" align="start">
+        <p className="min-w-0 truncate text-sm">{message}</p>
+      </TooltipHint>
       <Button
         variant="ghost"
         size="icon-sm"

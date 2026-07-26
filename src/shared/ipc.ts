@@ -12,7 +12,13 @@ import type {
 } from "./git";
 import type { ReviewOpenPathRequest, ReviewOpenResponse } from "./review-open";
 import type { ReviewSaveRequest, ReviewSaveResponse } from "./review-save";
-import type { Session, SessionCreateRequest, SessionIdRequest, SessionSnapshot } from "./session";
+import type {
+  Session,
+  SessionCreateRequest,
+  SessionIdRequest,
+  SessionOrderRequest,
+  SessionSnapshot,
+} from "./session";
 
 // Runtime-light on purpose: the sandboxed preload bundles this module, so it must
 // not pull zod in — schemas live in contracts.ts / git.ts and are imported as types
@@ -41,6 +47,7 @@ export const IpcChannel = {
   sessionsUpdate: "sessions:update",
   sessionsDelete: "sessions:delete",
   sessionsSetActive: "sessions:set-active",
+  sessionsReorder: "sessions:reorder",
 } as const;
 export type IpcChannelName = (typeof IpcChannel)[keyof typeof IpcChannel];
 
@@ -123,6 +130,7 @@ export type IpcContract = {
   "sessions:update": { request: Session; response: void };
   "sessions:delete": { request: SessionIdRequest; response: void };
   "sessions:set-active": { request: SessionIdRequest; response: void };
+  "sessions:reorder": { request: SessionOrderRequest; response: void };
 };
 
 export type IpcRequest<Channel extends IpcChannelName> = IpcContract[Channel]["request"];
@@ -171,6 +179,10 @@ export type ReviewerBridge = {
   setActiveSession: (
     request: IpcRequest<"sessions:set-active">,
   ) => Promise<IpcResponse<"sessions:set-active">>;
+  /** Persists the tab strip's order after a drag, so an arrangement survives restart. */
+  reorderSessions: (
+    request: IpcRequest<"sessions:reorder">,
+  ) => Promise<IpcResponse<"sessions:reorder">>;
   /** Subscribes to the File → Open Repository menu command; returns unsubscribe. */
   onOpenRepoCommand: (listener: () => void) => () => void;
   /** Subscribes to the File → Open Review… menu command; returns unsubscribe. */

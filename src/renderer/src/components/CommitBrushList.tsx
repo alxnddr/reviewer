@@ -8,6 +8,7 @@ import {
 } from "react";
 import { GitBranch } from "lucide-react";
 import type { BranchName, LogEntry } from "../../../shared/git";
+import { TooltipHint } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 import { relativeTime } from "@/lib/relative-time";
 import { useCoarseNow } from "@/lib/use-coarse-now";
@@ -111,9 +112,9 @@ export function BranchHeading({ branch }: { branch: BranchName | null }): ReactE
         {branch === null ? (
           <span className="text-text-muted">Detached HEAD</span>
         ) : (
-          <span className="truncate font-mono text-foreground" title={branch}>
-            {branch}
-          </span>
+          <TooltipHint content={branch} whenTruncated side="bottom" align="start">
+            <span className="truncate font-mono text-foreground">{branch}</span>
+          </TooltipHint>
         )}
       </span>
     </div>

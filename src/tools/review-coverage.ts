@@ -78,7 +78,7 @@ const SIDES: readonly ReviewSide[] = ["deletions", "additions"];
 
 /** The per-side changed-line universe of one file: the set of file line numbers a
  * walkthrough must explain, keyed by side. */
-type ChangedLines = Record<ReviewSide, ReadonlySet<number>>;
+export type ChangedLines = Record<ReviewSide, ReadonlySet<number>>;
 
 /** The layer ranges that land on one file, grouped by side — a parent rollup's empty
  * `ranges` simply add nothing here, so it can never be a failure. */
@@ -233,8 +233,10 @@ function nonCoverableReason(file: PatchFile, changed: ChangedLines): NonCoverabl
  * without emitting; a change block emits `deletions` old-file lines then `additions`
  * new-file lines and advances each cursor by its own count. This is the universe — it
  * must be exact, so it reads the `+`/`-` line coordinates directly rather than
- * subtracting context from the hunk span. */
-function changedLines(file: PatchFile): ChangedLines {
+ * subtracting context from the hunk span. Exported because it *is* the universe
+ * definition: the overview's per-layer `+/−` counts measure against these same sets, so
+ * the doc's numbers and the coverage report can never describe different diffs. */
+export function changedLines(file: PatchFile): ChangedLines {
   const additions = new Set<number>();
   const deletions = new Set<number>();
   for (const hunk of file.fileDiff.hunks) {

@@ -39,6 +39,7 @@ const LAYERS = [
     summary: "child",
     description: "Adds [bar](src/bar.ts).",
     kind: "validation",
+    parent: "rollup",
     ranges: [{ file: "src/bar.ts", side: "additions", startLine: 2, endLine: 2 }],
   },
 ];

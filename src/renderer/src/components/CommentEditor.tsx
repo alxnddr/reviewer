@@ -14,7 +14,14 @@ type CommentEditorProps = {
 /** The add/edit surface, slotted beneath the anchored line. Uncontrolled: the
  * textarea owns its text so keystrokes never re-render the diff item (a body
  * change reaches the store only on Save). Save is the one accented action here
- * (the accent budget); Cancel stays neutral. */
+ * (the accent budget); Cancel stays neutral.
+ *
+ * The composer is the *same card* the finished comment becomes — one surface, one
+ * border, one radius, the same `--comment-surface` fill, inside the same band —
+ * rather than a bare field floating on the code. The textarea gives up its own
+ * chrome to make that true: the card is the input, so the focus ring lands on the
+ * card edge and writing a comment reads as filling in the thing you are about to
+ * leave behind, not as opening a form over the diff. */
 export function CommentEditor({
   initialBody,
   saveLabel,
@@ -43,34 +50,39 @@ export function CommentEditor({
   };
 
   return (
-    <div className="flex flex-col gap-2 font-sans">
-      <Textarea
-        ref={textareaRef}
-        defaultValue={initialBody}
-        onInput={(event) => setEmpty(event.currentTarget.value.trim() === "")}
-        onKeyDown={(event) => {
-          if (event.key === "Escape") {
-            event.preventDefault();
-            onCancel();
-          } else if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
-            event.preventDefault();
-            save();
-          }
-        }}
-        rows={3}
-        placeholder="Leave a comment"
-        aria-label="Comment body"
-        // md:text-base overrides the Textarea composite's md:text-sm control-shrink
-        // so the edit field matches the 14px reading register of the body it edits.
-        className="min-h-16 text-base md:text-base"
-      />
-      <div className="flex justify-end gap-2">
-        <Button variant="ghost" size="sm" onClick={onCancel}>
-          Cancel
-        </Button>
-        <Button size="sm" onClick={save} disabled={empty}>
-          {saveLabel}
-        </Button>
+    <div className="rounded-lg border border-border-strong bg-comment-surface font-sans shadow-surface transition-colors focus-within:border-ring focus-within:ring-3 focus-within:ring-ring/50">
+      <div className="flex flex-col gap-2 px-4 py-3">
+        <Textarea
+          ref={textareaRef}
+          defaultValue={initialBody}
+          onInput={(event) => setEmpty(event.currentTarget.value.trim() === "")}
+          onKeyDown={(event) => {
+            if (event.key === "Escape") {
+              event.preventDefault();
+              onCancel();
+            } else if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
+              event.preventDefault();
+              save();
+            }
+          }}
+          rows={3}
+          placeholder="Leave a comment"
+          aria-label="Comment body"
+          // Stripped to raw text on the card: no border, no fill, no focus ring of its
+          // own — the card carries all three (focus-within, above), so the two surfaces
+          // never draw two nested boxes. md:text-base overrides the Textarea composite's
+          // md:text-sm control-shrink so the field matches the 14px reading register of
+          // the body it edits.
+          className="min-h-16 rounded-none border-0 bg-transparent p-0 text-base shadow-none focus-visible:border-transparent focus-visible:ring-0 md:text-base dark:bg-transparent"
+        />
+        <div className="flex justify-end gap-2">
+          <Button variant="ghost" size="sm" onClick={onCancel}>
+            Cancel
+          </Button>
+          <Button size="sm" onClick={save} disabled={empty}>
+            {saveLabel}
+          </Button>
+        </div>
       </div>
     </div>
   );

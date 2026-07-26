@@ -1,5 +1,5 @@
 import type { ReactElement } from "react";
-import { PaletteIcon } from "lucide-react";
+import { ContrastIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
@@ -31,7 +31,7 @@ export function ThemeMenu(): ReactElement {
           />
         }
       >
-        <PaletteIcon />
+        <ContrastIcon />
       </DropdownMenuTrigger>
       {/* w-auto min-w-40 overrides the menu's default anchor-width sizing (the trigger is a 32px icon
           button, so the names would otherwise wrap) — size to the widest theme label instead. */}

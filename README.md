@@ -3,8 +3,9 @@
 Local-first macOS app for reading agent-authored code reviews.
 
 Point any coding agent at your review rules; it writes a `.reviewer.json`. The `rvw` CLI shapes its
-findings into line-anchored comments and ordered **layers**, and validates every anchor against the
-real diff so a hallucinated line can't reach you. Open it in Reviewer as a guided walkthrough.
+findings into an **overview**, line-anchored comments, and ordered **layers**, and validates every
+anchor against the real diff so a hallucinated line can't reach you. Open it in Reviewer as a
+guided walkthrough.
 
 > **Note:** this project was developed entirely by Claude, no one has ever looked at its code.
 
@@ -17,7 +18,11 @@ real diff so a hallucinated line can't reach you. Open it in Reviewer as a guide
   (`rvw coverage`). A human can drive it too.
 - **Validated, not trusted.** `rvw emit` writes nothing unless every comment and layer range places
   against the diff.
-- **A reading path, not a file list.** Reviews are ordered *layers*, each with a `description`. Read
+- **Starts with a tour, not a file list.** A review opens on its **overview**: what the change
+  does, then the walkthrough — one card per layer, with its files, line counts and a code preview,
+  derived from the artifact so it can't go stale. Click a chapter to read its diff; come back any
+  time.
+- **A reading path.** Reviews are ordered *layers*, each with a `description`. Read
   in sequence or solo one.
 - **Survives drift.** A comment whose code moved is flagged **Outdated**, never shown on the wrong
   line.

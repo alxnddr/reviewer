@@ -96,6 +96,10 @@ function ChangedFileTree({ files, commentCounts }: ChangedFileTreeProps): ReactE
   const countsRef = useRef(commentCounts);
   countsRef.current = commentCounts;
 
+  // What the store already believes, read at callback time — the echo filter below.
+  const selectedRef = useRef(selectedFilePath);
+  selectedRef.current = selectedFilePath;
+
   const { model } = useFileTree({
     paths: files.map((file) => file.path),
     gitStatus: files.map((file) => ({
@@ -107,9 +111,19 @@ function ChangedFileTree({ files, commentCounts }: ChangedFileTreeProps): ReactE
     density: "compact",
     initialExpansion: "open",
     initialSelectedPaths: selectedFilePath === null ? [] : [selectedFilePath],
+    // Pierre reports EVERY selection change, programmatic ones included: the callback
+    // rides a store subscription, not a click handler. So the mirror effect below —
+    // which pushes the store's focused file INTO the tree — comes straight back here,
+    // and routing that echo through `selectFile` would run the full "the reader
+    // clicked a file" policy, which dismisses the comment walk. That is how jumping
+    // to a comment in another file used to kill its own focus one tick later: the
+    // floating stepper never appeared, or vanished on the first step that crossed a
+    // file. An echo is exactly a report that already matches the store, so dropping
+    // it costs no real gesture — clicking the row that is already selected is a
+    // no-op by definition.
     onSelectionChange: (selected) => {
       const path = selected[0];
-      if (path !== undefined) {
+      if (path !== undefined && path !== selectedRef.current) {
         selectFile(path);
       }
     },
@@ -133,11 +147,13 @@ function ChangedFileTree({ files, commentCounts }: ChangedFileTreeProps): ReactE
   // StrictMode replay with the same value too) where a fire-once flag would fire on
   // remount.
   const lastScrolledPath = useRef(selectedFilePath);
-  // Keyboard next/prev (j/k) changes the store; mirror it into the tree. item.select()
-  // ADDS to the tree's selection, so stale rows must be deselected first — otherwise
-  // onSelectionChange reports the old path first and pushes the store back (oscillation).
-  // The store steps through the full diff, so the selected path may be filtered out of
-  // this tree — getItem/scrollToPath treat an unknown path as a no-op.
+  // Anything that moves the focused file without touching the tree — j/k, a comment
+  // jump, a file link in the chapter prose — changes the store; mirror it into the
+  // tree. item.select() ADDS to the tree's selection, so stale rows must be deselected
+  // first, or the tree ends up multi-selected. Every write here echoes back through
+  // onSelectionChange; the guard above is what keeps that echo from re-entering the
+  // store. The store steps through the full diff, so the selected path may be filtered
+  // out of this tree — getItem/scrollToPath treat an unknown path as a no-op.
   useEffect(() => {
     if (selectedFilePath === null) {
       return;

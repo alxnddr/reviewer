@@ -3,7 +3,12 @@ import type { ReviewLayer } from "../../../shared/review";
 import {
   capturesScroll,
   emptySoloReason,
+  layerAncestors,
+  layerDocumentOrder,
   layerFilePaths,
+  layerOutline,
+  layerOwning,
+  layerRanges,
   resolveLayerScroll,
   soloFiles,
   stepLayer,
@@ -79,6 +84,18 @@ describe("stepLayer", () => {
     expect(stepLayer([], "a", -1)).toBeNull();
   });
 
+  it("walks the tree in document order — a parent is a stop like any other", () => {
+    // Selecting a parent shows its whole extent, so it is a place to stand, not a label
+    // to skip. Stepping is therefore exactly the authored order.
+    const parent = layer("parent", { ranges: [] });
+    const child = layer("child", { parent: "parent" });
+    const walk = [A, parent, child, C];
+
+    expect(stepLayer(walk, "a", 1)).toBe("parent");
+    expect(stepLayer(walk, "parent", 1)).toBe("child");
+    expect(stepLayer(walk, "child", -1)).toBe("parent");
+  });
+
   it("does not re-sort: authored order drives stepping even when ids are unordered", () => {
     const unordered = [layer("z"), layer("m"), layer("a")];
     expect(stepLayer(unordered, "z", 1)).toBe("m");
@@ -98,34 +115,119 @@ describe("layerFilePaths", () => {
     expect(layerFilePaths(overlapping, [overlapping])).toEqual(["src/bar.ts", "src/foo.ts"]);
   });
 
-  it("rolls a no-ranges parent up to the union of its descendants' files", () => {
-    // `parent` (no ranges) rolls up child-foo + child-bar; grandchild deepens the
-    // chain to prove the rollup is transitive, and the union is in authored order.
-    const parent = layer("parent", { ranges: [] });
-    const childFoo = layer("child-foo", { parent: "parent" });
-    const childBar = layer("child-bar", {
+  it("gives a parent the extent of everything under it, at any depth", () => {
+    // The aggregation rule: a layer covers its own ranges plus its descendants'. That is
+    // what makes a parent a real place to stand — soloing it shows the whole group.
+    const root = layer("root", { ranges: [] });
+    const mid = layer("mid", { parent: "root", ranges: [] });
+    const leaf = layer("leaf", {
+      parent: "mid",
+      ranges: [{ file: "src/bar.ts", side: "additions", startLine: 2, endLine: 3 }],
+    });
+    const all = [root, mid, leaf];
+
+    expect(layerFilePaths(root, all)).toEqual(["src/bar.ts"]);
+    expect(layerFilePaths(mid, all)).toEqual(["src/bar.ts"]);
+    expect(layerRanges(root, all)).toHaveLength(1);
+  });
+
+  it("counts a parent's own ranges as well as its children's", () => {
+    const parent = layer("parent");
+    const child = layer("child", {
       parent: "parent",
       ranges: [{ file: "src/bar.ts", side: "additions", startLine: 2, endLine: 3 }],
     });
-    const grandchild = layer("grandchild", {
-      parent: "child-bar",
-      ranges: [{ file: "src/baz.ts", side: "additions", startLine: 1, endLine: 1 }],
-    });
-    const all = [parent, childFoo, childBar, grandchild];
-    expect(layerFilePaths(parent, all)).toEqual(["src/foo.ts", "src/bar.ts", "src/baz.ts"]);
+    expect(layerFilePaths(parent, [parent, child])).toEqual(["src/foo.ts", "src/bar.ts"]);
+  });
+});
+
+describe("layerOutline", () => {
+  it("numbers the tree by section: 1, 2, 2.1, 2.1.1, 3", () => {
+    const first = layer("first");
+    const parent = layer("parent", { ranges: [] });
+    const childOne = layer("child-1", { parent: "parent", ranges: [] });
+    const grandchild = layer("grandchild", { parent: "child-1" });
+    const childTwo = layer("child-2", { parent: "parent" });
+    const last = layer("last");
+    const all = [first, parent, childOne, grandchild, childTwo, last];
+    const outline = layerOutline(all);
+
+    expect(outline.map((entry) => entry.ordinal)).toEqual(["1", "2", "2.1", "2.1.1", "2.2", "3"]);
+    expect(outline.map((entry) => entry.depth)).toEqual([0, 0, 1, 2, 1, 0]);
+    // The trail up, outermost first — what the band's breadcrumb walks.
+    expect(layerAncestors(grandchild, all).map((l) => l.id)).toEqual(["parent", "child-1"]);
+    // …and the extent down, in document order.
+    expect(outline[1]?.subtree.map((l) => l.id)).toEqual([
+      "parent",
+      "child-1",
+      "grandchild",
+      "child-2",
+    ]);
+    expect(outline[1]?.children.map((l) => l.id)).toEqual(["child-1", "child-2"]);
   });
 
-  it("is empty for a bare no-ranges layer with no descendants", () => {
-    const bare = layer("p", { ranges: [] });
-    expect(layerFilePaths(bare, [bare])).toEqual([]);
+  it("reads an illegal link as no link, so a hand-edited artifact still opens flat", () => {
+    // Each breaks a rule the CLI gate refuses at emit time. The app must still render the
+    // review — it just reads the layer as top-level rather than inventing a hierarchy.
+    const orphan = layer("orphan", { parent: "nobody" });
+    const selfParent = layer("self", { parent: "self" });
+    const outline = layerOutline([orphan, selfParent]);
+
+    expect(outline.map((entry) => entry.ordinal)).toEqual(["1", "2"]);
+    expect(outline.every((entry) => entry.depth === 0)).toBe(true);
   });
 
   it("terminates on a parent cycle rather than looping", () => {
-    // A tampered artifact can point two no-ranges layers at each other; the union
-    // must still resolve (to empty — neither carries ranges) instead of hanging.
-    const one = layer("one", { ranges: [], parent: "two" });
-    const two = layer("two", { ranges: [], parent: "one" });
-    expect(layerFilePaths(one, [one, two])).toEqual([]);
+    const one = layer("one", { parent: "two" });
+    const two = layer("two", { parent: "one" });
+    expect(layerOutline([one, two]).map((entry) => entry.ordinal)).toEqual(["1", "2"]);
+  });
+
+  it("stops honouring `parent` past the depth cap", () => {
+    // Five levels is the cap, so a sixth reads as top-level rather than indenting further.
+    const chain = [
+      layer("l1", { ranges: [] }),
+      layer("l2", { parent: "l1", ranges: [] }),
+      layer("l3", { parent: "l2", ranges: [] }),
+      layer("l4", { parent: "l3", ranges: [] }),
+      layer("l5", { parent: "l4", ranges: [] }),
+      layer("l6", { parent: "l5" }),
+    ];
+    const outline = layerOutline(chain);
+    expect(outline.map((entry) => entry.depth)).toEqual([0, 1, 2, 3, 4, 0]);
+  });
+});
+
+describe("layerDocumentOrder", () => {
+  it("puts each subtree straight after its parent — the order the artifact must be in", () => {
+    const parent = layer("parent", { ranges: [] });
+    const child = layer("child", { parent: "parent" });
+    const other = layer("other");
+    // Authored out of order: the child trails a later top-level layer.
+    expect(layerDocumentOrder([parent, other, child]).map((l) => l.id)).toEqual([
+      "parent",
+      "child",
+      "other",
+    ]);
+  });
+});
+
+describe("layerOwning", () => {
+  it("gives a comment to the deepest layer whose own ranges cover it", () => {
+    // The parent's extent covers the anchor too — by aggregation — but ownership belongs
+    // to the most specific claim, so the section that explains those lines keeps it.
+    const parent = layer("parent", {
+      ranges: [{ file: "src/foo.ts", side: "additions", startLine: 11, endLine: 13 }],
+    });
+    const child = layer("child", {
+      parent: "parent",
+      ranges: [{ file: "src/foo.ts", side: "additions", startLine: 12, endLine: 12 }],
+    });
+    const anchor = { file: "src/foo.ts", side: "additions" as const, startLine: 12, endLine: 12 };
+
+    expect(layerOwning([parent, child], anchor)?.id).toBe("child");
+    expect(layerOwning([parent], anchor)?.id).toBe("parent");
+    expect(layerOwning([parent, child], { ...anchor, file: "src/elsewhere.ts" })).toBeNull();
   });
 });
 
@@ -142,33 +244,20 @@ describe("soloFiles", () => {
     ]);
   });
 
-  it("keeps a file shared across layers visible under whichever layer solos it", () => {
-    const shared = layer("shared", {
-      ranges: [
-        { file: "src/foo.ts", side: "additions", startLine: 11, endLine: 11 },
-        { file: "src/bar.ts", side: "additions", startLine: 2, endLine: 2 },
-      ],
-    });
-    expect(soloFiles(FILES, shared, [shared]).map((file) => file.path)).toEqual([
-      "src/foo.ts",
-      "src/bar.ts",
-    ]);
-  });
-
-  it("solos a no-ranges parent to its descendants' files, not the drifted dead-end", () => {
-    // A parent rollup resolves to the files its descendants touch, not an empty
-    // subset, so soloing it is not a dead-end.
+  it("solos a parent to its whole group, and a child to its own section", () => {
     const parent = layer("parent", { ranges: [] });
-    const childFoo = layer("child-foo", { parent: "parent" });
-    const childBar = layer("child-bar", {
+    const child = layer("child", {
       parent: "parent",
       ranges: [{ file: "src/bar.ts", side: "additions", startLine: 2, endLine: 3 }],
     });
-    const all = [parent, childFoo, childBar];
+    const sibling = layer("sibling", { parent: "parent" });
+    const all = [parent, child, sibling];
+
     expect(soloFiles(FILES, parent, all).map((file) => file.path)).toEqual([
       "src/foo.ts",
       "src/bar.ts",
     ]);
+    expect(soloFiles(FILES, child, all).map((file) => file.path)).toEqual(["src/bar.ts"]);
   });
 });
 
@@ -180,22 +269,15 @@ describe("emptySoloReason", () => {
     expect(emptySoloReason(gone, [gone])).toBe("drifted");
   });
 
-  it("reports 'rollup' for a bare parent with no diff of its own — not a drift", () => {
-    // An empty-ranges layer with nothing under it to union never had files to
-    // drift, so it reads as a rollup, not the outdated case.
+  it("reports 'empty' only when the whole extent names no code — not a drift", () => {
     const bare = layer("bare", { ranges: [] });
-    expect(emptySoloReason(bare, [bare])).toBe("rollup");
-  });
-
-  it("reports 'drifted' when a parent's rolled-up descendant files all drifted out", () => {
-    // The rollup resolves to real file paths, but none survive in the diff — that
-    // is a genuine drift of the whole subtree, not a bare-parent empty state.
-    const parent = layer("parent", { ranges: [] });
+    expect(emptySoloReason(bare, [bare])).toBe("empty");
+    // With a child that names a (drifted) file, the extent is no longer empty.
     const child = layer("child", {
-      parent: "parent",
+      parent: "bare",
       ranges: [{ file: "src/gone.ts", side: "additions", startLine: 1, endLine: 1 }],
     });
-    expect(emptySoloReason(parent, [parent, child])).toBe("drifted");
+    expect(emptySoloReason(bare, [bare, child])).toBe("drifted");
   });
 });
 
@@ -208,7 +290,7 @@ describe("capturesScroll", () => {
 
 describe("resolveLayerScroll", () => {
   it("targets the first range when it resolves against the loaded diff", () => {
-    expect(resolveLayerScroll(A, FILES, false)).toEqual({
+    expect(resolveLayerScroll(A, LAYERS, FILES, false)).toEqual({
       kind: "placed",
       fileId: "src/foo.ts",
       range: { start: 11, end: 13, side: "additions" },
@@ -219,14 +301,14 @@ describe("resolveLayerScroll", () => {
     const gone = layer("gone", {
       ranges: [{ file: "src/gone.ts", side: "additions", startLine: 1, endLine: 1 }],
     });
-    expect(resolveLayerScroll(gone, FILES, false)).toEqual({ kind: "outdated" });
+    expect(resolveLayerScroll(gone, [gone], FILES, false)).toEqual({ kind: "outdated" });
   });
 
   it("flags outdated without throwing when no hunk covers the first range", () => {
     const drifted = layer("drifted", {
       ranges: [{ file: "src/foo.ts", side: "additions", startLine: 500, endLine: 500 }],
     });
-    expect(resolveLayerScroll(drifted, FILES, false)).toEqual({ kind: "outdated" });
+    expect(resolveLayerScroll(drifted, [drifted], FILES, false)).toEqual({ kind: "outdated" });
   });
 
   it("places an off-hunk range against a frozen patch, never outdated", () => {
@@ -236,7 +318,7 @@ describe("resolveLayerScroll", () => {
     const drifted = layer("drifted", {
       ranges: [{ file: "src/foo.ts", side: "additions", startLine: 500, endLine: 502 }],
     });
-    expect(resolveLayerScroll(drifted, FILES, true)).toEqual({
+    expect(resolveLayerScroll(drifted, [drifted], FILES, true)).toEqual({
       kind: "placed",
       fileId: "src/foo.ts",
       range: { start: 500, end: 502, side: "additions" },
@@ -250,15 +332,18 @@ describe("resolveLayerScroll", () => {
     const gone = layer("gone", {
       ranges: [{ file: "src/gone.ts", side: "additions", startLine: 1, endLine: 1 }],
     });
-    expect(resolveLayerScroll(gone, FILES, true)).toEqual({ kind: "outdated" });
+    expect(resolveLayerScroll(gone, [gone], FILES, true)).toEqual({ kind: "outdated" });
   });
 
-  it("reports none for a layer with no ranges, frozen or not", () => {
-    expect(resolveLayerScroll(layer("empty", { ranges: [] }), FILES, false)).toEqual({
-      kind: "none",
-    });
-    expect(resolveLayerScroll(layer("empty", { ranges: [] }), FILES, true)).toEqual({
-      kind: "none",
+  it("reports none only when the whole extent carries no range", () => {
+    const bare = layer("empty", { ranges: [] });
+    expect(resolveLayerScroll(bare, [bare], FILES, false)).toEqual({ kind: "none" });
+    // A parent resolves through its extent, so a group whose sections place is placed.
+    const child = layer("child", { parent: "empty" });
+    expect(resolveLayerScroll(bare, [bare, child], FILES, false)).toEqual({
+      kind: "placed",
+      fileId: "src/foo.ts",
+      range: { start: 11, end: 13, side: "additions" },
     });
   });
 });

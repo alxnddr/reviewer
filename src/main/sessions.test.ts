@@ -47,6 +47,7 @@ function persistedSession(overrides: Partial<Session> = {}): Session {
     scrollTop: 0,
     comments: [],
     layers: [],
+    overview: null,
     reviewDiff: null,
     reviewSubrange: null,
     reviewOrigin: null,
@@ -93,6 +94,7 @@ describe("createSessionStore", () => {
         head: "a".repeat(40),
       },
       patch: null,
+      overview: null,
       comments: [
         {
           file: "src/a.ts",
@@ -134,6 +136,7 @@ describe("createSessionStore", () => {
         head: "a".repeat(40),
       },
       patch: "diff --git a/src/a.ts b/src/a.ts\n",
+      overview: null,
       comments: [],
       layers: [],
     };
@@ -286,6 +289,7 @@ describe("createSessionStore", () => {
       mode: "commits",
       comments: [],
       layers: [],
+      overview: null,
       reviewDiff: null,
       reviewSubrange: null,
       reviewOrigin: null,

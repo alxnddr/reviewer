@@ -19,6 +19,7 @@ function fakeSession(id: string): Session {
     scrollTop: 0,
     comments: [],
     layers: [],
+    overview: null,
     reviewDiff: null,
     reviewSubrange: null,
     reviewOrigin: null,

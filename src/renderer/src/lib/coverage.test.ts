@@ -70,7 +70,7 @@ describe("coverageSummary", () => {
     expect(uncoveredLayer?.ranges).toEqual([
       { file: "src/bar.ts", side: "additions", startLine: 2, endLine: 3 },
     ]);
-    expect(uncoveredLayer?.summary).toBe("1 file that no layer walks.");
+    expect(uncoveredLayer?.summary).toBe("1 file that no layer covers.");
   });
 
   it("omits a partially-walked file from the remainder", () => {
@@ -93,7 +93,7 @@ describe("coverageSummary", () => {
     // No layers at all: every coverable file is a gap, so the remainder is the whole diff.
     expect(summary.linePct).toBe(0);
     expect(summary.uncoveredFiles).toBe(2);
-    expect(summary.uncoveredLayer?.summary).toBe("2 files that no layer walks.");
+    expect(summary.uncoveredLayer?.summary).toBe("2 files that no layer covers.");
     expect(summary.uncoveredLayer?.ranges).toEqual([
       // deletions first, then additions (the report's fixed side order); files in diff order.
       { file: "src/foo.ts", side: "deletions", startLine: 11, endLine: 11 },

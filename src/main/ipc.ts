@@ -5,6 +5,7 @@ import {
   Session,
   SessionCreateRequest,
   SessionIdRequest,
+  SessionOrderRequest,
   SessionSnapshot,
 } from "../shared/session";
 import { registerGitIpcHandlers } from "./git/handlers";
@@ -61,6 +62,14 @@ export function registerIpcHandlers(gitRunner: GitRunner, sessionStore: SessionS
     { request: SessionIdRequest, response: z.void() },
     (request) => {
       sessionStore.setActive(request.id);
+    },
+  );
+
+  registerIpcHandler(
+    IpcChannel.sessionsReorder,
+    { request: SessionOrderRequest, response: z.void() },
+    (request) => {
+      sessionStore.reorder(request.ids);
     },
   );
 }

@@ -8,6 +8,7 @@ import { BranchHeading, CommitBrushList } from "@/components/CommitBrushList";
 import { GitFailureText } from "@/components/GitFailureText";
 import { Skeleton } from "@/components/ui/skeleton";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
+import { TooltipHint } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 import { shortRef } from "@/lib/refs";
 import { brushSummary, reviewSubrangeExtent } from "@/lib/selection";
@@ -119,15 +120,28 @@ function ReviewRangeHeading({ base, head }: { base: ReviewRef; head: ReviewRef }
     <div className="flex flex-col gap-1 px-2 pb-2">
       <span className="text-xs text-text-muted">Reviewing</span>
       <span className="flex items-center gap-1.5 text-sm">
-        <span className="min-w-0 truncate font-mono text-foreground" title={base}>
-          {shortRef(base)}
-        </span>
+        {/* A ref the heading abbreviated (a sha cut to its short form) is worth
+            recovering however wide the rail is; one shown verbatim only needs the
+            hint once it clips. */}
+        <TooltipHint
+          content={base}
+          whenTruncated={shortRef(base) === base}
+          side="bottom"
+          align="start"
+        >
+          <span className="min-w-0 truncate font-mono text-foreground">{shortRef(base)}</span>
+        </TooltipHint>
         <span aria-hidden="true" className="shrink-0 text-text-muted">
           …
         </span>
-        <span className="min-w-0 truncate font-mono text-foreground" title={head}>
-          {shortRef(head)}
-        </span>
+        <TooltipHint
+          content={head}
+          whenTruncated={shortRef(head) === head}
+          side="bottom"
+          align="start"
+        >
+          <span className="min-w-0 truncate font-mono text-foreground">{shortRef(head)}</span>
+        </TooltipHint>
       </span>
     </div>
   );

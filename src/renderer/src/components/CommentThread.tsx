@@ -1,7 +1,8 @@
 import { type ReactElement } from "react";
-import { Pencil, Trash2 } from "lucide-react";
+import { History, Pencil, Trash2 } from "lucide-react";
 import type { Comment } from "../../../shared/review";
 import { Button } from "@/components/ui/button";
+import { TooltipHint } from "@/components/ui/tooltip";
 import { CommentBody } from "@/components/CommentBody";
 import { commentLocation } from "@/lib/comment-body";
 import { cn } from "@/lib/utils";
@@ -19,9 +20,24 @@ type CommentThreadProps = {
 };
 
 /** One curated comment, rendered beneath its anchored line (or the file header
- * when outdated). The body is a human sentence in Geist sans; any inline `code`
- * ref inside it stays mono (per-element type rule). Edit/Discard are neutral —
- * the accent budget is spent only on the editor's Save. */
+ * when outdated).
+ *
+ * **The surface.** `--comment-surface`, which on a light theme is the same paper
+ * white as the code behind it: prose belongs on white, and every grey the kit
+ * offered here (`--card`, `--elevated`, `--popover`) put the body on a wash instead.
+ * What a white card gives up is *noticeability*, so that job moves out to the band
+ * the card sits in — see `CommentAnnotationFrame`. On a dark theme there is nothing
+ * lighter than the diff surface to be paper, so the card rises off the band instead.
+ * Either way the reader gets three distinct tones and a body at full contrast.
+ *
+ * **The actions float above it.** Edit and discard used to sit in the body's row,
+ * so every comment surrendered a strip of measure to two buttons the reader mostly
+ * does not want. They are now a small toolbar on its own popover surface, pinned
+ * over the card's top edge and revealed on hover or keyboard focus. It costs no
+ * layout and covers no comment text; while shown it overlaps the code line above,
+ * which is hover-only, right-aligned (where lines have usually already ended), and
+ * back the moment the pointer leaves. The hover group is the wrapper, not the card,
+ * so reaching up for the toolbar does not dismiss it. */
 export function CommentThread({
   comment,
   outdated,
@@ -32,52 +48,56 @@ export function CommentThread({
   const location = commentLocation(comment);
 
   return (
-    <div
-      className={cn(
-        "flex flex-col gap-1.5 rounded-lg border border-border bg-card px-3 py-2.5 font-sans text-card-foreground",
-        // The jumped-to card: an accent ring lifts it off the surface (offset so
-        // the ring reads as a halo, not a second border hugging the card edge).
-        active && "ring-2 ring-primary ring-offset-2 ring-offset-diff-surface",
-      )}
-    >
-      {outdated && (
-        <div className="flex items-center gap-2 text-xs text-text-muted">
-          <span className="rounded bg-border/60 px-1.5 py-0.5 text-foreground">Outdated</span>
-          <span className="truncate font-mono select-text" title={location}>
-            {location}
-          </span>
-        </div>
-      )}
-      {/* Body leads, actions sit beside it top-aligned: with no timestamp header
-          there is nothing to fill a dedicated top row, so the actions share the
-          body's row instead of stacking an empty band above it. */}
-      <div className="flex items-start gap-2">
-        <div className="min-w-0 flex-1">
-          <CommentBody body={comment.body} />
-        </div>
-        <div className="flex shrink-0 items-center gap-1">
-          {/* The ghost variant's wash is bg-muted, which equals bg-card here and
-              vanishes; wash with border/60 (its dark twin too — the vendored
-              dark:hover:bg-muted/50 is a separate merge group). */}
-          <Button
-            variant="ghost"
-            size="icon-sm"
-            aria-label="Edit comment"
-            className="hover:bg-border/60 dark:hover:bg-border/60"
-            onClick={onEdit}
-          >
-            <Pencil />
-          </Button>
-          <Button
-            variant="ghost"
-            size="icon-sm"
-            aria-label="Discard comment"
-            className="hover:bg-border/60 dark:hover:bg-border/60"
-            onClick={onDiscard}
-          >
-            <Trash2 />
-          </Button>
-        </div>
+    <div className="group/comment relative">
+      <div
+        className={cn(
+          "rounded-lg border border-border-strong bg-comment-surface px-4 py-3 font-sans text-foreground shadow-surface transition-colors",
+          // The jumped-to card wears the kit's own focus shape — a 1px accent edge
+          // inside a soft accent halo, exactly what every control in the system does
+          // on `focus-visible`.
+          active && "border-primary ring-3 ring-primary/25",
+        )}
+      >
+        {outdated && (
+          // Drift is a warning about placement, not a chip: the badge fill used here
+          // before was `--selected`, the app's neutral selection tone, so a drifted
+          // comment read as a *selected* one. The glyph carries the state and the
+          // authored location follows it as quiet mono — the same pairing the sidebar
+          // row uses for the same fact.
+          <div className="mb-1.5 flex min-w-0 items-center gap-1.5 text-xs">
+            <History aria-hidden="true" className="size-3 shrink-0 text-warning" />
+            <span className="shrink-0 text-warning">Outdated</span>
+            <span aria-hidden="true" className="shrink-0 text-text-faint">
+              ·
+            </span>
+            <TooltipHint content={location} whenTruncated side="top" align="start">
+              <span className="truncate font-mono text-text-muted select-text">{location}</span>
+            </TooltipHint>
+          </div>
+        )}
+        <CommentBody body={comment.body} />
+      </div>
+      {/* Its own popover surface, so it reads as hovering above the diff rather than
+          printed on it — the same treatment the stepper and the find bar take. */}
+      <div className="absolute right-2 bottom-full mb-1 flex items-center gap-0.5 rounded-lg bg-popover p-0.5 opacity-0 shadow-md ring-1 ring-foreground/10 transition-opacity duration-(--duration-fast) group-hover/comment:opacity-100 focus-within:opacity-100">
+        <Button
+          variant="ghost"
+          size="icon-xs"
+          aria-label="Edit comment"
+          className="text-text-muted hover:bg-foreground/10 hover:text-foreground dark:hover:bg-foreground/10"
+          onClick={onEdit}
+        >
+          <Pencil />
+        </Button>
+        <Button
+          variant="ghost"
+          size="icon-xs"
+          aria-label="Discard comment"
+          className="text-text-muted hover:bg-destructive/10 hover:text-destructive dark:hover:bg-destructive/15"
+          onClick={onDiscard}
+        >
+          <Trash2 />
+        </Button>
       </div>
     </div>
   );

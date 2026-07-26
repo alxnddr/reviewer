@@ -81,6 +81,17 @@ function authored(comment: Comment): ReviewComment {
 }
 
 describe("serializeReview", () => {
+  it("round-trips the tour doc, and omits the key entirely when there is none", () => {
+    const review = importFixture(FIXTURE, "cc");
+    expect(review.overview).toBeNull();
+    expect(serializeReview(review)).not.toHaveProperty("overview");
+
+    const overview = { title: "Add the greeting API", body: "Why this exists." };
+    const serialized = serializeReview({ ...review, overview });
+    expect(serialized.overview).toEqual(overview);
+    expect(importFixture(serialized, "dd").overview).toEqual(overview);
+  });
+
   it("round-trips an edited comment and layer through export and re-import", () => {
     const review = importFixture(FIXTURE, "aa");
 
@@ -177,6 +188,7 @@ describe("reviewToMarkdown", () => {
   it("renders layers as ordered sections with grouped comments and an outdated note", () => {
     const markdown = reviewToMarkdown({
       source: FIXTURE.source,
+      overview: null,
       layers: [
         {
           id: "l1",
@@ -227,8 +239,50 @@ describe("reviewToMarkdown", () => {
     `);
   });
 
+  it("leads with the tour doc: its title is the document, its body the lead", () => {
+    const markdown = reviewToMarkdown({
+      source: FIXTURE.source,
+      overview: {
+        title: "Add the greeting API",
+        body: "Why this exists.\n\nAnd what to notice in [a.ts](src/a.ts).",
+      },
+      layers: [
+        {
+          id: "l1",
+          label: "Validation",
+          summary: "guards the input",
+          kind: "validation",
+          ranges: [],
+        },
+      ],
+      comments: [],
+    });
+
+    expect(markdown).toMatchInlineSnapshot(`
+      "# Add the greeting API
+
+      Review — \`app\`
+
+      \`main\` … \`aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\`
+
+      Why this exists.
+
+      And what to notice in [a.ts](src/a.ts).
+
+      ## Validation
+
+      guards the input
+      "
+    `);
+  });
+
   it("ends in exactly one trailing newline", () => {
-    const markdown = reviewToMarkdown({ source: FIXTURE.source, layers: [], comments: [] });
+    const markdown = reviewToMarkdown({
+      source: FIXTURE.source,
+      overview: null,
+      layers: [],
+      comments: [],
+    });
     expect(markdown.endsWith("\n")).toBe(true);
     expect(markdown.endsWith("\n\n")).toBe(false);
   });

@@ -4,6 +4,7 @@ import {
   type ImportedReview,
   type ReviewComment,
   type ReviewLayer,
+  type ReviewOverview,
   type ReviewSide,
   type ReviewSource,
 } from "../../../shared/review";
@@ -11,6 +12,7 @@ import { assertNever } from "../../../shared/assert";
 import type { CommitSha, DiffSelection, RepoInfo } from "../../../shared/git";
 import { resolveAnchor } from "./diff/anchor";
 import type { PatchFile } from "./diff/patch";
+import { layerOwning } from "./layers";
 
 // The two review exports, both pure and headless so they snapshot and round-trip in
 // tests without a window. `serializeReview` re-emits the authored `.reviewer.json` —
@@ -41,6 +43,9 @@ export function serializeReview(review: ImportedReview): ReviewArtifact {
     // Absent patch stays an absent key (the import contract's optional), not an
     // empty string — a null patch and an empty patch are not the same artifact.
     ...(review.patch === null ? {} : { patch: review.patch }),
+    // The tour doc round-trips verbatim, on the same absent-key rule: a review with no
+    // overview re-emits without the key, never with a null one.
+    ...(review.overview === null ? {} : { overview: review.overview }),
     comments,
     layers: review.layers,
   });
@@ -109,6 +114,9 @@ export type MarkdownComment = {
 
 export type MarkdownReview = {
   source: ReviewSource;
+  /** The authored tour doc, or null: it becomes the document's title and lead, so the
+   * export reads as the review the app opens on rather than a bare comment dump. */
+  overview: ReviewOverview | null;
   layers: readonly ReviewLayer[];
   comments: readonly MarkdownComment[];
 };
@@ -140,27 +148,20 @@ export function markdownCommentsFrom(
   });
 }
 
-/** A comment belongs to the first layer (authored order) whose ranges cover it:
- * same file and side, with overlapping line spans. First-match keeps a comment in
- * exactly one section, and authored order makes the choice deterministic. Comments
- * no layer covers fall to the general section. */
+/** A comment belongs to the layer that owns it — the deepest one whose own ranges cover
+ * it (`layerOwning`), which is the same rule the overview counts by, so the export and the
+ * app never section a finding differently. Comments no layer covers fall to the general
+ * section. */
 function layerIndexOfComment(
   layers: readonly ReviewLayer[],
   comment: MarkdownComment,
 ): number | null {
-  for (const [index, layer] of layers.entries()) {
-    const covered = layer.ranges.some(
-      (range) =>
-        range.file === comment.file &&
-        range.side === comment.side &&
-        range.startLine <= comment.endLine &&
-        comment.startLine <= range.endLine,
-    );
-    if (covered) {
-      return index;
-    }
+  const owner = layerOwning(layers, comment);
+  if (owner === null) {
+    return null;
   }
-  return null;
+  const index = layers.findIndex((layer) => layer.id === owner.id);
+  return index === -1 ? null : index;
 }
 
 /** Stable order within a section: by file, then line range, then side — so a
@@ -197,9 +198,12 @@ function commentBullet(comment: MarkdownComment): string {
 
 /** The curated review as portable Markdown: a repo + `base…head` header, then one
  * `##` section per layer in authored reading order — its summary and the
- * comments it covers — and a general section for any layer-less comments. Machine
- * tokens (paths, refs) render as code spans; the output ends in exactly one
- * newline, deterministic so it is snapshot-testable. */
+ * comments it covers — and a general section for any layer-less comments. A review
+ * with a tour doc leads with it: its title becomes the `#` heading and its body the
+ * lead paragraphs, which need no conversion — the markdown-lite grammar (paragraphs,
+ * code spans, `[label](path)` links) is already Markdown. Machine tokens (paths, refs)
+ * render as code spans; the output ends in exactly one newline, deterministic so it is
+ * snapshot-testable. */
 export function reviewToMarkdown(review: MarkdownReview): string {
   const other: MarkdownComment[] = [];
   const byLayer: MarkdownComment[][] = review.layers.map(() => []);
@@ -212,8 +216,15 @@ export function reviewToMarkdown(review: MarkdownReview): string {
     }
   }
 
-  const lines: string[] = [`# Review — ${review.source.repo.name}`, ""];
+  const overview = review.overview;
+  const lines: string[] =
+    overview === null
+      ? [`# Review — ${review.source.repo.name}`, ""]
+      : [`# ${overview.title}`, "", `Review — \`${review.source.repo.name}\``, ""];
   lines.push(`\`${review.source.base}\` … \`${review.source.head}\``);
+  if (overview !== null) {
+    lines.push("", overview.body.trim());
+  }
 
   review.layers.forEach((layer, index) => {
     lines.push("", `## ${layer.label}`, "", layer.summary);

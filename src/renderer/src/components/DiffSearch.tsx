@@ -54,7 +54,12 @@ export function DiffSearch({
   return (
     <div
       role="search"
-      className="absolute top-2 right-3 z-20 flex items-center gap-1 rounded-lg border border-border bg-popover p-1 text-sm shadow-md"
+      // The kit's floating-surface idiom (select/dropdown/combobox all use it): a
+      // hairline `ring-foreground/10` rather than `border-border`, which on the dark
+      // themes is a near-invisible grey and left the bar with no edge against the
+      // diff. Kept a rounded rect, not the stepper's pill — this one holds a field,
+      // and the two overlays should stay tellable apart at a glance.
+      className="absolute top-2 right-3 z-20 flex items-center gap-1 rounded-lg bg-popover p-1 text-sm text-popover-foreground shadow-md ring-1 ring-foreground/10"
     >
       <div className="relative">
         <Search

@@ -1,129 +1,165 @@
-import { useEffect, useMemo, type KeyboardEvent, type ReactElement } from "react";
-import { AlertTriangle, ChevronDown, ChevronRight, Layers as LayersIcon } from "lucide-react";
+import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactElement } from "react";
+import {
+  AlertTriangle,
+  ChevronDown,
+  ChevronRight,
+  Compass,
+  Layers as LayersIcon,
+} from "lucide-react";
 import type { ReviewLayer } from "../../../shared/review";
 import type { PatchFile } from "@/lib/diff/patch";
 import type { FitToContentRefs } from "@/lib/fit-panel";
-import { resolveLayerScroll } from "@/lib/layers";
+import { layerOutline, resolveLayerScroll } from "@/lib/layers";
 import { coverageSummary } from "@/lib/coverage";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
-import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
+import { TooltipHint } from "@/components/ui/tooltip";
 import { useReviewStore } from "@/stores/review";
 
-// Hand-built single-select ARIA listbox: the active option IS the soloed layer,
-// so roving the active descendant and soloing are the same move (arrows step,
-// never animated). The order is the artifact's; nothing here sorts. The pure
-// stepping/solo/scroll logic lives in lib/layers.ts.
+// The review's table of contents, as a tree. `layers` nests, so the rail is a tree widget
+// and not a flat list pretending: a row indents under its parent, a parent discloses, and
+// the section number (`4.2.1`) is the same one the doc and the band print.
+//
+// Every row is a real place to stand, parents included — selecting one solos its whole
+// extent (itself plus everything under it), selecting a child narrows to that section.
+// That is the aggregation rule from lib/layers.ts, and it is why there is no second kind
+// of row here with different rules: one row type, one gesture, two scopes.
+//
+// Hand-built `tree`/`treeitem` rather than a component library: the active descendant *is*
+// the soloed layer, so roving and soloing are the same move, and the arrow keys have to
+// walk what is on screen (a collapsed subtree is skipped) while the diff-side chevrons walk
+// the whole review. The pure stepping/solo/outline logic lives in lib/layers.ts.
 
-function rowDomId(index: number): string {
-  return `layer-option-${index}`;
+/** Per-level indent. Enough to read as nesting at a glance in a 256px rail, small enough
+ * that the cap (five levels) still leaves a usable label column. */
+const INDENT_PX = 12;
+/** The twisty's slot, held open on childless rows so labels line up within a level. */
+const TWISTY_PX = 16;
+
+function rowDomId(id: string): string {
+  return `layer-row-${id}`;
 }
+
+/** The tour doc's slot in the tree. Namespaced like the inferred layer's id so it cannot
+ * collide with an authored one; it never leaves this component — clicking it calls
+ * `openOverview`, it is never handed to `setActiveLayer`. */
+const OVERVIEW_ROW_ID = "reviewer:overview";
+
+/** What the rail draws, flattened to rows in document order. The tree shape survives as
+ * `depth` + `expandable`, which is all a row needs to render and all the keyboard needs to
+ * move: everything structural was already decided by `layerOutline`. */
+type Row = {
+  id: string;
+  kind: "overview" | "layer" | "uncovered";
+  depth: number;
+  /** Null on the doc and inferred rows, which are no authored step. */
+  ordinal: string | null;
+  label: string;
+  /** The one-line summary, shown on hover — the rail is an outline, not a description. */
+  summary: string | null;
+  expandable: boolean;
+  /** Hidden because an ancestor is collapsed. Kept in the list (not filtered out) so the
+   * keyboard and the click handler share one index space with the DOM. */
+  hidden: boolean;
+  outdated: boolean;
+  /** Related to the soloed layer: inside its extent (the diff on screen includes this
+   * section's files) or on the trail up to it. Carried in ink rather than fill, so "part
+   * of what you are looking at" never reads as a second selection. */
+  related: boolean;
+};
 
 type LayerRowProps = {
-  layer: ReviewLayer;
-  index: number;
+  row: Row;
   selected: boolean;
-  outdated: boolean;
+  expanded: boolean;
+  onSelect: () => void;
+  onToggle: () => void;
 };
 
-/** One layer row: the authored ordinal in a mono gutter beside the `label` over a
- * demoted `summary`; an outdated first range wears the same chip the comment header uses. */
-function LayerRow({ layer, index, selected, outdated }: LayerRowProps): ReactElement {
+/** One row: indent, twisty, section number, label. One line — the rail is scanned, and a
+ * second line of prose per row buries the shape the indentation exists to show. The
+ * summary rides in the hover hint, where it costs nothing. */
+function TreeRow({ row, selected, expanded, onSelect, onToggle }: LayerRowProps): ReactElement {
+  const glyph =
+    row.kind === "overview" ? (
+      <Compass aria-hidden="true" className="size-3.5 shrink-0" />
+    ) : row.kind === "uncovered" ? (
+      <AlertTriangle aria-hidden="true" className="size-3.5 shrink-0" />
+    ) : null;
+
   return (
     <div
-      role="option"
-      id={rowDomId(index)}
-      data-layer-index={index}
+      role="treeitem"
+      id={rowDomId(row.id)}
+      data-row-id={row.id}
       aria-selected={selected}
+      aria-level={row.depth + 1}
+      {...(row.expandable ? { "aria-expanded": expanded } : {})}
+      style={{ paddingLeft: 8 + row.depth * INDENT_PX }}
       className={cn(
-        // Baseline alignment sits the ordinal on the label's first line, not the row's centre.
-        "flex min-h-7 cursor-default items-baseline gap-2 px-2 py-1 select-none",
-        // The soloed layer wears the themed selection fill (bg-selected); hover
-        // stays a neutral wash a step below so a hovered row never reads as the
-        // active solo.
-        selected ? "bg-selected text-foreground" : "text-text-muted hover:bg-border/30",
+        "flex h-7 cursor-default items-center gap-1.5 pr-2 select-none hover:bg-border/30",
+        selected && "bg-selected hover:bg-selected",
+        selected || row.related ? "text-foreground" : "text-text-muted",
       )}
     >
-      {/* Right-aligned tabular gutter so 1→9 and double digits stay flush; a step
-          fainter than the label since the number orders, it doesn't title. */}
-      <span
-        className={cn(
-          "w-4 shrink-0 text-right font-mono text-xs tabular-nums",
-          selected ? "text-foreground/70" : "text-text-muted",
-        )}
-      >
-        {index + 1}
-      </span>
-      <div className="flex min-w-0 flex-1 flex-col gap-0.5">
-        <div className="flex items-center gap-2">
-          <span className="min-w-0 flex-1 truncate text-sm" title={layer.label}>
-            {layer.label}
-          </span>
-          {outdated && (
-            // The neutral pill keeps a hairline so its shape stays legible against
-            // the themed selection fill of a soloed row (bg-selected), whose hue and
-            // tone it would otherwise wash into.
-            <span className="shrink-0 rounded border border-border bg-border/60 px-1.5 py-0.5 text-xs text-foreground">
-              Outdated
-            </span>
-          )}
-        </div>
-        <span
-          className={cn("truncate text-xs", selected ? "text-foreground/80" : "text-text-muted")}
-          title={layer.summary}
-        >
-          {layer.summary}
-        </span>
-      </div>
-    </div>
-  );
-}
-
-type UncoveredRowProps = {
-  /** Its slot in the effective order (past the last authored row) — the id/keyboard
-   * target and the value the click handler maps back to the inferred layer. */
-  index: number;
-  selected: boolean;
-  /** Coverable files no layer walks — the row is file-based, matching what soloing it
-   * shows (whole files), not the line-based header %. */
-  files: number;
-};
-
-/** The inferred "not covered by layers" row: same option/solo mechanics and padding as a
- * `LayerRow`, so it flows as the last item of the list rather than a set-apart section — a
- * warning glyph simply stands in for the ordinal in the shared `w-4` gutter, keeping both
- * rows' text left-aligned. Rendered only when a gap exists. */
-function UncoveredRow({ index, selected, files }: UncoveredRowProps): ReactElement {
-  return (
-    <div
-      role="option"
-      id={rowDomId(index)}
-      data-layer-index={index}
-      aria-selected={selected}
-      className={cn(
-        "flex min-h-7 cursor-default items-start gap-2 px-2 py-1 select-none",
-        selected ? "bg-selected text-foreground" : "text-text-muted hover:bg-border/30",
-      )}
-    >
-      {/* mt-0.5 optically centres the glyph on the first text line (its cap height sits
-          above the row's baseline). */}
-      <span className="mt-0.5 flex w-4 shrink-0 justify-end">
-        <AlertTriangle
+      {/* The twisty owns its own click: disclosing a group is not selecting it, and a
+          reader opening a chapter to look inside should not have the diff jump. */}
+      {row.expandable ? (
+        <button
+          type="button"
+          tabIndex={-1}
           aria-hidden="true"
-          className={cn("size-3.5", selected ? "text-foreground/70" : "text-text-muted")}
-        />
-      </span>
-      <div className="flex min-w-0 flex-1 flex-col gap-0.5">
-        <span className={cn("truncate text-sm", selected && "text-foreground")}>Not covered</span>
+          onClick={(event) => {
+            event.stopPropagation();
+            onToggle();
+          }}
+          style={{ width: TWISTY_PX }}
+          className="flex h-full shrink-0 items-center justify-center text-text-muted hover:text-foreground"
+        >
+          {expanded ? <ChevronDown className="size-3.5" /> : <ChevronRight className="size-3.5" />}
+        </button>
+      ) : (
+        <span style={{ width: TWISTY_PX }} className="shrink-0" />
+      )}
+      {glyph}
+      {row.ordinal !== null && (
         <span
           className={cn(
-            "truncate text-xs tabular-nums",
-            selected ? "text-foreground/80" : "text-text-muted",
+            "shrink-0 text-xs tabular-nums",
+            selected ? "text-foreground/70" : "text-text-faint",
           )}
         >
-          {files} {files === 1 ? "file" : "files"}
+          {row.ordinal}
         </span>
-      </div>
+      )}
+      <TooltipHint
+        side="right"
+        align="center"
+        content={
+          row.summary === null ? (
+            row.label
+          ) : (
+            <div className="flex flex-col gap-0.5">
+              <span>{row.label}</span>
+              <span className="text-background/70">{row.summary}</span>
+            </div>
+          )
+        }
+      >
+        <span
+          onClick={onSelect}
+          className={cn("min-w-0 flex-1 truncate text-sm", selected && "text-foreground")}
+        >
+          {row.label}
+        </span>
+      </TooltipHint>
+      {row.outdated && (
+        // The neutral pill keeps a hairline so its shape stays legible against the themed
+        // selection fill of a soloed row, whose hue and tone it would otherwise wash into.
+        <span className="shrink-0 rounded border border-border bg-border/60 px-1.5 py-0.5 text-xs text-foreground">
+          Outdated
+        </span>
+      )}
     </div>
   );
 }
@@ -131,31 +167,36 @@ function UncoveredRow({ index, selected, files }: UncoveredRowProps): ReactEleme
 type LayerListProps = {
   layers: ReviewLayer[];
   activeLayerId: string | null;
-  /** The full loaded diff — never the soloed subset — so each layer's first-range
-   * outdated flag is resolved against the whole file set. */
+  /** Whether the review carries a tour doc — the tree then leads with its row. */
+  hasOverview: boolean;
+  /** Whether that doc is the current stop. It is selected instead of any layer (the
+   * store clears the solo when the doc opens), so exactly one row ever reads selected. */
+  overviewOpen: boolean;
+  /** The full loaded diff — never the soloed subset — so each layer's outdated flag is
+   * resolved against the whole file set. */
   files: PatchFile[];
   /** True when the review pins its own frozen patch: every layer anchor places
    * against it, so no layer wears the outdated chip — the same rule the comment
    * surface applies to a frozen review. */
   frozen: boolean;
-  /** Disclosure is owned by the parent (SidebarNav) so it can host the open list in a
+  /** Disclosure is owned by the parent (SidebarNav) so it can host the open tree in a
    * resizable panel and fall back to a plain bar when collapsed — the same split it
    * makes for the comment overview above. */
   expanded: boolean;
   onToggleExpanded: () => void;
-  /** Present when the list lives in a panel the parent fits to the rows' own height:
-   * the listbox is the scroll viewport, the row block inside it the measured content. */
+  /** Present when the tree lives in a panel the parent fits to the rows' own height:
+   * the tree is the scroll viewport, the row block inside it the measured content. */
   fit?: FitToContentRefs;
 };
 
-/** The ordered-layers panel: solos a layer's files across the tree and the code
- * view. Selection is derived view state routed through the store — it never touches
- * the session's persisted diff/scroll. Stepping the order is the diff-side intro's
- * job (its chevrons walk it); here the rows themselves are the affordance, so the
- * rail keeps only what it needs — a disclosure and the way back to the full diff. */
+/** The ordered-layers panel: solos a layer's extent across the file tree and the code
+ * view. Selection is derived view state routed through the store — it never touches the
+ * session's persisted diff/scroll. */
 export function LayerList({
   layers,
   activeLayerId,
+  hasOverview,
+  overviewOpen,
   files,
   frozen,
   expanded,
@@ -163,82 +204,243 @@ export function LayerList({
   fit,
 }: LayerListProps): ReactElement | null {
   const setActiveLayer = useReviewStore((state) => state.setActiveLayer);
-  const stepLayer = useReviewStore((state) => state.stepLayer);
+  const openOverview = useReviewStore((state) => state.openOverview);
 
   // The computed coverage of the loaded diff by these layers — same core the `rvw
   // coverage` CLI reports, so the header number and the CLI never disagree. `uncovered`
   // is the inferred remainder, present only when a coverable file sits in no layer at all.
   const summary = useMemo(() => coverageSummary(files, layers), [files, layers]);
-  const uncovered = summary.uncoveredLayer;
+  // With no authored layers there is nothing for a file to be missing from, so the
+  // inferred row is suppressed — the section is then just the tour doc's own row.
+  const uncovered = layers.length === 0 ? null : summary.uncoveredLayer;
 
-  // The rove/solo order: the authored rows, then the inferred row when it exists. The
-  // click handler and Home/End map a row's slot back to an id through this.
-  const optionIds = useMemo(
-    () =>
-      uncovered === null ? layers.map((l) => l.id) : [...layers.map((l) => l.id), uncovered.id],
-    [layers, uncovered],
-  );
-  const activeIndex = activeLayerId === null ? -1 : optionIds.indexOf(activeLayerId);
-  const focusIndex = activeIndex === -1 ? null : activeIndex;
+  // Each layer's depth, section number and extent — the same outline the doc and the band
+  // read, so a layer is `4.2.1` in all three or in none.
+  const outline = useMemo(() => layerOutline(layers), [layers]);
 
-  // Resolve each layer's first-range outdated flag once per layers/diff change,
-  // not per row per render — the scan is O(files × hunks) per layer.
+  // Groups start open: the layers *are* the review, and a review that opens with its
+  // chapters folded away hides the thing the rail exists to show. Collapsing is the
+  // reader's move, held for as long as they are looking at this session.
+  const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(() => new Set());
+
+  // Resolve each layer's outdated flag once per layers/diff change, not per row per
+  // render — the scan is O(files × hunks) per layer.
   const outdatedIds = useMemo(() => {
     const ids = new Set<string>();
     for (const layer of layers) {
-      if (resolveLayerScroll(layer, files, frozen).kind === "outdated") {
+      if (resolveLayerScroll(layer, layers, files, frozen).kind === "outdated") {
         ids.add(layer.id);
       }
     }
     return ids;
   }, [layers, files, frozen]);
 
-  useEffect(() => {
-    // Keep the soloed row visible as arrows walk the order.
-    if (focusIndex !== null) {
-      document.getElementById(rowDomId(focusIndex))?.scrollIntoView({ block: "nearest" });
-    }
-  }, [focusIndex]);
+  const rows = useMemo((): Row[] => {
+    // What the soloed layer implicates: everything inside its extent (those files are on
+    // screen) and everything on the trail up to it (that is where it sits). Both read in
+    // full ink, so a folded group still shows that the selection is somewhere inside it.
+    const active = outline.find((entry) => entry.layer.id === activeLayerId);
+    const related = new Set([
+      ...(active?.subtree ?? []).map((layer) => layer.id),
+      ...(active?.ancestors ?? []).map((layer) => layer.id),
+    ]);
+    const hiddenIds = new Set<string>();
+    const layerRows = outline.map((entry): Row => {
+      const hidden = entry.ancestors.some((ancestor) => hiddenIds.has(ancestor.id));
+      if (hidden || collapsed.has(entry.layer.id)) {
+        hiddenIds.add(entry.layer.id);
+      }
+      return {
+        id: entry.layer.id,
+        kind: "layer",
+        depth: entry.depth,
+        ordinal: entry.ordinal,
+        label: entry.layer.label,
+        summary: entry.layer.summary,
+        expandable: entry.children.length > 0,
+        hidden,
+        outdated: outdatedIds.has(entry.layer.id),
+        related: related.has(entry.layer.id),
+      };
+    });
+    return [
+      ...(hasOverview
+        ? [
+            {
+              id: OVERVIEW_ROW_ID,
+              kind: "overview" as const,
+              depth: 0,
+              ordinal: null,
+              label: "Overview",
+              summary: null,
+              expandable: false,
+              hidden: false,
+              outdated: false,
+              related: false,
+            },
+          ]
+        : []),
+      ...layerRows,
+      ...(uncovered === null
+        ? []
+        : [
+            {
+              id: uncovered.id,
+              kind: "uncovered" as const,
+              depth: 0,
+              ordinal: null,
+              label: "Not covered",
+              summary: uncovered.summary,
+              expandable: false,
+              hidden: false,
+              outdated: false,
+              related: false,
+            },
+          ]),
+    ];
+  }, [outline, collapsed, outdatedIds, hasOverview, uncovered, activeLayerId]);
 
-  if (layers.length === 0) {
+  const selectedId = overviewOpen ? OVERVIEW_ROW_ID : activeLayerId;
+
+  // A layer reached from anywhere else — the band's chevrons, a doc section, a comment —
+  // must be visible here: the rail is where the reader tracks where they are, and a
+  // selection hidden inside a folded group silently loses them. Revealing beats
+  // preserving the fold.
+  useEffect(() => {
+    if (activeLayerId === null) {
+      return;
+    }
+    const entry = outline.find((candidate) => candidate.layer.id === activeLayerId);
+    if (entry === undefined || entry.ancestors.length === 0) {
+      return;
+    }
+    setCollapsed((current) => {
+      if (!entry.ancestors.some((ancestor) => current.has(ancestor.id))) {
+        return current;
+      }
+      const next = new Set(current);
+      for (const ancestor of entry.ancestors) {
+        next.delete(ancestor.id);
+      }
+      return next;
+    });
+  }, [activeLayerId, outline]);
+
+  useEffect(() => {
+    // Keep the selected row visible as the selection walks the tree.
+    if (selectedId !== null) {
+      document.getElementById(rowDomId(selectedId))?.scrollIntoView({ block: "nearest" });
+    }
+  }, [selectedId, rows]);
+
+  // Nothing to walk and no doc to walk back to: the section is absent entirely.
+  if (layers.length === 0 && !hasOverview) {
     return null;
   }
 
-  const rowIndexAtEvent = (target: EventTarget | null): number | null => {
+  const visible = rows.filter((row) => !row.hidden);
+
+  /** Go where a row points: the doc row opens the doc, a layer row solos it. */
+  const select = (id: string): void => {
+    if (id === OVERVIEW_ROW_ID) {
+      openOverview();
+      return;
+    }
+    setActiveLayer(id);
+  };
+
+  const toggle = (id: string): void =>
+    setCollapsed((current) => {
+      const next = new Set(current);
+      if (!next.delete(id)) {
+        next.add(id);
+      }
+      return next;
+    });
+
+  const rowAtEvent = (target: EventTarget | null): Row | null => {
     if (!(target instanceof HTMLElement)) {
       return null;
     }
-    const row = target.closest("[data-layer-index]");
-    if (!(row instanceof HTMLElement) || row.dataset["layerIndex"] === undefined) {
+    const element = target.closest("[data-row-id]");
+    if (!(element instanceof HTMLElement)) {
       return null;
     }
-    const index = Number(row.dataset["layerIndex"]);
-    return Number.isInteger(index) ? index : null;
+    return rows.find((row) => row.id === element.dataset["rowId"]) ?? null;
+  };
+
+  /** Move the selection `direction` steps through the rows currently on screen — a folded
+   * group's contents are skipped, because the arrows walk what the reader can see. */
+  const step = (direction: 1 | -1): void => {
+    if (visible.length === 0) {
+      return;
+    }
+    const index = visible.findIndex((row) => row.id === selectedId);
+    const next =
+      index === -1
+        ? direction === 1
+          ? 0
+          : visible.length - 1
+        : Math.min(Math.max(index + direction, 0), visible.length - 1);
+    const target = visible[next];
+    if (target !== undefined) {
+      select(target.id);
+    }
   };
 
   const onKeyDown = (event: KeyboardEvent<HTMLDivElement>): void => {
+    const current = rows.find((row) => row.id === selectedId) ?? null;
     switch (event.key) {
       case "ArrowDown":
         event.preventDefault();
-        stepLayer(1);
+        step(1);
         break;
       case "ArrowUp":
         event.preventDefault();
-        stepLayer(-1);
+        step(-1);
         break;
+      case "ArrowRight": {
+        // The tree convention: open a folded group, then step into it.
+        event.preventDefault();
+        if (current === null || !current.expandable) {
+          break;
+        }
+        if (collapsed.has(current.id)) {
+          toggle(current.id);
+        } else {
+          step(1);
+        }
+        break;
+      }
+      case "ArrowLeft": {
+        // …and its mirror: fold an open group, else rise to the parent.
+        event.preventDefault();
+        if (current === null) {
+          break;
+        }
+        if (current.expandable && !collapsed.has(current.id)) {
+          toggle(current.id);
+          break;
+        }
+        const parent = outline.find((entry) => entry.layer.id === current.id)?.parent;
+        if (parent !== undefined && parent !== null) {
+          select(parent.id);
+        }
+        break;
+      }
       case "Home": {
         event.preventDefault();
-        const first = optionIds[0];
+        const first = visible[0];
         if (first !== undefined) {
-          setActiveLayer(first);
+          select(first.id);
         }
         break;
       }
       case "End": {
         event.preventDefault();
-        const last = optionIds[optionIds.length - 1];
+        const last = visible[visible.length - 1];
         if (last !== undefined) {
-          setActiveLayer(last);
+          select(last.id);
         }
         break;
       }
@@ -263,9 +465,12 @@ export function LayerList({
         <ChevronRight aria-hidden="true" className="size-3.5 shrink-0" />
       )}
       <LayersIcon aria-hidden="true" className="size-3.5 shrink-0" />
-      {layers.length === 1 ? "1 layer" : `${layers.length} layers`}
+      {/* A doc with no layers behind it has nothing to count; the section is named for
+          what it holds instead of reading "0 layers". */}
+      {layers.length === 0 ? "Layers" : layers.length === 1 ? "1 layer" : `${layers.length} layers`}
     </>
   );
+  const headerRef = useRef<HTMLDivElement>(null);
   // Stretches to the bar's full height so the whole left of the row is the hit target,
   // matching the comment overview's full-width disclosure button.
   const toggleClass =
@@ -273,45 +478,37 @@ export function LayerList({
 
   return (
     // Open, it fills its resize panel (the seam handle below draws the separator line)
-    // and the list scrolls within whatever height the panel was fitted or dragged to.
-    // Collapsed, the section *is* the bar, carrying its own border down to the tree.
+    // and the tree scrolls within whatever height the panel was fitted or dragged to.
+    // Collapsed, the section *is* the bar, carrying its own border down to the file tree.
     <div
       className={cn(
         "flex flex-col",
         expanded ? "h-full min-h-0" : "shrink-0 border-b border-border",
       )}
     >
-      <div className="flex h-9 shrink-0 items-center gap-1 px-2">
+      <div ref={headerRef} className="flex h-9 shrink-0 items-center gap-1 px-2">
         {/* The narrow rail has no room for a coverage chip beside the controls, so the
             full readout — headline % and the line/file counts — lives in a tooltip on
             the disclosure; the inferred "Not covered" row carries the at-a-glance signal. */}
-        {summary.coverableLines > 0 ? (
-          <TooltipProvider>
-            <Tooltip>
-              <TooltipTrigger
-                render={
-                  <button
-                    type="button"
-                    aria-expanded={expanded}
-                    onClick={onToggleExpanded}
-                    className={toggleClass}
-                  />
-                }
-              >
-                {disclosure}
-              </TooltipTrigger>
-              <TooltipContent side="bottom" align="start">
-                <div className="flex flex-col gap-0.5">
-                  <span className="tabular-nums">{summary.linePct}% covered by layers</span>
-                  <span className="tabular-nums text-background/70">
-                    {summary.coveredLines}/{summary.coverableLines} changed lines ·{" "}
-                    {summary.coveredFiles} of {summary.coverableFiles} files
-                  </span>
-                </div>
-              </TooltipContent>
-            </Tooltip>
-          </TooltipProvider>
-        ) : (
+        {/* Anchored to the whole header row, not the trigger: the readout clears the
+            sidebar entirely and opens over the diff, so it never has to fit the rail's
+            width. The trigger alone would fall short of the edge whenever "Show all"
+            is present and shortens it. */}
+        <TooltipHint
+          disabled={summary.coverableLines === 0}
+          side="right"
+          align="center"
+          anchor={headerRef}
+          content={
+            <div className="flex flex-col gap-0.5">
+              <span className="tabular-nums">{summary.linePct}% covered by layers</span>
+              <span className="tabular-nums text-background/70">
+                {summary.coveredLines}/{summary.coverableLines} changed lines ·{" "}
+                {summary.coveredFiles} of {summary.coverableFiles} files
+              </span>
+            </div>
+          }
+        >
           <button
             type="button"
             aria-expanded={expanded}
@@ -320,7 +517,7 @@ export function LayerList({
           >
             {disclosure}
           </button>
-        )}
+        </TooltipHint>
         {/* Collapsed, the rows that would explain a solo aren't on screen — so the way
             back to the full diff rides with them, not on the bare bar. */}
         {expanded && activeLayerId !== null && (
@@ -337,42 +534,41 @@ export function LayerList({
       {expanded && (
         <div
           ref={fit?.viewportRef}
-          role="listbox"
+          role="tree"
           aria-label="Layers"
-          aria-activedescendant={focusIndex === null ? undefined : rowDomId(focusIndex)}
+          aria-activedescendant={selectedId === null ? undefined : rowDomId(selectedId)}
           tabIndex={0}
           onKeyDown={onKeyDown}
           onClick={(event) => {
-            const index = rowIndexAtEvent(event.target);
-            const id = index === null ? undefined : optionIds[index];
-            if (id !== undefined) {
-              // Clicking the soloed row again clears back to the full diff.
-              setActiveLayer(id === activeLayerId ? null : id);
+            const row = rowAtEvent(event.target);
+            if (row === null) {
+              return;
             }
+            // Clicking the soloed row again clears back to the full diff. The doc row has
+            // no such toggle — leaving it is "Browse all files", not a second click.
+            if (row.kind !== "overview" && row.id === activeLayerId) {
+              setActiveLayer(null);
+              return;
+            }
+            select(row.id);
           }}
           // pb-1 only (no top padding): the header already carries its own bottom inset,
-          // so a listbox top pad would push the first row down and make the header read
+          // so a tree top pad would push the first row down and make the header read
           // as bottom-heavy — the gap above the bar's label must equal the gap down to
           // the first row.
           className="min-h-0 flex-1 overflow-y-auto pb-1 outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
         >
           <div ref={fit?.contentRef}>
-            {layers.map((layer, index) => (
-              <LayerRow
-                key={layer.id}
-                layer={layer}
-                index={index}
-                selected={layer.id === activeLayerId}
-                outdated={outdatedIds.has(layer.id)}
+            {visible.map((row) => (
+              <TreeRow
+                key={row.id}
+                row={row}
+                selected={row.id === selectedId}
+                expanded={!collapsed.has(row.id)}
+                onSelect={() => select(row.id)}
+                onToggle={() => toggle(row.id)}
               />
             ))}
-            {uncovered !== null && (
-              <UncoveredRow
-                index={layers.length}
-                selected={uncovered.id === activeLayerId}
-                files={summary.uncoveredFiles}
-              />
-            )}
           </div>
         </div>
       )}

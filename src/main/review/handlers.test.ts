@@ -59,6 +59,7 @@ function spyStore(): { store: SessionStore; createFromReview: ReturnType<typeof 
       scrollTop: 0,
       comments: review.comments,
       layers: review.layers,
+      overview: review.overview,
       reviewDiff: null,
       reviewSubrange: null,
       reviewOrigin: null,
@@ -71,6 +72,7 @@ function spyStore(): { store: SessionStore; createFromReview: ReturnType<typeof 
     update: vi.fn(),
     delete: vi.fn(),
     setActive: vi.fn(),
+    reorder: vi.fn(),
     flush: vi.fn(),
   };
   return { store, createFromReview };

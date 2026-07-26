@@ -1,9 +1,10 @@
-import { useMemo, type ReactElement } from "react";
-import { ChevronDown, ChevronLeft, ChevronRight, ChevronUp, File } from "lucide-react";
+import type { ReactElement } from "react";
+import { ChevronDown, ChevronLeft, ChevronRight, ChevronUp } from "lucide-react";
 import type { ReviewLayer } from "../../../shared/review";
 import type { FitToContentRefs } from "@/lib/fit-panel";
-import { parseLayerDescription, type DescriptionRun } from "@/lib/layer-description";
 import { Button } from "@/components/ui/button";
+import { TooltipHint } from "@/components/ui/tooltip";
+import { ReviewProse } from "@/components/ReviewProse";
 import { cn } from "@/lib/utils";
 import { useReviewStore } from "@/stores/review";
 
@@ -12,76 +13,24 @@ import { useReviewStore } from "@/stores/review";
 // (the soloed subset), so a clickable chip always navigates to something on
 // screen and an absent reference is inert.
 
-type FileChipProps = { label: string; onSelect: () => void };
-
-/** A resolved file reference: a mono chip that jumps the diff to the file. */
-function FileChip({ label, onSelect }: FileChipProps): ReactElement {
-  return (
-    <Button
-      type="button"
-      variant="ghost"
-      size="xs"
-      onClick={onSelect}
-      className="mx-0.5 gap-1 rounded border border-border-strong align-baseline font-mono hover:bg-border/60 dark:hover:bg-border/60"
-    >
-      <File aria-hidden="true" />
-      {label}
-    </Button>
-  );
-}
-
-/** Unresolved reference: the target is not in this diff. Shown as a label, never a dead click. */
-function DeadRef({ label }: { label: string }): ReactElement {
-  return (
-    <span
-      className="mx-0.5 rounded border border-border/60 px-1 font-mono text-text-muted"
-      title="Not in this diff"
-    >
-      {label}
-    </span>
-  );
-}
-
-function renderRun(
-  run: DescriptionRun,
-  index: number,
-  onSelect: (file: string) => void,
-): ReactElement {
-  switch (run.kind) {
-    case "text":
-      return <span key={index}>{run.text}</span>;
-    case "code": {
-      if (run.file === null) {
-        return (
-          <code key={index} className="font-mono">
-            {run.text}
-          </code>
-        );
-      }
-      const file = run.file;
-      return <FileChip key={index} label={run.text} onSelect={() => onSelect(file)} />;
-    }
-    case "link": {
-      if (run.file === null) {
-        return <DeadRef key={index} label={run.label} />;
-      }
-      const file = run.file;
-      return <FileChip key={index} label={run.label} onSelect={() => onSelect(file)} />;
-    }
-  }
-}
-
 type LayerIntroProps = {
   layer: ReviewLayer;
-  /** The authored-order position rendered as "Layer {index+1} of {total}", or null for
-   * the inferred "not covered by layers" layer — which is no authored chapter and so
-   * shows its name in place of an ordinal. */
-  ordinal: { index: number; total: number } | null;
+  /** The number this layer wears in the outline — `"6"`, or `"6.1"` inside a group —
+   * shown beside the title, exactly as the rail and the doc show it. Null for the
+   * inferred "not covered by layers" layer, which is no authored step. */
+  ordinal: string | null;
+  /** The layers this one hangs off, outermost first — the trail back up the outline. Each
+   * is a real place to stand (soloing a parent shows its whole extent), so each crumb
+   * navigates there rather than just naming it. */
+  ancestors: { id: string; label: string }[];
   /** Whether a previous / next layer exists in the *effective* order (authored plus the
    * inferred layer), so the chevrons dead-end at the true ends of the walkthrough rather
    * than at the last authored layer when an inferred one follows it. */
   hasPrev: boolean;
   hasNext: boolean;
+  /** Whether the review carries a tour doc: the position counter then reads as a
+   * breadcrumb back to it, since the doc is the walkthrough's real first stop. */
+  hasOverview: boolean;
   /** The files currently rendered in the diff (the soloed subset): both the link
    * resolution set and the navigation targets. */
   filePaths: string[];
@@ -102,8 +51,10 @@ type LayerIntroProps = {
 export function LayerIntro({
   layer,
   ordinal,
+  ancestors,
   hasPrev,
   hasNext,
+  hasOverview,
   filePaths,
   collapsed,
   onToggleCollapsed,
@@ -111,12 +62,12 @@ export function LayerIntro({
   fit,
 }: LayerIntroProps): ReactElement {
   const stepLayer = useReviewStore((state) => state.stepLayer);
+  const setActiveLayer = useReviewStore((state) => state.setActiveLayer);
   const selectFile = useReviewStore((state) => state.selectFile);
+  const openOverview = useReviewStore((state) => state.openOverview);
 
   // Falls back to the one-line summary when a layer carries no long-form prose.
   const content = layer.description ?? layer.summary;
-  const diffFiles = useMemo(() => new Set(filePaths), [filePaths]);
-  const paragraphs = useMemo(() => parseLayerDescription(content, diffFiles), [content, diffFiles]);
 
   return (
     <section
@@ -139,23 +90,58 @@ export function LayerIntro({
           it expands or collapses the prose, the same action the chevron carries; the
           position counter beside it is inert. */}
       <div className={cn("flex w-full shrink-0 items-center gap-3 px-6", !collapsed && "h-11")}>
-        <h2 className="min-w-0 flex-1" title={layer.label}>
+        <h2 className="flex min-w-0 flex-1 items-baseline gap-2">
+          {/* The layer's number, in the same tabular figures the rail and the doc set it
+              in — one layer, one number, wherever it is read. */}
+          {ordinal !== null && (
+            <span className="shrink-0 text-xs tabular-nums text-text-faint">{ordinal}</span>
+          )}
           <Button
             type="button"
             variant="link"
             onClick={onToggleCollapsed}
             className="-ml-2 h-8 max-w-full justify-start px-2 text-title font-medium text-foreground hover:no-underline"
           >
-            <span className="min-w-0 truncate">{layer.label}</span>
+            {/* On the label, not the heading: the heading stretches across the band
+                and never clips, so only the label knows when it was cut off. */}
+            <TooltipHint content={layer.label} whenTruncated side="bottom" align="start">
+              <span className="min-w-0 truncate">{layer.label}</span>
+            </TooltipHint>
           </Button>
         </h2>
-        {/* Only an authored chapter carries a position counter; the inferred layer's
-            heading already reads "Not covered by layers", so its slot stays empty. */}
-        {ordinal !== null && (
-          <span className="shrink-0 text-xs text-text-muted">
-            Layer {ordinal.index + 1} of {ordinal.total}
-          </span>
-        )}
+        {/* The trail back up: the doc first, then every layer this one hangs off. The
+            number beside the title says where in the order this is; the trail says what it
+            is part of — and each crumb is a stop of its own, so clicking one widens the
+            diff to that whole group. */}
+        <div className="flex min-w-0 shrink items-center gap-1 text-xs text-text-muted">
+          {hasOverview && (
+            <Button
+              type="button"
+              variant="link"
+              size="xs"
+              onClick={() => openOverview()}
+              className="h-6 shrink-0 px-1 text-xs text-text-muted hover:text-foreground"
+            >
+              Overview
+            </Button>
+          )}
+          {ancestors.map((ancestor, index) => (
+            <span key={ancestor.id} className="flex min-w-0 items-center gap-1">
+              {(hasOverview || index > 0) && <span aria-hidden="true">/</span>}
+              <TooltipHint content={ancestor.label} whenTruncated side="bottom" align="end">
+                <Button
+                  type="button"
+                  variant="link"
+                  size="xs"
+                  onClick={() => setActiveLayer(ancestor.id)}
+                  className="h-6 min-w-0 px-1 text-xs text-text-muted hover:text-foreground"
+                >
+                  <span className="min-w-0 truncate">{ancestor.label}</span>
+                </Button>
+              </TooltipHint>
+            </span>
+          ))}
+        </div>
         <div className="ml-auto flex shrink-0 items-center gap-0.5">
           <Button
             variant="ghost"
@@ -196,18 +182,13 @@ export function LayerIntro({
           ref={fit?.viewportRef}
           className={cn("overflow-y-auto pb-3", fill ? "min-h-0 flex-1" : "max-h-48")}
         >
-          <div
+          <ReviewProse
             ref={fit?.contentRef}
+            text={content}
+            filePaths={filePaths}
+            onSelectFile={(file) => selectFile(file)}
             className="max-w-3xl space-y-2 px-6 text-base leading-relaxed text-foreground select-text"
-          >
-            {paragraphs.map((paragraph, paragraphIndex) => (
-              <p key={paragraphIndex} className="break-words">
-                {paragraph.runs.map((run, runIndex) =>
-                  renderRun(run, runIndex, (file) => selectFile(file)),
-                )}
-              </p>
-            ))}
-          </div>
+          />
         </div>
       )}
     </section>

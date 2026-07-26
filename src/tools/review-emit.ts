@@ -27,6 +27,10 @@ export type EmitInput = {
   patch: string;
   comments: unknown;
   layers: unknown;
+  /** The authored tour doc, or `undefined` when the draft carries none — untrusted like
+   * the rest, and dropped from the assembled JSON when absent (the artifact key is
+   * optional, so an absent overview is an absent key, never `null`). */
+  overview?: unknown;
 };
 
 /** Bytes ready to write, or the reasons the artifact is not fit to hand over — never
@@ -44,6 +48,9 @@ export function emitReviewArtifact(input: EmitInput): EmitResult {
   const candidate = {
     version: 1,
     source: { kind: "local", repo: input.repo, base: input.base, head: input.head },
+    // `JSON.stringify` drops an undefined value, so a draft with no overview emits no
+    // key at all — the optional-absent shape, not an explicit null the schema rejects.
+    overview: input.overview,
     comments: input.comments,
     layers: input.layers,
   };

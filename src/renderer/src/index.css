@@ -58,6 +58,46 @@
   --trees-selected-bg-override: var(--selected);
   --trees-selected-fg-override: var(--foreground);
   --trees-selected-focused-border-color-override: var(--primary);
+
+  /* ── The comment stack ───────────────────────────────────────────────────────
+   * Three tones, so a review comment reads as an interruption in the code rather
+   * than another row of it: the diff surface, a BAND that steps off it and runs the
+   * full width of the annotation row, and the CARD that rises off the band.
+   *
+   * Derived here instead of mapped onto --card/--elevated because those collapse to
+   * one value on four of the eight themes and invert on github-light (see the
+   * correction below) — which is exactly what left a comment reading as a grey panel
+   * on a grey field. A mix against the theme's own ink and diff surface is a real
+   * step on every theme by construction, and tracks whatever the theme paints. */
+  --comment-band: color-mix(in oklab, var(--foreground) 5%, var(--diff-surface));
+  /* Light: the card is paper — the same white as the code behind it, so the body sits
+   * at full contrast — and the band is what sets it apart. */
+  --comment-surface: var(--diff-surface);
+}
+
+.dark {
+  /* Dark: nothing is lighter than the diff surface, so the card cannot be the paper
+   * beneath it. It rises instead, one step past the band. */
+  --comment-surface: color-mix(in oklab, var(--foreground) 11%, var(--diff-surface));
+}
+
+/* ── github-light: elevation-ramp correction ───────────────────────────────────
+ * The generated theme has this one backwards. Its --background / --surface /
+ * --diff-surface are #ffffff, but --elevated is #f2f2f2 and --popover is #ebecec —
+ * so the theme's *raised* surfaces are its DARKEST, and every menu, select,
+ * dropdown, tooltip and floating panel paints muddier than the page under it. Every
+ * other light theme here has popover as the lightest tone (pierre-light: page 0.985,
+ * card 0.97, popover 1.0). Real GitHub Light agrees: overlays are #ffffff over a
+ * #f6f8fa subtle canvas.
+ *
+ * Corrected here rather than in design/globals.css because that file is a
+ * checked-in artifact of an external generator with no regeneration script in this
+ * repo — an edit there is silently lost the next time it is produced. Same selector,
+ * later source order, so this wins. --card is deliberately left alone: it is doing
+ * canvas-subtle duty for the resting surfaces and moving it would ripple. */
+html[data-theme="github-light"] {
+  --elevated: #ffffff;
+  --popover: #ffffff;
 }
 
 @theme inline {
@@ -67,6 +107,8 @@
   --color-diff-add-fg: var(--diff-add-fg);
   --color-diff-surface: var(--diff-surface);
   --color-selected: var(--selected);
+  --color-comment-band: var(--comment-band);
+  --color-comment-surface: var(--comment-surface);
 
   /* One hair above the 14px reading prose so a section title (the LayerIntro
    * chapter heading) reads as a heading without the 18px `text-lg` jump, which
@@ -95,12 +137,165 @@
   }
 }
 
+/* ── Title-bar tab strip ───────────────────────────────────────────────────────
+ * The compression model: every tab claims the same preferred width and they
+ * shrink *together* toward a narrow floor, so a crowded strip degrades by
+ * narrowing rather than by spilling into a scroll as soon as it runs out of
+ * room. Only past the floor does the strip scroll at all.
+ *
+ * What lives here is what utilities can't express: a separator that depends on
+ * the *sibling's* state, a fade that depends on whether the name is clipped,
+ * and a query on the tab's own width. */
+
+@utility no-scrollbar {
+  scrollbar-width: none;
+  &::-webkit-scrollbar {
+    display: none;
+  }
+}
+
+[data-tab] {
+  /* Each tab is its own query container: the strip's width says nothing about
+   * how much room any one tab ended up with, so a squeezed tab has to decide
+   * what to drop on its own measure. */
+  container-type: inline-size;
+}
+
+/* Hairline between resting tabs. Only the active/hovered tab carries a fill, so
+ * without this a compressed strip reads as one undifferentiated bar. Dropped on
+ * both sides of a filled tab, where the fill already does the separating. */
+[data-tab]:not(:first-child)::before {
+  content: "";
+  position: absolute;
+  top: 50%;
+  left: -6.5px;
+  height: 12px;
+  width: 1px;
+  transform: translateY(-50%);
+  border-radius: 9999px;
+  background: var(--border);
+}
+[data-tab]:is([data-active="true"], :hover)::before,
+[data-tab]:is([data-active="true"], :hover) + [data-tab]::before {
+  display: none;
+}
+
+/* A clipped name fades out rather than ending in an ellipsis or a hard cut: the
+ * ellipsis spends a character's width at exactly the size where characters are
+ * scarcest, and repeated down a crowded strip it reads as noise. */
+[data-tab-title][data-clipped="true"] {
+  mask-image: linear-gradient(to right, #000 calc(100% - 1.25rem), transparent);
+}
+
+/* The name gives up room only while the close button is actually on screen. */
+[data-tab]:is([data-active="true"], :hover) [data-tab-title] {
+  margin-right: 1.25rem;
+}
+
+/* Past this the close button costs more of the name than it returns — the name is
+ * the tab's only identity, and ⌘W and middle-click still close. The query reads
+ * the container's CONTENT box, so this is 20px inside the tab's own width (px-2.5
+ * either side): 3.5rem here means a tab narrower than ~76px. */
+@container (max-width: 3.5rem) {
+  [data-tab-close] {
+    display: none;
+  }
+  [data-tab]:is([data-active="true"], :hover) [data-tab-title] {
+    margin-right: 0;
+  }
+}
+
 /* Electron-only window-drag surfaces (titleBarStyle "hiddenInset" removes the system one). */
 .app-region-drag {
   -webkit-app-region: drag;
 }
 .app-region-no-drag {
   -webkit-app-region: no-drag;
+}
+
+/* ── File-type icon colours ────────────────────────────────────────────────────
+ * The sidebar tree colours its file glyphs from `@pierre/trees`' own palette, but it
+ * does so inside its shadow root (`:host { --trees-icon-*: … }`), where document CSS
+ * cannot reach and its variables cannot escape. `FileTypeIcon` draws the *same* sprite
+ * symbols out here, so the palette and the token→hue mapping are mirrored from
+ * `@pierre/trees/dist/style.css` — same values, grouped by hue — and a file wears one
+ * colour wherever the app names it. Icons paint with `currentColor`; a token with no rule
+ * (the library has none for `font`/`nextjs`/`stylelint`) simply inherits the row's text
+ * colour, exactly as it does in the tree. */
+[data-file-icon] {
+  color: light-dark(#84848a, #adadb1);
+}
+[data-file-icon="typescript"],
+[data-file-icon="biome"],
+[data-file-icon="c"],
+[data-file-icon="cpp"],
+[data-file-icon="docker"],
+[data-file-icon="python"],
+[data-file-icon="vscode"],
+[data-file-icon="webpack"] {
+  color: light-dark(#1a85d4, #69b1ff);
+}
+[data-file-icon="javascript"],
+[data-file-icon="babel"],
+[data-file-icon="browserslist"] {
+  color: light-dark(#d5a910, #ffd452);
+}
+[data-file-icon="bash"],
+[data-file-icon="markdown"],
+[data-file-icon="svgo"],
+[data-file-icon="vue"] {
+  color: light-dark(#199f43, #5ecc71);
+}
+[data-file-icon="astro"],
+[data-file-icon="database"],
+[data-file-icon="vite"] {
+  color: light-dark(#a631be, #d568ea);
+}
+[data-file-icon="bootstrap"],
+[data-file-icon="css"],
+[data-file-icon="eslint"],
+[data-file-icon="terraform"],
+[data-file-icon="wasm"] {
+  color: light-dark(#693acf, #9d6afb);
+}
+[data-file-icon="claude"],
+[data-file-icon="html"],
+[data-file-icon="json"],
+[data-file-icon="rust"],
+[data-file-icon="svg"],
+[data-file-icon="swift"],
+[data-file-icon="zig"],
+[data-file-icon="zip"] {
+  color: light-dark(#d47628, #ffa359);
+}
+[data-file-icon="go"],
+[data-file-icon="oxc"],
+[data-file-icon="react"],
+[data-file-icon="tailwind"] {
+  color: light-dark(#1ca1c7, #68cdf2);
+}
+[data-file-icon="graphql"],
+[data-file-icon="image"],
+[data-file-icon="sass"] {
+  color: light-dark(#d32a61, #ff678d);
+}
+[data-file-icon="mcp"],
+[data-file-icon="prettier"],
+[data-file-icon="table"] {
+  color: light-dark(#17a5af, #64d1db);
+}
+[data-file-icon="npm"],
+[data-file-icon="postcss"],
+[data-file-icon="ruby"],
+[data-file-icon="svelte"],
+[data-file-icon="yml"] {
+  color: light-dark(#d52c36, #ff6762);
+}
+[data-file-icon="git"] {
+  color: light-dark(#ff8c5b, #d5512f);
+}
+[data-file-icon="bun"] {
+  color: light-dark(#594c5b, #79697b);
 }
 
 /* Theme flips are instant by design: the store adds this class around the .dark swap. */

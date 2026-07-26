@@ -2,6 +2,7 @@ import { useState, type ReactElement } from "react";
 import { ChevronDown, ChevronUp, MapPinOff } from "lucide-react";
 import type { Comment } from "../../../shared/review";
 import { Button } from "@/components/ui/button";
+import { TooltipHint } from "@/components/ui/tooltip";
 import { CommentBody } from "@/components/CommentBody";
 import { commentLocation } from "@/lib/comment-body";
 
@@ -100,23 +101,25 @@ type UnplaceableRowProps = {
   showDiscard: boolean;
 };
 
-/** One stranded comment, raised on `bg-card` off the diff surface exactly like a
- * placed `CommentThread`, but headed by its file location (mono) since it has no
- * line to sit on. */
+/** One stranded comment, on the same raised surface as a placed `CommentThread` —
+ * same fill, same edge, same body — but headed by its file location (mono) since it
+ * has no line to sit on. */
 function UnplaceableRow({ comment, onDiscard, showDiscard }: UnplaceableRowProps): ReactElement {
   const location = commentLocation(comment);
 
   return (
-    <div className="flex flex-col gap-1.5 rounded-lg border border-border bg-card px-3 py-2.5 font-sans text-card-foreground">
+    <div className="flex flex-col gap-1.5 rounded-lg border border-border-strong bg-comment-surface px-4 py-3 font-sans text-foreground">
       <div className="flex items-center gap-2 text-xs text-text-muted">
-        <span className="min-w-0 truncate font-mono select-text" title={location}>
-          {location}
-        </span>
+        <TooltipHint content={location} whenTruncated side="top" align="start">
+          <span className="min-w-0 truncate font-mono select-text">{location}</span>
+        </TooltipHint>
         {showDiscard && (
           <Button
             variant="ghost"
             size="sm"
-            className="ml-auto shrink-0 hover:bg-border/60 dark:hover:bg-border/60"
+            // `bg-border/60` is `--selected`, the app's neutral selection tone — a
+            // discard button that washes selection-coloured reads as a picked row.
+            className="ml-auto shrink-0 text-text-muted hover:bg-destructive/10 hover:text-destructive dark:hover:bg-destructive/15"
             onClick={() => onDiscard(comment.id)}
           >
             Discard

@@ -15,8 +15,12 @@ export function TitleBar(): ReactElement {
       {hasSessions ? <TabBar /> : <h1 className="text-sm">Reviewer</h1>}
       {/* Draggable filler: the window must keep dragging right of the tab strip. */}
       <div className="min-w-6 flex-1" />
-      <DiffStyleToggle />
-      <ThemeMenu />
+      {/* The header's gap-3 is sized for the tab strip; the trailing icon buttons
+          already carry their own padding, so they group tighter than that. */}
+      <div className="flex items-center gap-0.5">
+        <DiffStyleToggle />
+        <ThemeMenu />
+      </div>
     </header>
   );
 }

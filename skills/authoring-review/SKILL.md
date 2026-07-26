@@ -8,9 +8,10 @@ disable-model-invocation: true
 
 You have already reviewed the change — found the issues, formed the judgments (with whatever
 review skills you loaded for that). This skill is **not** how to review. It is how to **present**
-a review: it turns the findings you already hold into one `.reviewer.json` — comments anchored to
-exact lines, and **ordered layers** that walk a human through the change in a deliberate reading
-order, each with a chapter-intro `description` — and opens it in the Reviewer app.
+a review: it turns the findings you already hold into one `.reviewer.json` — an **overview** the
+review opens on, comments anchored to exact lines, and **ordered layers** that walk a human through
+the change in a deliberate reading order, each with a chapter-intro `description` — and opens it in
+the Reviewer app.
 
 `rvw emit` captures the range's diff, proves every anchor places against it, and writes a
 refs-only artifact the app re-derives from the branch on open. It is **self-validated before
@@ -36,8 +37,8 @@ If `rvw` is not on your `PATH`, invoke the bundle directly — `node <reviewer-i
 
 Reference (load when you reach Step 2):
 
-- `reference/authoring-guide.md` — the exact `draft.json` shape and field rules, the chapter
-  `description` grammar, how to phrase a comment, and the anchoring contract.
+- `reference/authoring-guide.md` — the exact `draft.json` shape and field rules, the overview and
+  chapter prose grammar, how to phrase a comment, and the anchoring contract.
 
 ## Step 1 — Resolve the range
 
@@ -66,8 +67,18 @@ git -C <repo> -c core.quotepath=false -c diff.noprefix=false -c diff.mnemonicPre
   diff --find-renames --patch <base>...<head> --
 ```
 
-Then author `draft.json` — an object with two keys, `comments` and `layers` — following
-`reference/authoring-guide.md`:
+Then author `draft.json` — an object with three keys, `overview`, `comments` and `layers` —
+following `reference/authoring-guide.md`:
+
+- **The overview** is the doc the review opens on: a `title` naming the change and a `body`
+  saying what it does and why it is shaped this way. Write it for someone who has not seen the
+  branch. Do **not** list the layers in it — the app continues the doc with one section per layer
+  (its `description` in full, the files it covers, its line and comment counts) built from
+  `layers` itself, so a hand-written table of contents would only go stale.
+
+- **Never write a count.** Files, lines, comments, layers, coverage — the app computes all of
+  them from the artifact and the diff on screen. A number in your prose is a second answer that
+  goes wrong the moment anything moves.
 
 - **Comments** carry the findings you already have. One per finding: `file`, `side` (the enum
   **`additions`** or **`deletions`**, never `old`/`new`), ascending `startLine`/`endLine`, and a
@@ -86,22 +97,25 @@ reader of _this_ change, not for the filesystem.
   the code that consumes it. Meet the shape first and every later use reads for free.
 - **Story over structure.** Group by _what changed and why_ — a capability, a fix, a migration —
   not by directory. One layer can span many files; one file can appear in several layers.
-- **Rollups for scale.** When a theme spans many hunks, make a parent layer (empty `ranges`, a
-  `summary` naming the theme) and nest the pieces under it via `parent`. The parent is the
-  chapter; the children are its sections.
+- **Nest for scale.** When a theme has parts worth reading separately, add a layer for the theme
+  and point each part at it via `parent`. A layer's extent is its own ranges plus everything
+  under it, so the parent is a real stop — opening it shows the whole group, opening a child
+  narrows to that section — and it is numbered `4` to their `4.1`, `4.2`. Up to five levels; the
+  array must stay in document order (a subtree follows its parent, together).
 - **Every substantive layer earns a `description`** — the "why this slice" a reviewer would say
-  out loud: what it does, why it is grouped, what to notice. Not a restated `summary`.
+  out loud: what it does, why it is grouped, what to notice. Not a restated `summary`. It is read
+  in the overview doc as well as above the diff, so write it to stand on its own.
 
 Alphabetical files, one layer per file, a `summary` that echoes the filename — that is a
 directory listing, not a review. Each layer: `id`, `label`, one-line `summary`, author-chosen
 `kind`, ascending `ranges` (each `file` + `side` + `startLine`/`endLine`), and a `description`.
 
 Every range/comment `side` + line span must fall inside a hunk of the diff, and every
-`[label](path)` link in a `description` must target a file present in the diff. The Step 4 gate
-enforces both; author against the diff you read so it passes first time.
+`[label](path)` link in a `description` **or in the overview `body`** must target a file present in
+the diff. The Step 4 gate enforces both; author against the diff you read so it passes first time.
 
-Completion: `draft.json` exists with ≥1 comment and an ordered `layers` array; every anchor was
-read off the actual diff.
+Completion: `draft.json` exists with an `overview`, ≥1 comment, and an ordered `layers` array;
+every anchor was read off the actual diff.
 
 ## Step 3 — (nothing to assemble by hand)
 

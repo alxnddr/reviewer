@@ -67,15 +67,31 @@ export const Comment = z
   .refine(rangeIsAscending, rangeError);
 export type Comment = z.infer<typeof Comment>;
 
-/** One layer of the ordered walkthrough. `id` is authored, not
- * app-assigned, because `parent` references it. `kind` is an open, author-chosen
- * semantic category (e.g. `validation`, `feature`) the UI maps to an icon — a
- * closed enum would reject categories the authoring agent legitimately invents,
- * so it stays a free label, not stringly-typed data hiding a fixed set. `ranges`
- * may be empty: a parent node rolls up the union of its descendants. `summary` is
- * the one-line list label; the optional `description` is the long-form chapter
- * prose the app reads above the diff — markdown-lite, resolved to
- * clickable file links at render, absent on artifacts that carry only a summary. */
+/** One layer of the ordered review. `id` is authored, not app-assigned, because `parent`
+ * references it. `kind` is an open, author-chosen semantic category (e.g. `validation`,
+ * `feature`) the UI maps to an icon — a closed enum would reject categories the authoring
+ * agent legitimately invents, so it stays a free label, not stringly-typed data hiding a
+ * fixed set. `summary` is the one-line list label; the optional `description` is the
+ * long-form prose the app reads both as this layer's section of the overview doc and above
+ * the diff — the artifact's small markdown tier, resolved to clickable file links at
+ * render, absent on artifacts that carry only a summary.
+ *
+ * `parent` makes `layers` a **tree**, and the array is that tree in document order — a
+ * layer's descendants follow it, together, before the next layer at its level. Every
+ * surface renders the array as written, so the order you emit is the order it is read.
+ *
+ * A layer's **extent** is its own ranges plus every range under it. One rule, at every
+ * level: a parent is not a different kind of node, it is a layer that happens to contain
+ * others, exactly like a directory. So a parent is a real place to stand — soloing it
+ * shows the whole group, soloing a child narrows to that section — and its counts are the
+ * group's totals. Nothing has to arbitrate between a parent's files and its children's,
+ * because they are the same claim at two scopes.
+ *
+ * The gate enforces what keeps that legible: nesting at most five levels deep, no cycles,
+ * every `parent` naming a real layer, every layer reaching some code (its own ranges or a
+ * descendant's), and the array in document order. The app reads a violation as un-nested —
+ * a hand-edited artifact still opens and still reads top to bottom — while `rvw
+ * emit`/`check` refuse to produce one. */
 export const ReviewLayer = z.object({
   id: z.string().min(1),
   label: z.string().min(1),
@@ -86,6 +102,23 @@ export const ReviewLayer = z.object({
   parent: z.string().min(1).optional(),
 });
 export type ReviewLayer = z.infer<typeof ReviewLayer>;
+
+/** The review's front matter — the tour doc the app opens on, before any diff.
+ * `title` names the change the way its author would say it out loud; `body` is the
+ * long-form "what this does, why it is shaped this way", written in the *same*
+ * markdown grammar a layer `description` uses (paragraphs, headings, lists, quotes,
+ * fences; `` `code` `` and `[label](path)` links resolved against the diff, strong
+ * and emphasis) — one prose tier for the whole
+ * artifact, so the parser, the link gate, and the renderer are shared rather than
+ * forked. The walkthrough itself is never authored here: the app derives the chapter
+ * list, its files, and its counts from `layers` and the loaded diff, so the doc can
+ * never drift from the layers it introduces. Optional — an artifact without one opens
+ * straight onto the diff. */
+export const ReviewOverview = z.object({
+  title: z.string().min(1),
+  body: z.string().min(1),
+});
+export type ReviewOverview = z.infer<typeof ReviewOverview>;
 
 /** Where the review's diff comes from. Single-arm on purpose: the union is the
  * seam a `github` arm plugs into without reshaping the artifact. */
@@ -105,6 +138,8 @@ export const ReviewArtifact = z.object({
   version: z.literal(1),
   source: ReviewSource,
   patch: z.string().optional(),
+  /** The tour doc the review opens on; absent on an artifact that has none. */
+  overview: ReviewOverview.optional(),
   comments: z.array(ReviewComment),
   layers: z.array(ReviewLayer),
 });
@@ -136,6 +171,9 @@ export function reviewDiffFor(review: ImportedReview): ReviewDiff {
 export type ImportedReview = {
   source: ReviewSource;
   patch: string | null;
+  /** The authored tour doc, or null for an artifact that carries none — modelled as
+   * a real value (not an optional key) so consumers branch on it, like `patch`. */
+  overview: ReviewOverview | null;
   comments: Comment[];
   layers: ReviewLayer[];
 };
@@ -197,6 +235,7 @@ export function importReview(bytes: string, stamp: ReviewStamp): ImportReviewRes
     review: {
       source: parsed.data.source,
       patch: parsed.data.patch ?? null,
+      overview: parsed.data.overview ?? null,
       comments,
       layers: parsed.data.layers,
     },

@@ -92,7 +92,7 @@ afterAll(() => {
   rmSync(root, { recursive: true, force: true });
 });
 
-type Draft = { comments: unknown; layers: unknown };
+type Draft = { comments: unknown; layers: unknown; overview?: unknown };
 
 /** A draft every anchor of which places against the range's diff — the clean-pass input. */
 const VALID_DRAFT: Draft = {
@@ -155,6 +155,52 @@ describe("rvw emit", () => {
     // Refs-only: the written artifact carries no embedded patch — the app re-derives
     // the diff from `source` on open.
     expect(JSON.parse(readFileSync(out, "utf8"))).not.toHaveProperty("patch");
+  });
+
+  it("carries an authored overview into the artifact, and gates its links too", async () => {
+    const out = outPath("tour.reviewer.json");
+    const withTour: Draft = {
+      ...VALID_DRAFT,
+      overview: {
+        title: "Rewrite line 2",
+        body: "Starts in `alpha.ts`, lands in [beta](beta.ts).",
+      },
+    };
+    const result = await runCli([
+      "emit",
+      "--repo",
+      repo,
+      "--base",
+      baseSha,
+      "--head",
+      headSha,
+      "--draft",
+      draftFile(withTour),
+      "--out",
+      out,
+    ]);
+    expect(result.code).toBe(0);
+    expect(JSON.parse(readFileSync(out, "utf8")).overview).toEqual(withTour.overview);
+
+    // A link to a path outside the diff is refused exactly like one in a layer
+    // description — and nothing reaches disk.
+    const dead = outPath("dead.reviewer.json");
+    const refused = await runCli([
+      "emit",
+      "--repo",
+      repo,
+      "--base",
+      baseSha,
+      "--head",
+      headSha,
+      "--draft",
+      draftFile({ ...VALID_DRAFT, overview: { title: "T", body: "See [x](gone.ts)." } }),
+      "--out",
+      dead,
+    ]);
+    expect(refused.code).toBe(1);
+    expect(refused.stderr).toContain("overview body links");
+    expect(existsSync(dead)).toBe(false);
   });
 
   it("writes an artifact byte-identical to what the pure emit core assembles", async () => {

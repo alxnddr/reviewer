@@ -77,6 +77,7 @@ describe("reviewArtifactJsonSchema", () => {
     expect(Object.keys(properties).sort()).toEqual([
       "comments",
       "layers",
+      "overview",
       "patch",
       "source",
       "version",
