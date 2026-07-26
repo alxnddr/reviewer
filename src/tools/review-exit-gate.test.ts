@@ -3,6 +3,7 @@ import {
   importReview,
   reviewDiffFor,
   type ReviewArtifact,
+  type ReviewLayerDraft,
   type ReviewStamp,
 } from "../shared/review";
 import { parsePatch } from "../renderer/src/lib/diff/patch";
@@ -50,12 +51,7 @@ const PATCH = [
   "",
 ].join("\n");
 
-const SOURCE: ReviewArtifact["source"] = {
-  kind: "local",
-  repo: { path: "/repo", name: "repo" },
-  base: "main",
-  head: "feature",
-};
+const SOURCE = { repo: "/repo", base: "main", head: "feature" } as const;
 
 const FOO_COMMENT: ReviewArtifact["comments"][number] = {
   file: "src/foo.ts",
@@ -78,15 +74,18 @@ const FOO_DRIFTED: ReviewArtifact["comments"][number] = {
   startLine: 9000,
   endLine: 9001,
 };
-const LAYERS: ReviewArtifact["layers"] = [
-  { id: "rollup", label: "Rollup", summary: "parent", ranges: [] },
+const LAYERS: ReviewLayerDraft[] = [
   {
-    id: "leaf",
-    label: "Leaf",
-    summary: "child",
-    description: "Adds [bar](src/bar.ts).",
-    parent: "rollup",
-    ranges: [{ file: "src/bar.ts", side: "additions", startLine: 2, endLine: 2 }],
+    label: "Rollup",
+    summary: "parent",
+    children: [
+      {
+        label: "Leaf",
+        summary: "child",
+        description: "Adds [bar](src/bar.ts).",
+        ranges: [{ file: "src/bar.ts", side: "additions", startLine: 2, endLine: 2 }],
+      },
+    ],
   },
 ];
 
@@ -103,9 +102,7 @@ const UI: CommentUiState = { editingId: null, draft: null };
  * `rvw emit` shell would write on a clean pass. */
 function emittedBytes(): string {
   const result = emitReviewArtifact({
-    repo: SOURCE.repo,
-    base: SOURCE.base,
-    head: SOURCE.head,
+    ...SOURCE,
     patch: PATCH,
     comments: [FOO_COMMENT, BAR_COMMENT],
     layers: LAYERS,
@@ -121,8 +118,7 @@ function emittedBytes(): string {
  * (re-derived) form, the path the app takes for a patch-less artifact. */
 function artifactBytes(patch: string | null, comments: ReviewArtifact["comments"]): string {
   const artifact = {
-    version: 1,
-    source: SOURCE,
+    ...SOURCE,
     ...(patch === null ? {} : { patch }),
     comments,
     layers: LAYERS,
@@ -151,7 +147,7 @@ function problemKinds(problems: ValidationProblem[]): string[] {
 
 /** The gate the skill runs before handoff: parse the untrusted bytes, then place every anchor
  * against the captured diff — the exact `parseReviewArtifact` + `validatePlacement` composition
- * `rvw emit`/`rvw validate` run, returning the problems (empty when clean). */
+ * `rvw emit`/`rvw check` run, returning the problems (empty when clean). */
 function placementProblems(bytes: string, patch: string): ValidationProblem[] {
   const parsed = parseReviewArtifact(bytes);
   if (!parsed.ok) {
@@ -184,8 +180,12 @@ describe("exit gate: skill → validator → Reviewer", () => {
     expect(annotationFor(derived, "src/foo.ts")).toEqual({ lineNumber: 11, outdated: false });
     expect(annotationFor(derived, "src/bar.ts")).toEqual({ lineNumber: 2, outdated: false });
 
-    // Layers step in the authored order — the app re-sorts nothing.
-    expect(imported.review.layers.map((layer) => layer.id)).toEqual(["rollup", "leaf"]);
+    // The authored tree flattens to the outline in document order, with app-stamped ids —
+    // the reader walks it exactly as it was nested.
+    expect(imported.review.layers.map((layer) => [layer.label, layer.parent])).toEqual([
+      ["Rollup", undefined],
+      ["Leaf", "id-3"],
+    ]);
   });
 
   it("still renders an imported frozen artifact verbatim, every anchor placed by passthrough", () => {
@@ -208,9 +208,7 @@ describe("exit gate: skill → validator → Reviewer", () => {
     // It places every anchor against the captured diff, so the drifted range surfaces with its
     // exact locator and the artifact never clears the gate.
     const refused = emitReviewArtifact({
-      repo: SOURCE.repo,
-      base: SOURCE.base,
-      head: SOURCE.head,
+      ...SOURCE,
       patch: PATCH,
       comments: [FOO_DRIFTED, BAR_COMMENT],
       layers: LAYERS,

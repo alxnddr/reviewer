@@ -21,9 +21,10 @@ import { selectActiveSlice, useReviewStore } from "@/stores/review";
 
 type FileReadToggleProps = { path: string };
 
-/** A checkbox and the word for what it means. Deliberately labelled rather than a bare
- * glyph: this is the gesture the whole feature rests on, and a header band has room for
- * two syllables. */
+/** The checkbox alone — no word beside it. The box is the one control everybody already
+ * reads as "done", and the header band it sits in is a row of quiet metadata; a lit word
+ * repeated down a long diff is louder than the state it reports. What it means is carried
+ * by the tooltip and the accessible name, which say it in full. */
 export function FileReadToggle({ path }: FileReadToggleProps): ReactElement | null {
   const file = useReviewStore((state) => {
     const diff = selectActiveSlice(state)?.diff;
@@ -52,17 +53,11 @@ export function FileReadToggle({ path }: FileReadToggleProps): ReactElement | nu
     >
       <Button
         variant="ghost"
-        size="xs"
+        size="icon-xs"
         aria-pressed={read}
         aria-label={read ? `Mark ${path} unread` : `Mark ${path} read`}
         onClick={() => setFileRead(path, !read)}
-        className={cn(
-          "gap-1.5 hover:bg-border/60 dark:hover:bg-border/60",
-          // Read is the resting state of a finished file, so the label recedes into it
-          // rather than lighting up: the box is the signal, and a row of lit labels down a
-          // long diff would read as a list of alerts.
-          read ? "text-text-muted" : "text-text-muted hover:text-foreground",
-        )}
+        className="hover:bg-border/60 dark:hover:bg-border/60"
       >
         {/* A real checkbox shape — the one control everybody already knows this job by.
             It fills with the theme's own ink rather than an accent, matching how the shell
@@ -76,7 +71,6 @@ export function FileReadToggle({ path }: FileReadToggleProps): ReactElement | nu
         >
           {read && <Check className="size-2.5" strokeWidth={3} />}
         </span>
-        Read
       </Button>
     </TooltipHint>
   );

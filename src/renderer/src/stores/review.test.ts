@@ -74,7 +74,6 @@ function makeBridge(overrides: Partial<ReviewerBridge>): ReviewerBridge {
       Promise.resolve({
         id: SESSION_ID,
         source: request.source,
-        mode: "commits",
         base: null,
         head: null,
         commitSelection: null,
@@ -153,7 +152,6 @@ function storedSession(id: string, repoPath: string, overrides: Partial<Session>
   return {
     id,
     source: { kind: "local", repo: { path: repoPath, name: repoPath.slice(1) } },
-    mode: "commits",
     base: null,
     head: null,
     commitSelection: null,
@@ -176,7 +174,9 @@ function refsReviewSession(id: string, repoPath: string, base: string, head: str
   return storedSession(id, repoPath, {
     reviewDiff: { kind: "refs", base, head },
     reviewOrigin: {
-      source: { kind: "local", repo: { path: repoPath, name: repoPath.slice(1) }, base, head },
+      repo: { path: repoPath, name: repoPath.slice(1) },
+      base,
+      head,
       patch: null,
     },
   });
@@ -188,12 +188,9 @@ function frozenReviewSession(id: string, repoPath: string, patch: string): Sessi
   return storedSession(id, repoPath, {
     reviewDiff: { kind: "frozenPatch", patch },
     reviewOrigin: {
-      source: {
-        kind: "local",
-        repo: { path: repoPath, name: repoPath.slice(1) },
-        base: "main",
-        head: SHA_A,
-      },
+      repo: { path: repoPath, name: repoPath.slice(1) },
+      base: "main",
+      head: SHA_A,
       patch,
     },
   });
@@ -232,7 +229,6 @@ describe("useReviewStore.openRepository", () => {
 
     const state = active();
     expect(state.repo).toEqual({ path: "/repo", name: "repo" });
-    expect(state.mode).toBe("commits");
     expect(state.log).toEqual({ phase: "loaded", entries: DIRTY_ENTRIES });
     expect(state.branches).toEqual({ phase: "loaded", list: BRANCH_LIST });
     expect(state.brush).toEqual({ anchor: 0, focus: 0 });
@@ -260,10 +256,12 @@ describe("useReviewStore.openRepository", () => {
     expect(useReviewStore.getState().activeSessionId).toBe(SESSION_ID);
   });
 
-  it("preselects base = default branch and head = current branch", async () => {
+  it("opens on the checked-out branch's own history, with no comparison asked for", async () => {
     await openFixtureRepo(makeBridge({}));
 
-    expect(active().base).toBe("main");
+    // A comparison is something the reviewer asks for; a fresh session just reads the
+    // branch it is standing on.
+    expect(active().base).toBeNull();
     expect(active().head).toBe("feature/x");
   });
 
@@ -471,12 +469,84 @@ describe("brush selection driving the diff", () => {
   });
 });
 
-describe("branch mode driving the diff", () => {
-  it("switching modes requests base...head for the preselected pair", async () => {
+describe("the picker's two refs", () => {
+  it("walks that branch's own history — no base, so it is a history and not a comparison", async () => {
     const bridge = makeBridge({});
     await openFixtureRepo(bridge);
 
-    useReviewStore.getState().setMode("branches");
+    useReviewStore.getState().setHead("main");
+    await vi.waitFor(() => {
+      expect(bridge.getCommitLog).toHaveBeenLastCalledWith({
+        repoPath: "/repo",
+        range: { base: null, head: "main" },
+      });
+    });
+    expect(active().head).toBe("main");
+  });
+
+  it("lands the brush on the newest commit of the branch it just listed", async () => {
+    const bridge = makeBridge({
+      // Another branch's log: none of the session's current selection is in it.
+      getCommitLog: vi
+        .fn()
+        .mockResolvedValueOnce({ ok: true, value: { entries: DIRTY_ENTRIES } })
+        .mockResolvedValue({ ok: true, value: { entries: [commitEntry("c".repeat(40))] } }),
+    });
+    await openFixtureRepo(bridge);
+
+    useReviewStore.getState().setHead("main");
+    await vi.waitFor(() => {
+      expect(active().selection).toEqual({
+        kind: "commitRange",
+        first: "c".repeat(40),
+        last: "c".repeat(40),
+      });
+    });
+  });
+
+  it("persists the listed branch, so a restored session re-locates its own selection", async () => {
+    vi.useFakeTimers();
+    const bridge = makeBridge({});
+    await openFixtureRepo(bridge);
+
+    useReviewStore.getState().setHead("main");
+    await vi.waitFor(() => expect(active().head).toBe("main"));
+    await vi.advanceTimersByTimeAsync(WRITE_BACK_DEBOUNCE_MS);
+    expect(bridge.updateSession).toHaveBeenLastCalledWith(
+      expect.objectContaining({ head: "main" }),
+    );
+  });
+
+  it("is not offered to a review session, whose list is the review's own range", async () => {
+    const bridge = makeBridge({});
+    await openFixtureRepo(bridge);
+    const id = useReviewStore.getState().activeSessionId as string;
+    useReviewStore.setState({
+      sessions: {
+        ...useReviewStore.getState().sessions,
+        [id]: {
+          ...(useReviewStore.getState().sessions[id] as SessionSlice),
+          reviewOrigin: {
+            repo: { path: "/repo", name: "repo" },
+            base: "a",
+            head: "b",
+            patch: null,
+          },
+        },
+      },
+    });
+
+    useReviewStore.getState().setHead("main");
+    expect(active().head).not.toBe("main");
+  });
+});
+
+describe("a comparison driving the diff", () => {
+  it("setting a base asks for base...head over the branch being listed", async () => {
+    const bridge = makeBridge({});
+    await openFixtureRepo(bridge);
+
+    useReviewStore.getState().setBase("main");
     await vi.waitFor(() => {
       expect(active().selection).toEqual({
         kind: "branches",
@@ -493,7 +563,7 @@ describe("branch mode driving the diff", () => {
   it("swap exchanges base and head and reloads", async () => {
     const bridge = makeBridge({});
     await openFixtureRepo(bridge);
-    useReviewStore.getState().setMode("branches");
+    useReviewStore.getState().setBase("main");
     await vi.waitFor(() => {
       expect(active().diff.phase).toBe("loaded");
     });
@@ -513,25 +583,24 @@ describe("branch mode driving the diff", () => {
     await openFixtureRepo(bridge);
     vi.mocked(bridge.getDiff).mockResolvedValue({ ok: true, value: { patch: "" } });
 
-    useReviewStore.getState().setMode("branches");
+    useReviewStore.getState().setBase("main");
     await vi.waitFor(() => {
       expect(active().diff.phase).toBe("empty");
     });
   });
 
-  it("switching to branch mode after a failed branch listing shows that failure", async () => {
+  it("a failed branch listing costs the comparison, not the commit list", async () => {
     const bridge = makeBridge({
       listBranches: vi.fn().mockResolvedValue({ ok: false, failure: { code: "timeout" } }),
     });
     await openFixtureRepo(bridge);
 
-    useReviewStore.getState().setMode("branches");
-    await vi.waitFor(() => {
-      expect(active().diff).toEqual({
-        phase: "failed",
-        failure: { code: "timeout" },
-      });
-    });
+    // With no refs to pick from there is nothing to compare *to* — but the log still
+    // walked HEAD, so the picker keeps working and the diff keeps loading. The failure
+    // is reported where the refs would have been, not in place of the whole panel.
+    expect(active().branches).toEqual({ phase: "failed", failure: { code: "timeout" } });
+    expect(active().diff.phase).toBe("loaded");
+    expect(active().selection).toEqual({ kind: "uncommitted" });
   });
 });
 
@@ -546,14 +615,14 @@ describe("review-pinned diff", () => {
     await vi.waitFor(() => {
       expect(slice(ID_A).diff.phase).toBe("loaded");
     });
-    // The pinned refs drive the diff request as a reviewRefs selection — the branch
-    // pickers stay at their seeded defaults, never carrying the review's sha.
+    // The pinned refs drive the diff request as a reviewRefs selection — the picker's
+    // own refs stay where they were seeded, never carrying the review's sha.
     expect(bridge.getDiff).toHaveBeenCalledWith({
       repoPath: "/repo-a",
       selection: { kind: "reviewRefs", base: "main", head: SHA_A },
     });
     expect(slice(ID_A).selection).toEqual({ kind: "reviewRefs", base: "main", head: SHA_A });
-    expect(slice(ID_A).base).toBe("main");
+    expect(slice(ID_A).base).toBeNull();
     expect(slice(ID_A).commitSelection).toBeNull();
     expect(slice(ID_A).reviewSubrange).toBeNull();
     // The commit list is the review's own base..head range, not HEAD's history.
@@ -645,7 +714,6 @@ describe("useReviewStore.selectAdjacentFile", () => {
     const seeded: SessionSlice = {
       id: SESSION_ID,
       repo: { path: "/repo", name: "repo" },
-      mode: "commits",
       log: null,
       branches: null,
       brush: null,
@@ -735,12 +803,11 @@ describe("session hydration", () => {
     expect(bridge.getDiff).toHaveBeenCalledTimes(2);
   });
 
-  it("hydration restores both modes' inputs, file, and scroll into the slice", async () => {
+  it("hydration restores the picker's refs, file, and scroll into the slice", async () => {
     const bridge = makeBridge({});
     await hydrateWith(bridge, {
       sessions: [
         storedSession(ID_A, "/repo-a", {
-          mode: "commits",
           base: "main",
           head: "feature/x",
           commitSelection: { kind: "commitRangeWithUncommitted", first: SHA_A },
@@ -752,7 +819,6 @@ describe("session hydration", () => {
     });
 
     const restored = slice(ID_A);
-    expect(restored.mode).toBe("commits");
     expect(restored.base).toBe("main");
     expect(restored.head).toBe("feature/x");
     expect(restored.brush).toEqual({ anchor: 0, focus: 1 });
@@ -883,7 +949,7 @@ describe("session hydration", () => {
       expect(slice(ID_A).log).toEqual({ phase: "loading" });
     });
 
-    useReviewStore.getState().setMode("branches");
+    useReviewStore.getState().setBase("main");
 
     resolveLog({ ok: true, value: { entries: DIRTY_ENTRIES } });
     await hydration;
@@ -980,8 +1046,8 @@ describe("session hydration", () => {
     });
     await hydrateWith(bridge, {
       sessions: [
-        storedSession(ID_A, "/repo-a", { mode: "branches", base: "main", head: "feature/x" }),
-        storedSession(ID_B, "/repo-b", { mode: "branches", base: "main", head: "feature/gone" }),
+        storedSession(ID_A, "/repo-a", { base: "main", head: "feature/x" }),
+        storedSession(ID_B, "/repo-b", { base: "main", head: "feature/gone" }),
       ],
       activeSessionId: ID_B,
     });
@@ -1182,7 +1248,7 @@ describe("debounced write-back", () => {
     const bridge = makeBridge({});
     await openFixtureRepo(bridge);
 
-    useReviewStore.getState().setMode("branches");
+    useReviewStore.getState().setBase("main");
     useReviewStore.getState().swapBranches();
     expect(bridge.updateSession).not.toHaveBeenCalled();
 
@@ -1192,7 +1258,6 @@ describe("debounced write-back", () => {
     expect(bridge.updateSession).toHaveBeenCalledWith({
       id: SESSION_ID,
       source: { kind: "local", repo: { path: "/repo", name: "repo" } },
-      mode: "branches",
       base: "feature/x",
       head: "main",
       commitSelection: { kind: "uncommitted" },
@@ -1212,14 +1277,14 @@ describe("debounced write-back", () => {
     await openFixtureRepo(bridge);
 
     useReviewStore.getState().setScrollTop(120);
-    useReviewStore.getState().setMode("branches");
+    useReviewStore.getState().setBase("main");
     expect(bridge.updateSession).not.toHaveBeenCalled();
 
     useReviewStore.getState().flushWriteBacks();
 
     expect(bridge.updateSession).toHaveBeenCalledTimes(1);
     expect(bridge.updateSession).toHaveBeenCalledWith(
-      expect.objectContaining({ id: SESSION_ID, mode: "branches", scrollTop: 120 }),
+      expect.objectContaining({ id: SESSION_ID, base: "main", scrollTop: 120 }),
     );
 
     useReviewStore.getState().flushWriteBacks();
@@ -1513,7 +1578,6 @@ describe("useReviewStore layer navigation", () => {
     const seeded: SessionSlice = {
       id: SESSION_ID,
       repo: { path: "/repo", name: "repo" },
-      mode: "branches",
       log: null,
       branches: null,
       brush: null,
@@ -1631,7 +1695,6 @@ describe("useReviewStore tour doc navigation", () => {
     const seeded: SessionSlice = {
       id: SESSION_ID,
       repo: { path: "/repo", name: "repo" },
-      mode: "commits",
       log: null,
       branches: null,
       brush: null,
@@ -1669,7 +1732,6 @@ describe("useReviewStore tour doc navigation", () => {
     const withDoc: Session = {
       id: SESSION_ID,
       source: { kind: "local", repo: { path: "/repo", name: "repo" } },
-      mode: "commits",
       base: null,
       head: null,
       commitSelection: null,
@@ -1814,7 +1876,6 @@ describe("useReviewStore comment navigation", () => {
     const base: SessionSlice = {
       id: SESSION_ID,
       repo: { path: "/repo", name: "repo" },
-      mode: "branches",
       log: null,
       branches: null,
       brush: null,
@@ -1944,10 +2005,7 @@ describe("useReviewStore comment navigation", () => {
 
 describe("review export actions", () => {
   const REPO = { path: "/repo", name: "app" };
-  const ORIGIN: ReviewOrigin = {
-    source: { kind: "local", repo: REPO, base: "main", head: SHA_A },
-    patch: null,
-  };
+  const ORIGIN: ReviewOrigin = { repo: REPO, base: "main", head: SHA_A, patch: null };
   const COMMENT: Comment = {
     file: "src/a.ts",
     side: "additions",
@@ -1968,7 +2026,6 @@ describe("review export actions", () => {
     const base: SessionSlice = {
       id: SESSION_ID,
       repo: REPO,
-      mode: "commits",
       log: null,
       branches: null,
       brush: null,
@@ -2068,7 +2125,9 @@ describe("review export actions", () => {
     expect(bridge.getDiff).not.toHaveBeenCalled();
     const request = vi.mocked(bridge.saveReviewJson).mock.calls[0]?.[0];
     const artifact = ReviewArtifact.parse(JSON.parse(request?.content ?? ""));
-    expect(artifact.source).toEqual({ kind: "local", repo: REPO, base: "main", head: "feature" });
+    expect(artifact.repo).toBe(REPO.path);
+    expect(artifact.base).toBe("main");
+    expect(artifact.head).toBe("feature");
     expect(artifact.patch).toBeUndefined();
   });
 
@@ -2092,7 +2151,9 @@ describe("review export actions", () => {
     const request = vi.mocked(bridge.saveReviewJson).mock.calls[0]?.[0];
     const artifact = ReviewArtifact.parse(JSON.parse(request?.content ?? ""));
     expect(artifact.patch).toBe(MULTI_STATUS_PATCH);
-    expect(artifact.source).toEqual({ kind: "local", repo: REPO, base: SHA_A, head: SHA_A });
+    expect(artifact.repo).toBe(REPO.path);
+    expect(artifact.base).toBe(SHA_A);
+    expect(artifact.head).toBe(SHA_A);
   });
 
   it("surfaces an unreadable re-read rather than silently dropping the export", async () => {
@@ -2140,22 +2201,20 @@ describe("exit gate", () => {
   // `src/gone.ts` (a file it drops), so the same anchors place under a frozen patch
   // and degrade — header-pin and file-absent — under a drifted one.
   const EXIT_ARTIFACT = {
-    version: 1,
-    source: { kind: "local", repo: { path: "/repo", name: "app" }, base: "main", head: SHA_A },
+    repo: "/repo",
+    base: "main",
+    head: SHA_A,
     comments: [
       { file: "src/keep.ts", side: "additions", startLine: 5, endLine: 6, body: "authored: guard" },
       { file: "src/gone.ts", side: "additions", startLine: 3, endLine: 3, body: "authored: gone" },
     ],
     layers: [
       {
-        id: "l1",
         label: "Keep",
         summary: "keep layer",
-        kind: "foundation",
         ranges: [{ file: "src/keep.ts", side: "additions", startLine: 5, endLine: 6 }],
       },
       {
-        id: "l2",
         label: "Gone",
         summary: "gone layer",
         ranges: [{ file: "src/gone.ts", side: "additions", startLine: 3, endLine: 3 }],
@@ -2218,8 +2277,7 @@ describe("exit gate", () => {
   function seedImportedReview(review: ImportedReview): void {
     const slice: SessionSlice = {
       id: SESSION_ID,
-      repo: review.source.repo,
-      mode: "commits",
+      repo: review.repo,
       log: null,
       branches: null,
       brush: null,
@@ -2307,8 +2365,9 @@ describe("exit gate", () => {
       endLine: 6,
     });
 
-    // Layers round-trip verbatim in authored order.
-    expect(reopened.review.layers.map((layer) => layer.id)).toEqual(["l1", "l2"]);
+    // Layers round-trip verbatim in authored order (identity is re-stamped on each open,
+    // so the label and the prose are what must survive, never the id).
+    expect(reopened.review.layers.map((layer) => layer.label)).toEqual(["Keep", "Gone"]);
     expect(reopened.review.layers.map((layer) => layer.summary)).toEqual([
       "keep layer",
       "gone layer",
@@ -2360,8 +2419,9 @@ describe("exit gate", () => {
     for (const layer of current.layers) {
       expect(resolveLayerScroll(layer, current.layers, files, frozen).kind).toBe("outdated");
     }
-    expect(stepLayer(current.layers, null, 1)).toBe("l1");
-    expect(stepLayer(current.layers, "l1", 1)).toBe("l2");
+    const [first, second] = current.layers;
+    expect(stepLayer(current.layers, null, 1)).toBe(first?.id);
+    expect(stepLayer(current.layers, first?.id ?? null, 1)).toBe(second?.id);
   });
 
   it("places every anchor of the same artifact when it embeds a frozen patch, none outdated", async () => {
@@ -2472,7 +2532,6 @@ describe("reading progress", () => {
     const seeded: SessionSlice = {
       id: SESSION_ID,
       repo: { path: "/repo", name: "repo" },
-      mode: "commits",
       log: null,
       branches: null,
       brush: null,

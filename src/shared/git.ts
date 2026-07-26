@@ -172,16 +172,18 @@ export type FileAtRef = z.infer<typeof FileAtRef>;
 export const RepoRequest = z.object({ repoPath: RepoPath });
 export type RepoRequest = z.infer<typeof RepoRequest>;
 
-/** The two committed endpoints a review's commit list is drawn between. Each is a
- * `ReviewRef` (a branch name or a full sha), so it passes the same spawn boundary a
- * branch pick does — a review's authored `base`/`head` reproduced verbatim. */
-export const LogRange = z.object({ base: ReviewRef, head: ReviewRef });
+/** The committed endpoints a commit list is drawn between. Each is a `ReviewRef` (a
+ * branch name or a full sha), so it passes the same spawn boundary a branch pick does —
+ * a review's authored `base`/`head` reproduced verbatim. A null `base` is not a missing
+ * endpoint but a different question: the whole history reachable from `head`. */
+export const LogRange = z.object({ base: ReviewRef.nullable(), head: ReviewRef });
 export type LogRange = z.infer<typeof LogRange>;
 
-/** What `git:log` lists. `range` null walks HEAD (a repo session's commit brush,
- * with the working-tree pseudo-entry when dirty); a `range` lists `base..head` — the
- * commits a review is between (two-dot: what `head` adds over `base`), never the
- * working tree, which is not part of a diff between two committed refs. */
+/** What `git:log` lists. `range` null walks HEAD (the picker's default, and the only
+ * log that carries the working-tree pseudo-entry when the tree is dirty); a range with
+ * a base lists `base..head` — a review's own commits; a range with a *null* base lists
+ * `head`'s whole history, which is how the picker shows a branch other than the one
+ * checked out without comparing it to anything. */
 export const LogRequest = z.object({ repoPath: RepoPath, range: LogRange.nullable() });
 export type LogRequest = z.infer<typeof LogRequest>;
 

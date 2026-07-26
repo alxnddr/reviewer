@@ -56,7 +56,7 @@ function git(cwd: string, ...args: readonly string[]): string {
 }
 
 /** `mkdtemp` under macOS's `/var/folders` symlink; the real path is what `git rev-parse
- * --show-toplevel` reports, so a fixture that compares against `source.repo.path` must
+ * --show-toplevel` reports, so a fixture that compares against the artifact's `repo` must
  * resolve it here rather than assert on a path git will never print. */
 function tempRoot(prefix: string): string {
   return realpathSync(mkdtempSync(join(tmpdir(), prefix)));
@@ -97,14 +97,27 @@ export function installBundle(): InstalledCli {
 /** Invoke the installed bundle under **Node** from inside the foreign repo — the interpreter
  * an agent's machine has, and the one that catches the shebang regression (`bun build` stamps
  * a `#!/usr/bin/env bun` entrypoint bun-only, and the bundle then throws inside Stricli's
- * router under Node). The repo's own path is the cwd, so `--repo .` means what an agent means. */
-export function rvw(cli: InstalledCli, repo: ForeignRepo, args: readonly string[]): RvwResult {
-  const result = spawnSync("node", [cli.bundle, ...args], { cwd: repo.path, encoding: "utf8" });
+ * router under Node). The repo's own path is the cwd, so an omitted `--repo` means what an
+ * agent means. `stdin` is what makes the piped-draft path testable at all: `rvw emit` reads fd
+ * 0, which only a real child process has. */
+export function rvw(
+  cli: InstalledCli,
+  repo: ForeignRepo,
+  args: readonly string[],
+  stdin?: string,
+): RvwResult {
+  const result = spawnSync("node", [cli.bundle, ...args], {
+    cwd: repo.path,
+    encoding: "utf8",
+    ...(stdin === undefined ? {} : { input: stdin }),
+  });
   return { status: result.status ?? -1, stdout: result.stdout, stderr: result.stderr };
 }
 
 /** Stamp a two-commit history over whatever `writeHead` changes, and return both endpoints as
- * full shas — the only ref form `capturePatch` accepts (a rev-expression is rejected). */
+ * full shas. Shas rather than branch names because a test that names its endpoints exactly is
+ * a test whose assertions cannot be satisfied by the wrong commit; the *defaults* are what
+ * `emit.test.ts` and `live-range.test.ts` drive against a two-branch fixture. */
 function commitPair(root: string, writeHead: (root: string) => void): ForeignRepo {
   git(root, "add", "-A");
   git(root, "commit", "-qm", "base");
@@ -142,7 +155,7 @@ export function minimalRepo(): ForeignRepo {
 //   src/util.ts        one hunk    — a second coverable file, so "covered" is not one file's luck
 //
 // Eight coverable changed lines in total. The line numbers are asserted, not assumed: every
-// anchor the gate authors is checked to fall inside a span `rvw anchors` actually printed.
+// anchor the gate authors is checked to fall inside a span `rvw diff --json` actually printed.
 const ENGINE_BASE = Array.from({ length: 20 }, (_, index) => `l${index + 1}`).join("\n");
 const ENGINE_HEAD = ENGINE_BASE.replace("l2\n", "l2 changed\n").replace("l18\n", "l18 changed\n");
 const PNG_BASE = Uint8Array.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x01]);

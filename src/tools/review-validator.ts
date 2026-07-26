@@ -1,8 +1,13 @@
-import { ReviewArtifact, type ReviewLayer, type ReviewSide } from "../shared/review";
+import {
+  ReviewArtifact,
+  walkLayerInputs,
+  type ReviewLayerInput,
+  type ReviewSide,
+} from "../shared/review";
 import { resolveAnchor } from "../renderer/src/lib/diff/anchor";
 import { parsePatch } from "../renderer/src/lib/diff/patch";
 import { blockInlineRuns, parseLayerDescription } from "../renderer/src/lib/layer-description";
-import { layerDocumentOrder, MAX_LAYER_DEPTH } from "../renderer/src/lib/layers";
+import { MAX_LAYER_DEPTH } from "../renderer/src/lib/layers";
 
 // The pre-handoff check an agent runs on a `.reviewer.json` before giving it over. It reuses
 // the review domain rather than re-deriving it: the *same* `resolveAnchor`/`parsePatch`/
@@ -11,32 +16,33 @@ import { layerDocumentOrder, MAX_LAYER_DEPTH } from "../renderer/src/lib/layers"
 // fixing"; a re-implemented checker would drift and break that guarantee. Split into two pure
 // steps: `parseReviewArtifact` turns untrusted bytes into a typed artifact (or schema
 // problems), and `validatePlacement` places every anchor against a diff the caller supplies —
-// the CLI captures it at emit time and re-derives it from the artifact's `source` afterward,
-// so the same check runs whether the diff is embedded/frozen or freshly derived. Pure and
-// I/O-free: the CLI shell owns the filesystem read, the git spawn, and `process.exit`; this
-// module only decides.
+// the CLI captures it at emit time and re-derives it from the artifact's own repo/refs
+// afterward, so the same check runs whether the diff is embedded/frozen or freshly derived.
+// Pure and I/O-free: the CLI shell owns the filesystem read, the git spawn, and
+// `process.exit`; this module only decides.
 
 /** One reason an artifact is not ready to hand over. Each variant carries enough
  * locator for the authoring agent to find and fix the offending anchor, range, or
- * link — illegal states (e.g. a comment problem with no line range) can't be built. */
+ * link — illegal states (e.g. a comment problem with no line range) can't be built.
+ *
+ * A layer is named by its **ordinal path** (`"4.2.1"`), not an id: layers are authored
+ * nested and carry no identity, so the locator that helps is the position in the array the
+ * author wrote — which is also the section number the app will show for that row. */
 export type ValidationProblem =
   | { kind: "invalidJson"; message: string }
   | { kind: "schema"; path: string; message: string }
   | { kind: "missingPatch" }
   | { kind: "commentAnchorOutdated"; anchor: ProblemAnchor }
   | { kind: "commentFileAbsent"; anchor: ProblemAnchor }
-  | { kind: "layerRangeOutdated"; layerId: string; anchor: ProblemAnchor }
-  /** The outline contract, one variant per way to break it: `layers` is a tree, written in
-   * document order, no deeper than the reader can follow, and every layer in it reaches
-   * some code — its own, or its children's. */
-  | { kind: "parentNotFound"; layerId: string; parent: string }
-  | { kind: "parentCycle"; layerId: string }
-  | { kind: "nestingTooDeep"; layerId: string; depth: number }
-  | { kind: "layerWalksNothing"; layerId: string }
-  | { kind: "outOfDocumentOrder"; layerId: string }
-  | { kind: "unresolvedLink"; layerId: string; label: string; path: string }
-  /** The same dead-link rule applied to the overview's prose, which has no layer id to
-   * name — a separate variant rather than a nullable `layerId`, so neither locator can
+  | { kind: "layerRangeOutdated"; layer: string; anchor: ProblemAnchor }
+  /** What is left of the outline contract once `children` carries the shape: an outline no
+   * deeper than the reader can follow, in which every layer reaches some code — its own, or
+   * its children's. */
+  | { kind: "nestingTooDeep"; layer: string; depth: number }
+  | { kind: "layerWalksNothing"; layer: string }
+  | { kind: "unresolvedLink"; layer: string; label: string; path: string }
+  /** The same dead-link rule applied to the overview's prose, which sits under no layer to
+   * name — a separate variant rather than a nullable `layer`, so neither locator can
    * be built empty. */
   | { kind: "overviewUnresolvedLink"; label: string; path: string };
 
@@ -65,7 +71,7 @@ const CACHE_KEY = "validate";
 /** Untrusted artifact bytes → a typed artifact, or every reason it could not parse. Never
  * throws: malformed JSON and schema violations are reported as typed problems (the input is
  * untrusted). Placement is not checked here — the caller supplies the diff to place against
- * (`validatePlacement`), which the CLI re-derives from `artifact.source`. */
+ * (`validatePlacement`), which the CLI re-derives from the artifact's own repo/refs. */
 export function parseReviewArtifact(bytes: string): ParsedArtifact {
   let json: unknown;
   try {
@@ -99,91 +105,32 @@ export function parseReviewArtifact(bytes: string): ParsedArtifact {
   return { ok: true, artifact: parsed.data };
 }
 
-/** The outline contract:
+/** What is left of the outline contract once the outline is a real tree on the wire:
  *
- * - a `parent` names a layer that exists and is not itself (no dangling links),
- * - the `parent` chain terminates (no cycles),
- * - it is at most `MAX_LAYER_DEPTH` levels deep,
- * - every layer reaches some code — its own ranges, or a descendant's, and
- * - the array **is** the document: a subtree is contiguous and follows its parent.
+ * - it is at most `MAX_LAYER_DEPTH` levels deep, and
+ * - every layer reaches some code — its own ranges, or a descendant's.
  *
- * The last one is what lets every surface treat the array as the reading order without
- * re-sorting it, and the depth-and-reach rules are what keep a group meaningful: a layer
- * that walks nothing at all is an outline entry with no review behind it. Ranges on a
- * parent are *allowed* — a layer's extent is its own ranges plus its descendants', one
- * rule at every level — so nothing here has to arbitrate between the two. */
-export function validateOutline(layers: readonly ReviewLayer[]): ValidationProblem[] {
-  const byId = new Map(layers.map((layer) => [layer.id, layer]));
+ * The three rules this used to also carry — a `parent` naming a real layer, a `parent`
+ * chain that terminates, and the array being the tree in document order — are gone because
+ * `children` makes all three unrepresentable, not because they stopped mattering. What
+ * remains is what nesting cannot say: a depth a reader can still follow, and a group with
+ * an actual review behind it (a layer that walks nothing at all is an outline entry naming
+ * a part of the change that does not exist). Ranges on a parent are *allowed* — a layer's
+ * extent is its own ranges plus its descendants', one rule at every level — so nothing here
+ * has to arbitrate between the two. */
+export function validateOutline(layers: readonly ReviewLayerInput[]): ValidationProblem[] {
   const problems: ValidationProblem[] = [];
-  const childrenOf = new Map<string, ReviewLayer[]>();
-  let linksAreSound = true;
 
-  for (const layer of layers) {
-    if (layer.parent === undefined) {
-      continue;
-    }
-    const parent = byId.get(layer.parent);
-    if (parent === undefined || parent.id === layer.id) {
-      problems.push({ kind: "parentNotFound", layerId: layer.id, parent: layer.parent });
-      linksAreSound = false;
-      continue;
-    }
-    const siblings = childrenOf.get(parent.id);
-    if (siblings === undefined) {
-      childrenOf.set(parent.id, [layer]);
-    } else {
-      siblings.push(layer);
-    }
+  // Reach: a layer with no ranges of its own must have a descendant that has some.
+  const reaches = (layer: ReviewLayerInput): boolean =>
+    layer.ranges.length > 0 || layer.children.some(reaches);
 
-    // Depth is measured by walking up; the visited guard turns a cycle into a reported
-    // problem instead of a hang.
-    const seen = new Set<string>([layer.id]);
-    let depth = 1;
-    let current: ReviewLayer | undefined = parent;
-    while (current !== undefined) {
-      if (seen.has(current.id)) {
-        problems.push({ kind: "parentCycle", layerId: layer.id });
-        linksAreSound = false;
-        depth = 0;
-        break;
-      }
-      seen.add(current.id);
-      depth += 1;
-      current = current.parent === undefined ? undefined : byId.get(current.parent);
-    }
+  for (const { layer, ordinal, depth } of walkLayerInputs(layers)) {
     if (depth > MAX_LAYER_DEPTH) {
-      problems.push({ kind: "nestingTooDeep", layerId: layer.id, depth });
-      linksAreSound = false;
+      problems.push({ kind: "nestingTooDeep", layer: ordinal, depth });
     }
-  }
-
-  // Reach: a layer with no ranges must have a descendant that does, or it names a part of
-  // the review that does not exist.
-  const reaches = (layer: ReviewLayer, seen = new Set<string>()): boolean => {
-    if (seen.has(layer.id)) {
-      return false;
-    }
-    seen.add(layer.id);
-    return (
-      layer.ranges.length > 0 ||
-      (childrenOf.get(layer.id) ?? []).some((child) => reaches(child, seen))
-    );
-  };
-  for (const layer of layers) {
     if (!reaches(layer)) {
-      problems.push({ kind: "layerWalksNothing", layerId: layer.id });
-    }
-  }
-
-  // Order: only worth checking once the links themselves hold — a dangling or cyclic
-  // parent would report every following layer as misplaced, burying the real problem.
-  if (linksAreSound) {
-    const expected = layerDocumentOrder(layers);
-    for (const [index, layer] of layers.entries()) {
-      if (expected[index]?.id !== layer.id) {
-        problems.push({ kind: "outOfDocumentOrder", layerId: layer.id });
-        break;
-      }
+      problems.push({ kind: "layerWalksNothing", layer: ordinal });
     }
   }
 
@@ -192,7 +139,7 @@ export function validateOutline(layers: readonly ReviewLayer[]): ValidationProbl
 
 /** Every reason a parsed artifact's anchors would not place against `patch`, or `[]` when
  * they all do. The `patch` is the review's diff — captured at emit time, re-derived from the
- * artifact's `source` afterward, or a rare embedded frozen patch; this places against
+ * artifact's own repo/refs afterward, or a rare embedded frozen patch; this places against
  * whichever the caller resolved. Carrying a diff is a property of the parsed content, not the
  * bytes' length: a patch that parses to no file describes no change (absent, empty, or prose
  * that was never a diff), so there is nothing to place against — the root `missingPatch`
@@ -231,17 +178,18 @@ export function validatePlacement(artifact: ReviewArtifact, patch: string): Vali
     }
   }
 
-  for (const layer of artifact.layers) {
+  // Depth-first, so a problem's ordinal names the layer the same way the outline will.
+  for (const { layer, ordinal } of walkLayerInputs(artifact.layers)) {
     // Empty `ranges` is a valid parent rollup, not a "nothing
     // placed" failure: the loop simply has no range to check.
     for (const range of layer.ranges) {
       const file = byPath.get(range.file) ?? null;
       const resolution = resolveAnchor(range, { kind: "derived", file: file?.fileDiff ?? null });
       if (resolution.status === "outdated") {
-        problems.push({ kind: "layerRangeOutdated", layerId: layer.id, anchor: anchorOf(range) });
+        problems.push({ kind: "layerRangeOutdated", layer: ordinal, anchor: anchorOf(range) });
       }
     }
-    collectUnresolvedLinks(layer.id, layer.description, diffFiles, problems);
+    collectUnresolvedLinks(ordinal, layer.description, diffFiles, problems);
   }
 
   return problems;
@@ -253,7 +201,7 @@ export function validatePlacement(artifact: ReviewArtifact, patch: string): Vali
  * name), and its file-chip promotion is an opt-in nicety — flagging every non-file
  * span would reject legitimate descriptions, breaking the "zero manual fixing" bar. */
 function collectUnresolvedLinks(
-  layerId: string,
+  layer: string,
   description: string | undefined,
   diffFiles: ReadonlySet<string>,
   problems: ValidationProblem[],
@@ -264,7 +212,7 @@ function collectUnresolvedLinks(
   for (const block of parseLayerDescription(description, diffFiles)) {
     for (const run of blockInlineRuns(block)) {
       if (run.kind === "link" && run.file === null) {
-        problems.push({ kind: "unresolvedLink", layerId, label: run.label, path: run.path });
+        problems.push({ kind: "unresolvedLink", layer, label: run.label, path: run.path });
       }
     }
   }
@@ -298,19 +246,13 @@ export function describeProblem(problem: ValidationProblem): string {
     case "commentFileAbsent":
       return `comment references a file absent from the diff: ${locator(problem.anchor)}`;
     case "layerRangeOutdated":
-      return `layer "${problem.layerId}" range does not place in the diff: ${locator(problem.anchor)}`;
-    case "parentNotFound":
-      return `layer "${problem.layerId}" names parent "${problem.parent}", which is not a layer in this review`;
-    case "parentCycle":
-      return `layer "${problem.layerId}" sits in a parent cycle — the chain up from it never reaches a top-level layer`;
+      return `layer ${problem.layer} range does not place in the diff: ${locator(problem.anchor)}`;
     case "nestingTooDeep":
-      return `layer "${problem.layerId}" is ${problem.depth} levels deep — nesting stops at ${MAX_LAYER_DEPTH}`;
+      return `layer ${problem.layer} is ${problem.depth} levels deep — nesting stops at ${MAX_LAYER_DEPTH}`;
     case "layerWalksNothing":
-      return `layer "${problem.layerId}" walks no code: it has no ranges, and nothing under it has any`;
-    case "outOfDocumentOrder":
-      return `layer "${problem.layerId}" is out of document order — a layer's descendants must follow it, together, before the next layer at its level`;
+      return `layer ${problem.layer} walks no code: it has no ranges, and nothing under it has any`;
     case "unresolvedLink":
-      return `layer "${problem.layerId}" description links [${problem.label}](${problem.path}) — path is not in the diff`;
+      return `layer ${problem.layer} description links [${problem.label}](${problem.path}) — path is not in the diff`;
     case "overviewUnresolvedLink":
       return `overview body links [${problem.label}](${problem.path}) — path is not in the diff`;
   }

@@ -87,8 +87,6 @@ export type OverviewModel = {
   additions: number;
   deletions: number;
   comments: number;
-  /** Percent of changed lines the layers walk — the same number `rvw coverage` prints. */
-  linePct: number;
   /** The reader's own progress over the whole diff, and where to pick it back up: the
    * first chapter in reading order with something left in it, or null when the review is
    * read out. Derived here beside every other figure the doc prints, for the same reason —
@@ -270,7 +268,6 @@ export function buildOverview({
     additions,
     deletions,
     comments: comments.length,
-    linePct: summary.linePct,
     read: tallyRead(files, readFiles),
     // Over the *effective* list, so a review whose only unread work sits in files no layer
     // walks resumes into the inferred "not covered" chapter rather than reporting itself

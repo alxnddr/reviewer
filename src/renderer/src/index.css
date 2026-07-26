@@ -205,6 +205,212 @@ html[data-theme="github-light"] {
   }
 }
 
+@layer components {
+  /* ── Frosted glass ─────────────────────────────────────────────────────────────
+   * Worn by the app's two persistent floating controls — the overview's action island and
+   * the comment stepper. That is the rule for when it is the right answer: a transient
+   * overlay (the find bar) can be an opaque slab because it is gone in a moment, while these
+   * two sit over the reader's content for as long as they are working, and an opaque slab
+   * there is a permanent hole in the page.
+   *
+   * THE THING THAT MATTERS MOST: blur and tint trade against each other, and they are not
+   * interchangeable. Tint is what makes a panel opaque — push it and the backdrop stops being
+   * there at all, and every other detail on the surface becomes decoration on a solid pill.
+   * Blur is what makes the backdrop *illegible* while leaving it present: colour and mass
+   * survive, words do not. So when the labels are fighting what is behind them — which they
+   * were, over a diff — the answer is more blur and not more tint. The tint stays around a
+   * third, doing no more than keeping the surface in the current theme's colour; the blur
+   * carries the legibility.
+   *
+   * Five layers, coarse to fine:
+   *   frost    the backdrop blur, plus a saturate to put back the chroma a blur washes out.
+   *            That one property is most of the difference between glass and grey gauze.
+   *   tint     a thin fill of the theme's own popover tone, so the surface belongs to the
+   *            current theme rather than being white on all eight.
+   *   sheen    a diagonal wash off the top-left corner: a light source off frame.
+   *   sweep    a hairline of light along the top edge, brightest at the middle and gone at
+   *            both ends. The single most recognisable detail on a glass panel, and the one
+   *            a uniform border can't produce — a real edge catches light where it faces the
+   *            source and loses it as it curves away.
+   *   bevel    the lens edge: a broad gather top-left, a narrow crescent bottom-right.
+   *
+   * The dark arm is not the light one with different numbers — the physics invert. On light
+   * the panel is lit from in front and every edge detail is white. On dark the backdrop it
+   * samples is near-black, so it needs a brightness lift just to avoid reading as a hole, and
+   * the white details drop to a fraction of their light-mode strength or they look like
+   * plastic piping. */
+  [data-glass] {
+    /* `relative` so the edge pseudo-elements have something to anchor to, and `isolate` so
+     * the `z-index: -1` sheen layer stays inside this element's stacking context instead of
+     * sinking behind the pane.
+     *
+     * The whole block lives in `@layer components` for one specific reason: an unlayered rule
+     * outranks every Tailwind utility, so `position: relative` here silently beat `absolute`
+     * on any caller that positioned the glass element itself — the comment stepper lost its
+     * `absolute bottom-3 left-1/2` and stretched across the entire diff. In the components
+     * layer, utilities win, which is the relationship a component base style should have with
+     * them anyway. */
+    position: relative;
+    isolation: isolate;
+    /* Tint and sheen in one declaration: the gradient is `background-image`, the tint
+     * `background-color` under it, so the two compose instead of one replacing the other. */
+    background-color: color-mix(in oklch, var(--popover) 32%, transparent);
+    background-image: linear-gradient(
+      135deg,
+      oklch(1 0 0 / 0.4) 0%,
+      oklch(1 0 0 / 0.08) 32%,
+      transparent 64%
+    );
+    /* Light mode is where every glass tutorial quietly assumes a photograph. They all specify
+     * a white border, which works beautifully over a colourful backdrop and is *invisible*
+     * over a white document — the panel loses its silhouette entirely and floats as a vague
+     * pale smear. So the outline here is a faint neutral off the theme's ink, which is what
+     * actually holds the shape on paper; the white edge treatments stay, but they do the
+     * lighting rather than the drawing. Dark inverts this and takes the white border, where
+     * the assumption holds. */
+    border: 1px solid color-mix(in oklch, var(--foreground) 14%, transparent);
+    /* Outer shadow wide and shallow — its job is to lift the panel off the text, and the
+     * moment it reads as "dropped from a height" it becomes the highest-contrast thing on a
+     * page someone is trying to read. The two inset lines are the top and bottom faces. */
+    box-shadow:
+      0 8px 32px -8px oklch(0 0 0 / 0.16),
+      0 2px 8px -4px oklch(0 0 0 / 0.1),
+      inset 0 1px 0 0 oklch(1 0 0 / 0.55),
+      inset 0 -1px 0 0 oklch(1 0 0 / 0.12);
+  }
+
+  .dark [data-glass] {
+    background-color: color-mix(in oklch, var(--popover) 30%, transparent);
+    background-image: linear-gradient(
+      135deg,
+      oklch(1 0 0 / 0.1) 0%,
+      oklch(1 0 0 / 0.03) 32%,
+      transparent 64%
+    );
+    border-color: oklch(1 0 0 / 0.12);
+    box-shadow:
+      0 10px 32px -8px oklch(0 0 0 / 0.6),
+      0 2px 8px -4px oklch(0 0 0 / 0.45),
+      inset 0 1px 0 0 oklch(1 0 0 / 0.16),
+      inset 0 -1px 0 0 oklch(0 0 0 / 0.25);
+  }
+
+  /* The top-edge light sweep. One pixel tall, inset from both ends, brightest in the middle:
+   * a specular streak where the curve of the edge faces the light, dying out as the edge
+   * turns away toward the corners. A `border-top` cannot do this — a border is one flat
+   * colour the whole way across, and it is precisely the *falloff* that reads as curvature. */
+  [data-glass]::before {
+    content: "";
+    position: absolute;
+    top: 0;
+    right: 12%;
+    left: 12%;
+    height: 1px;
+    border-radius: inherit;
+    pointer-events: none;
+    background: linear-gradient(90deg, transparent, oklch(1 0 0 / 0.85), transparent);
+  }
+
+  .dark [data-glass]::before {
+    background: linear-gradient(90deg, transparent, oklch(1 0 0 / 0.3), transparent);
+  }
+
+  /* The lens edge — the detail that separates "translucent panel" from "piece of glass".
+   *
+   * Real glass with a rounded edge has no uniform bright outline. It has a bevel: the curve
+   * gathers light into a broad soft band on the side facing the source and throws a narrow
+   * bright crescent out the opposite side where the curve turns away. Two bands, opposite
+   * edges, different widths, both feathered.
+   *
+   * Both come from one trick — a large negative spread on an offset inset shadow. A -11px
+   * spread shrinks the shadow until it has vanished; offsetting it 10px pushes it back out
+   * past one edge only, so all that survives is a crescent along that edge. The 1px blur on
+   * the layer feathers both, so they read as light falling off a curve rather than as strokes.
+   *
+   * Above the content rather than behind it, because the edge of a piece of glass is in front
+   * of what is inside it — harmless, since it is a hairline at the perimeter and the labels
+   * sit well inside the padding. */
+  [data-glass]::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    border-radius: inherit;
+    pointer-events: none;
+    box-shadow:
+      inset 3px 3px 2px -3px oklch(1 0 0 / 0.9),
+      inset -10px -8px 0 -11px oklch(1 0 0 / 1);
+    filter: blur(1px);
+  }
+
+  .dark [data-glass]::after {
+    box-shadow:
+      inset 3px 3px 2px -3px oklch(1 0 0 / 0.3),
+      inset -10px -8px 0 -11px oklch(1 0 0 / 0.4);
+  }
+
+  @supports (backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px)) {
+    /* A blur heavy enough to erase every trace of the backdrop takes the effect with it: what
+     * is left is a white pill that happens to be computed expensively. But the floor is set
+     * by legibility, not by taste — these panels park over the diff, and at 22px the code
+     * behind them was still resolving into individual glyphs that fought the labels sitting
+     * on top. The band that works is wide enough that the backdrop survives as soft colour
+     * and shape while nothing behind it is readable as text.
+     *
+     * NO `url()` HERE, however tempting. An SVG filter reference in `backdrop-filter` is the
+     * one way to give the panel real refraction, and Chromium — so, Electron — parses it,
+     * reports `CSS.supports(…) === true`, echoes it back from `getComputedStyle`, and then
+     * paints nothing: not just the refraction, the *entire chain* is dropped, blur included.
+     * This surface spent its whole life with a backdrop-filter that did nothing, which is
+     * why it read as a pale sheet of nothing over legible text. `filter: url()` on ordinary
+     * content is fine and unrelated; it is specifically the backdrop form that is inert.
+     *
+     * Light takes a heavier blur than dark, which looks backwards until you notice what each
+     * is blurring: dark-mode prose is light text on near-black, so it dissolves into a glow
+     * almost immediately, while light-mode prose is near-black on white — the highest
+     * contrast the app ever paints — and survives a blur that would erase anything else. */
+    [data-glass] {
+      backdrop-filter: blur(40px) saturate(190%);
+      -webkit-backdrop-filter: blur(40px) saturate(190%);
+    }
+    .dark [data-glass] {
+      /* The brightness lift is what keeps dark-theme glass from reading as a hole: the
+       * backdrop it samples is already near-black, so without it the panel comes out darker
+       * than the page it floats over, which is the opposite of how a lit surface behaves. */
+      backdrop-filter: blur(30px) saturate(180%) brightness(1.6);
+      -webkit-backdrop-filter: blur(30px) saturate(180%) brightness(1.6);
+    }
+  }
+
+  /* No backdrop-filter: the tint is now the entire surface rather than a tint over a blur, so
+   * it has to be opaque enough to carry the labels on its own. */
+  @supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+    [data-glass] {
+      background-color: color-mix(in oklch, var(--popover) 92%, transparent);
+    }
+    .dark [data-glass] {
+      background-color: color-mix(in oklch, var(--popover) 94%, transparent);
+    }
+  }
+
+  /* Transparency is a system-level accessibility setting, not a taste one: a reader who has
+   * asked for less of it has asked for this to be a solid object. The blur goes with it — it
+   * is the expensive half, and meaningless without the translucency it was blurring for. */
+  @media (prefers-reduced-transparency: reduce) {
+    [data-glass],
+    .dark [data-glass] {
+      backdrop-filter: none;
+      -webkit-backdrop-filter: none;
+      background-color: var(--popover);
+      background-image: none;
+      border-color: var(--border);
+    }
+    [data-glass]::before,
+    [data-glass]::after {
+      display: none;
+    }
+  }
+}
+
 /* Electron-only window-drag surfaces (titleBarStyle "hiddenInset" removes the system one). */
 .app-region-drag {
   -webkit-app-region: drag;

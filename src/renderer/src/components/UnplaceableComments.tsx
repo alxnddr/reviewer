@@ -102,8 +102,8 @@ type UnplaceableRowProps = {
 };
 
 /** One stranded comment, on the same raised surface as a placed `CommentThread` —
- * same fill, same edge, same body — but headed by its file location (mono) since it
- * has no line to sit on. */
+ * same fill, same edge, same body — but headed by its file location, since it has no
+ * line to sit on. */
 function UnplaceableRow({ comment, onDiscard, showDiscard }: UnplaceableRowProps): ReactElement {
   const location = commentLocation(comment);
 
@@ -111,7 +111,7 @@ function UnplaceableRow({ comment, onDiscard, showDiscard }: UnplaceableRowProps
     <div className="flex flex-col gap-1.5 rounded-lg border border-border-strong bg-comment-surface px-4 py-3 font-sans text-foreground">
       <div className="flex items-center gap-2 text-xs text-text-muted">
         <TooltipHint content={location} whenTruncated side="top" align="start">
-          <span className="min-w-0 truncate font-mono select-text">{location}</span>
+          <span className="min-w-0 truncate tabular-nums select-text">{location}</span>
         </TooltipHint>
         {showDiscard && (
           <Button

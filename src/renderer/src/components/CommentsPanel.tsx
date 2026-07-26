@@ -1,5 +1,5 @@
 import { useEffect, useMemo, type ReactElement } from "react";
-import { ChevronDown, ChevronRight, History, MapPinOff, MessageSquare } from "lucide-react";
+import { History, MapPinOff, MessageSquare } from "lucide-react";
 import type { Comment } from "../../../shared/review";
 import type { PatchFile } from "@/lib/diff/patch";
 import type { FitToContentRefs } from "@/lib/fit-panel";
@@ -7,6 +7,13 @@ import { orderedComments, type CommentNavEntry } from "@/lib/diff/comment-naviga
 import { FileTypeIcon } from "@/components/FileTypeIcon";
 import { TooltipHint } from "@/components/ui/tooltip";
 import { commentLocation, segmentInlineCode } from "@/lib/comment-body";
+import {
+  RAIL_GLYPH,
+  RailCaption,
+  RailRowButton,
+  RailRowMeta,
+  RailSection,
+} from "@/components/rail";
 import { cn } from "@/lib/utils";
 
 type CommentsPanelProps = {
@@ -36,6 +43,11 @@ type CommentsPanelProps = {
 function rowDomId(commentId: string): string {
   return `comment-row-${commentId}`;
 }
+
+/** How far a comment row hangs under its file heading: the heading's glyph and the gap
+ * after it, so the preview starts exactly where the file name does. Derived from the
+ * rail's own glyph size rather than guessed as a padding class. */
+const COMMENT_INDENT_PX = 20;
 
 /** The body collapsed to a single scannable line: newlines and runs of space fold
  * to one space so the row's `truncate` shows a clean preview (the full body reads
@@ -165,20 +177,23 @@ export function CommentsPanel({
     <div
       className={cn("flex flex-col", fill ? "h-full min-h-0" : "shrink-0 border-b border-border")}
     >
-      <button
-        type="button"
-        aria-expanded={expanded}
-        onClick={onToggleExpanded}
-        className="flex h-9 w-full shrink-0 items-center gap-1.5 px-2 text-xs text-text-muted hover:text-foreground"
+      {/* The disclosure doubles as this panel's F6 landing spot (see lib/focus-regions):
+          it is the first focusable thing in the region, so arriving here and pressing Tab
+          walks the comment rows in order. */}
+      <RailSection
+        data-comments-panel
+        expanded={expanded}
+        onSelect={onToggleExpanded}
+        bordered={false}
+        icon={<MessageSquare aria-hidden="true" className={RAIL_GLYPH} />}
       >
-        {expanded ? (
-          <ChevronDown aria-hidden="true" className="size-3.5" />
-        ) : (
-          <ChevronRight aria-hidden="true" className="size-3.5" />
-        )}
-        <MessageSquare aria-hidden="true" className="size-3.5" />
+        {/* The count stays in both states. Unlike the layer count it is a number a reviewer
+            acts on — how much is left to answer — so it is worth a permanent slot, and
+            keeping it permanent is also what stops the heading from renaming itself the
+            instant you click to fold it. Open, the rows below happen to add up to it; that
+            is a reason to trust it, not a reason to take it away. */}
         {count === 1 ? "1 comment" : `${count} comments`}
-      </button>
+      </RailSection>
       {expanded && (
         <div
           ref={fit?.viewportRef}
@@ -193,10 +208,10 @@ export function CommentsPanel({
                       so it takes the stranded surface's own glyph and stays out of the
                       sticky stack — a divider that stuck would compete with the heading
                       it introduces. */}
-                  <div className="flex h-7 items-center gap-1.5 px-2 text-2xs text-text-faint">
+                  <RailCaption className="text-text-faint">
                     <MapPinOff aria-hidden="true" className="size-3 shrink-0" />
                     Not in this diff
-                  </div>
+                  </RailCaption>
                   <ul>{renderGroups(stranded)}</ul>
                 </li>
               )}
@@ -220,15 +235,20 @@ function FileHeading({ path }: { path: string }): ReactElement {
     // it): a margin would leave a gap the rows underneath scroll through while the
     // heading is pinned, and a heading with a stripe of moving text above it stops
     // reading as a heading.
-    <div className="sticky top-0 z-10 flex h-8 items-center gap-1.5 overflow-hidden bg-sidebar px-2 pt-1">
-      <FileTypeIcon path={path} className="size-3.5" />
+    <RailCaption className="sticky top-0 z-10 h-8 overflow-hidden bg-sidebar pt-1">
+      <FileTypeIcon path={path} className={RAIL_GLYPH} />
       {/* Only a path with a directory can lose anything to the narrowing, so only
           that one arms a hint — on a root-level file it would repeat the row. */}
       <TooltipHint content={dir === "" ? null : path} side="right" align="center">
         <span className="flex min-w-0 items-baseline gap-1.5">
           {/* The name never gives up room (`shrink-0`): it is the heading, and a rail
-              narrow enough to threaten it should spend the directory first. */}
-          <span className="shrink-0 truncate text-xs font-medium text-foreground">{name}</span>
+              narrow enough to threaten it should spend the directory first.
+
+              It sets at the rail's own 14px, like the rows it heads — a heading a step
+              *smaller* than its own items is backwards, and it was the last of the 11/12px
+              text this column had accumulated. Weight and full ink are what separate it
+              from the rows, which is the same pair the file tree uses. */}
+          <span className="shrink-0 truncate text-sm font-medium text-foreground">{name}</span>
           {dir !== "" && (
             // A directory elides from the *front* (`…/lib/diff`): its tail is the part
             // that says which one it is, and the head is the part every path in the
@@ -236,13 +256,13 @@ function FileHeading({ path }: { path: string }): ReactElement {
             // itself has no strong RTL characters, so the segments keep their order —
             // and `text-left` keeps a short directory beside its name instead of
             // drifting to the far edge.
-            <span className="min-w-0 truncate text-left text-2xs text-text-faint [direction:rtl]">
+            <span className="min-w-0 truncate text-left text-xs text-text-faint [direction:rtl]">
               {dir}
             </span>
           )}
         </span>
       </TooltipHint>
-    </div>
+    </RailCaption>
   );
 }
 
@@ -253,9 +273,9 @@ type CommentRowProps = {
 };
 
 /** One comment: its body on a single elided line, indented under its file heading,
- * with the line it sits on held in a quiet mono column at the right — the diff's
- * own gutter idiom, and the one piece of metadata the row cannot infer from the
- * heading above it. An outdated anchor has no line to name (it pins to the file
+ * with the line it sits on held in a quiet figure column at the right — the diff's
+ * own gutter idiom, in the shell's tabular figures, and the one piece of metadata the
+ * row cannot infer from the heading above it. An outdated anchor has no line to name (it pins to the file
  * header on the surface), so the column carries the drift glyph instead of a number
  * that would be a guess. The active row is lit to match the ringed card in the diff. */
 function CommentRow({ entry, active, onFocus }: CommentRowProps): ReactElement {
@@ -266,17 +286,15 @@ function CommentRow({ entry, active, onFocus }: CommentRowProps): ReactElement {
   const line = entry.line ?? comment.startLine;
 
   return (
-    <button
-      type="button"
+    <RailRowButton
       id={rowDomId(comment.id)}
       onClick={onFocus}
       aria-current={active}
-      // pl-7 lines the preview up with the heading's file name (px-2 + the glyph
-      // and its gap), so a file and everything under it share one left edge.
-      className={cn(
-        "group flex h-7 w-full items-center gap-2 pr-2 pl-7 text-left",
-        active ? "bg-selected" : "hover:bg-border/30",
-      )}
+      selected={active}
+      // Indented to line the preview up with the heading's file name (the glyph and its
+      // gap), so a file and everything under it share one left edge.
+      indent={COMMENT_INDENT_PX}
+      className="group gap-2"
     >
       {/* The hint hangs off the preview, not the row: the row is the hit target and a
           hint on it would repeat what the row already shows. This one says what the
@@ -297,7 +315,7 @@ function CommentRow({ entry, active, onFocus }: CommentRowProps): ReactElement {
             {status !== "placed" && (
               <span className="text-background/70">
                 {status === "outdated" ? "Outdated · " : "Not in this diff · "}
-                <span className="font-mono break-all">{commentLocation(comment)}</span>
+                <span className="break-all tabular-nums">{commentLocation(comment)}</span>
               </span>
             )}
           </div>
@@ -306,20 +324,15 @@ function CommentRow({ entry, active, onFocus }: CommentRowProps): ReactElement {
         {/* The preview keeps the body's sans/mono split — a `symbol` reads as machine
             text here exactly as it does on the card, which is most of what makes a
             one-line preview recognisable as the comment it stands for. */}
-        <span
-          className={cn(
-            "min-w-0 flex-1 truncate text-sm",
-            active ? "text-foreground" : "text-text-muted group-hover:text-foreground",
-          )}
-        >
+        <span className="min-w-0 flex-1 truncate text-sm">
           <InlineBody body={bodyPreview(comment.body)} />
         </span>
       </TooltipHint>
       {status === "outdated" ? (
         <History aria-hidden="true" className="size-3 shrink-0 text-warning" />
       ) : (
-        <span className="shrink-0 font-mono text-2xs tabular-nums text-text-faint">{line}</span>
+        <RailRowMeta>{line}</RailRowMeta>
       )}
-    </button>
+    </RailRowButton>
   );
 }

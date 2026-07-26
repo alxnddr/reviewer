@@ -3,7 +3,7 @@ import { reviewArtifactJsonSchema } from "../../src/tools/review-schema";
 import { EXIT_READY, type LocalContext } from "../context";
 
 // `rvw schema` — the artifact shape an agent authors against, derived from the same
-// `ReviewArtifact` zod contract `rvw validate` parses with, never hand-written (the
+// `ReviewArtifact` zod contract `rvw emit`/`rvw check` parse with, never hand-written (the
 // hand-written copy is the one that drifts). Read-only and I/O-free apart from stdout, so it
 // cannot fail: there is no input to reject and no file to read. Exit 0, always.
 
@@ -19,7 +19,7 @@ const ENFORCEMENT_NOTE = [
   "note: a document satisfying this schema is well-formed, not necessarily valid.",
   "      JSON Schema cannot express an anchor's ascending line range (endLine >= startLine",
   "      compares two sibling properties), nor whether an anchor places on a hunk of the",
-  "      review's diff. `rvw validate` and `rvw check` enforce both.",
+  "      review's diff. `rvw emit` and `rvw check` enforce both.",
 ];
 
 export const schemaCommand = buildCommand<SchemaFlags, [], LocalContext>({

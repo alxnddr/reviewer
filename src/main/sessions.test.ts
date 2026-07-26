@@ -39,7 +39,6 @@ function persistedSession(overrides: Partial<Session> = {}): Session {
   return {
     id: randomUUID(),
     source: localSource("/repos/a"),
-    mode: "commits",
     base: null,
     head: null,
     commitSelection: null,
@@ -69,7 +68,6 @@ describe("createSessionStore", () => {
     // the SHA-anchored brush, whatever mode is driving.
     const mutated: Session = {
       ...created,
-      mode: "branches",
       base: "main",
       head: "feature/tabs",
       commitSelection: { kind: "commitRange", first: "a".repeat(40), last: "b".repeat(40) },
@@ -87,12 +85,9 @@ describe("createSessionStore", () => {
     const dir = makeStoreDir();
     const store = createSessionStore({ directory: dir });
     const review: ImportedReview = {
-      source: {
-        kind: "local",
-        repo: { path: "/repos/app", name: "app" },
-        base: "main",
-        head: "a".repeat(40),
-      },
+      repo: { path: "/repos/app", name: "app" },
+      base: "main",
+      head: "a".repeat(40),
       patch: null,
       overview: null,
       comments: [
@@ -129,12 +124,9 @@ describe("createSessionStore", () => {
     const dir = makeStoreDir();
     const store = createSessionStore({ directory: dir });
     const review: ImportedReview = {
-      source: {
-        kind: "local",
-        repo: { path: "/repos/app", name: "app" },
-        base: "main",
-        head: "a".repeat(40),
-      },
+      repo: { path: "/repos/app", name: "app" },
+      base: "main",
+      head: "a".repeat(40),
       patch: "diff --git a/src/a.ts b/src/a.ts\n",
       overview: null,
       comments: [],
@@ -274,7 +266,6 @@ describe("createSessionStore", () => {
     const v1Session = {
       id,
       source: localSource("/repos/a"),
-      mode: "commits",
       base: null,
       head: null,
       commitSelection: null,
@@ -286,7 +277,6 @@ describe("createSessionStore", () => {
     const store = createSessionStore({ directory: dir });
     const migrated: Session = {
       ...v1Session,
-      mode: "commits",
       comments: [],
       layers: [],
       overview: null,

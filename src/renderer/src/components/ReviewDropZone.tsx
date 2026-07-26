@@ -73,7 +73,7 @@ export function ReviewDropZone({ children }: ReviewDropZoneProps): ReactElement 
       {isDraggingFile && (
         <div className="pointer-events-none absolute inset-0 z-50 flex items-center justify-center bg-background/75">
           <div className="rounded-xl border-2 border-dashed border-accent-strong bg-surface px-6 py-4 text-sm text-foreground shadow-lg">
-            Drop a <span className="font-mono">.reviewer.json</span> to open the review
+            Drop a .reviewer.json to open the review
           </div>
         </div>
       )}

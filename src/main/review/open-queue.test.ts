@@ -11,7 +11,6 @@ function fakeSession(id: string): Session {
   return {
     id,
     source: { kind: "local", repo: { path: "/repos/app", name: "app" } },
-    mode: "commits",
     base: null,
     head: null,
     commitSelection: null,

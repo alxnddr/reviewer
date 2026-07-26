@@ -3,6 +3,7 @@ import { assertNever } from "../../../shared/assert";
 import type {
   BranchList,
   BranchName,
+  LogRange,
   CommitSelection,
   CommitSha,
   DiffSelection,
@@ -18,10 +19,9 @@ import {
   type ReviewLayer,
   type ReviewOrigin,
   type ReviewOverview,
-  type ReviewSource,
 } from "../../../shared/review";
 import type { ReviewOpenFailure, ReviewOpenResponse } from "../../../shared/review-open";
-import type { SelectionMode, Session, SessionId, SessionSnapshot } from "../../../shared/session";
+import type { Session, SessionId, SessionSnapshot } from "../../../shared/session";
 import { parsePatch, type PatchFile } from "../lib/diff/patch";
 import { findLayer, soloFiles, stepLayer as stepLayerId } from "../lib/layers";
 import { effectiveLayers } from "../lib/coverage";
@@ -79,12 +79,15 @@ export type BranchesState =
 export type SessionSlice = {
   id: SessionId;
   repo: RepoInfo;
-  mode: SelectionMode;
   log: LogState | null;
   branches: BranchesState | null;
   brush: BrushRange | null;
-  base: BranchName | null;
+  /** The branch whose commits the picker lists, or null for the checked-out one. */
   head: BranchName | null;
+  /** What `head` is compared against, or null to list `head`'s own history. Set, the
+   * log holds exactly what `head` adds over it — a pull request's commit list — and the
+   * brush narrows within that. */
+  base: BranchName | null;
   /** The one union driving the rendered diff; everything above is input to it. */
   selection: DiffSelection | null;
   diff: DiffState;
@@ -130,8 +133,8 @@ export type SessionSlice = {
    * on a file the subset drops becomes unplaceable (surfaced, never lost). SHA-anchored
    * and persisted; only ever set on a refs review session, never a frozen one. */
   reviewSubrange: CommitSelection | null;
-  /** The authored source + patch this session was opened from: what the
-   * round-trip export re-emits as the artifact `source`. Stable — unlike
+  /** The authored repo, refs, and patch this session was opened from: what the
+   * round-trip export re-emits as the artifact's own `repo`/`base`/`head`. Stable — unlike
    * `reviewDiff` it is never cleared when the reviewer picks their own diff, so a
    * curated review still exports to its authored `base..head` after navigation.
    * Null for a plain repo session (nothing to export as a review). */
@@ -230,7 +233,6 @@ type ReviewState = {
   clearOpenFailure: () => void;
   clearReviewOpenFailure: () => void;
   clearReviewExportFailure: () => void;
-  setMode: (mode: SelectionMode, sessionId?: SessionId) => void;
   /** Moves the brush without touching the diff — drag feedback between pointerdown
    * and pointerup; `commitBrush` (or any loading action) makes it real. */
   previewBrush: (action: BrushAction, sessionId?: SessionId) => void;
@@ -239,8 +241,13 @@ type ReviewState = {
   /** Clear a review session's commit subrange back to the whole review: the diff
    * returns to the authored pin (frozen or refs) so every comment places again. */
   resetReviewSubrange: (sessionId?: SessionId) => void;
-  setBase: (branch: BranchName, sessionId?: SessionId) => void;
+  /** Point the picker at another branch: its commits become the list. Refetches the
+   * log and re-locates the brush in it. */
   setHead: (branch: BranchName, sessionId?: SessionId) => void;
+  /** Compare `head` against `base` — the list narrows to exactly what `head` adds over
+   * it, the range a pull request shows — or pass null to drop the comparison and go
+   * back to the branch's own history. Refetches the log, like `setHead`. */
+  setBase: (branch: BranchName | null, sessionId?: SessionId) => void;
   swapBranches: (sessionId?: SessionId) => void;
   selectFile: (path: string, sessionId?: SessionId) => void;
   selectAdjacentFile: (direction: 1 | -1, sessionId?: SessionId) => void;
@@ -372,29 +379,37 @@ function planDiff(slice: SessionSlice): DiffPlan {
           },
         };
   }
-  if (slice.mode === "commits") {
-    if (slice.log === null || slice.log.phase === "loading") {
-      return { kind: "nothing" };
-    }
-    if (slice.log.phase === "failed") {
-      return { kind: "blocked", failure: slice.log.failure };
-    }
-    if (slice.brush === null) {
-      return { kind: "nothing" };
-    }
-    const selection = selectionFromBrush(slice.log.entries, slice.brush);
-    return selection === null ? { kind: "nothing" } : { kind: "selection", selection };
-  }
-  if (slice.branches === null || slice.branches.phase === "loading") {
+  // A repo session's picker is one list of commits and a brush over it, so the diff
+  // follows from how much of that list is brushed — there is no second flag that could
+  // disagree with what is on screen. A comparison brushed end to end IS the comparison
+  // (three-dot `base...head`, what a pull request shows); anything narrower is the range
+  // of commits actually banded, which is also how a review's subrange works.
+  if (slice.log === null || slice.log.phase === "loading") {
     return { kind: "nothing" };
   }
-  if (slice.branches.phase === "failed") {
-    return { kind: "blocked", failure: slice.branches.failure };
+  if (slice.log.phase === "failed") {
+    return { kind: "blocked", failure: slice.log.failure };
   }
-  if (slice.base === null || slice.head === null) {
+  const entries = slice.log.entries;
+  const comparing = slice.base !== null && slice.head !== null;
+  if (
+    comparing &&
+    slice.base !== null &&
+    slice.head !== null &&
+    // An empty list still names the comparison rather than nothing: "no changes between
+    // these two" is an answer, and the diff pane says it in those words.
+    (entries.length === 0 || (slice.brush !== null && isFullBrush(entries, slice.brush)))
+  ) {
+    return {
+      kind: "selection",
+      selection: { kind: "branches", base: slice.base, head: slice.head },
+    };
+  }
+  if (slice.brush === null) {
     return { kind: "nothing" };
   }
-  return { kind: "selection", selection: { kind: "branches", base: slice.base, head: slice.head } };
+  const selection = selectionFromBrush(entries, slice.brush);
+  return selection === null ? { kind: "nothing" } : { kind: "selection", selection };
 }
 
 function sameSelection(a: DiffSelection | null, b: DiffSelection | null): boolean {
@@ -514,23 +529,27 @@ function headShaOf(log: LogState | null): CommitSha | null {
  * embeds a frozen patch re-read from git so its comments place on their exact
  * authored lines. `"nothing"` is a session with no diff selected — there is
  * genuinely nothing to export; `"diffUnreadable"` is a needed re-read that failed,
- * surfaced rather than silently dropped. */
-type ExportOrigin = { source: ReviewSource; patch: string | null };
-type ExportResolution = ExportOrigin | "nothing" | "diffUnreadable";
+ * surfaced rather than silently dropped. An imported review's origin *is* this shape
+ * already (`ReviewOrigin`), so re-emitting one is a pass-through. */
+type ExportResolution = ReviewOrigin | "nothing" | "diffUnreadable";
 
 async function resolveExportOrigin(
   bridge: ReviewerBridge,
   slice: SessionSlice,
 ): Promise<ExportResolution> {
   if (slice.reviewOrigin !== null) {
-    return { source: slice.reviewOrigin.source, patch: slice.reviewOrigin.patch };
+    return slice.reviewOrigin;
   }
   if (slice.selection === null) {
     return "nothing";
   }
-  const plan = exportSourceFor(slice.selection, slice.repo, headShaOf(slice.log));
-  if (!plan.needsPatch) {
-    return { source: plan.source, patch: null };
+  const { repo, base, head, needsPatch } = exportSourceFor(
+    slice.selection,
+    slice.repo,
+    headShaOf(slice.log),
+  );
+  if (!needsPatch) {
+    return { repo, base, head, patch: null };
   }
   const response = await bridge.getDiff({
     repoPath: slice.repo.path,
@@ -542,7 +561,7 @@ async function resolveExportOrigin(
   // An empty patch is no usable frozen diff (and no comment could have anchored on
   // it): fall through to the source refs rather than freezing an empty artifact.
   const patch = response.value.patch;
-  return { source: plan.source, patch: patch.length > 0 ? patch : null };
+  return { repo, base, head, patch: patch.length > 0 ? patch : null };
 }
 
 /** Inputs only — log/branches/diff are re-derived on load and never cross IPC. */
@@ -550,9 +569,8 @@ function persistedSession(slice: SessionSlice): Session {
   return {
     id: slice.id,
     source: { kind: "local", repo: slice.repo },
-    mode: slice.mode,
-    base: slice.base,
     head: slice.head,
+    base: slice.base,
     commitSelection: slice.commitSelection,
     selectedFilePath: slice.selectedFilePath,
     scrollTop: slice.scrollTop,
@@ -718,12 +736,11 @@ function restoredSlice(session: Session): SessionSlice {
   return {
     id: session.id,
     repo: session.source.repo,
-    mode: session.mode,
     log: null,
     branches: null,
     brush: null,
-    base: session.base,
     head: session.head,
+    base: session.base,
     selection: null,
     diff: { phase: "idle" },
     selectedFilePath: session.selectedFilePath,
@@ -751,6 +768,96 @@ function restoredSlice(session: Session): SessionSlice {
   };
 }
 
+/** What `git log` walks for this session: a review's own `base..head`, another
+ * branch's whole history when the picker was pointed at one, or HEAD — which is the
+ * only walk that carries the working-tree row, and so the one a session listing its
+ * own checked-out branch must keep. */
+function logRangeFor(slice: SessionSlice): LogRange | null {
+  if (slice.reviewOrigin !== null) {
+    return { base: slice.reviewOrigin.base, head: slice.reviewOrigin.head };
+  }
+  if (slice.head === null) {
+    // Detached, or before the branch list landed: HEAD is the only ref there is.
+    return null;
+  }
+  if (slice.base !== null) {
+    return { base: slice.base, head: slice.head };
+  }
+  const current =
+    slice.branches !== null && slice.branches.phase === "loaded"
+      ? slice.branches.list.currentBranch
+      : null;
+  // Listing the checked-out branch is the HEAD walk — the same commits, plus the
+  // working tree — so it is left as `null` rather than named, which would trade that
+  // row away for nothing.
+  return slice.head === current ? null : { base: null, head: slice.head };
+}
+
+/** Where the brush lands on a freshly walked log.
+ *
+ * A comparison is brushed end to end: asking for `main → feature/x` means asking for
+ * what that comparison holds, and a band over all of it is how the picker says so (the
+ * same shape a review session opens in over its own range). Without one, the list is a
+ * whole history and nobody means "all of it" by that — so it lands on the newest entry,
+ * or on the persisted selection when that is still in this walk. */
+function brushAfterWalk(
+  entries: LogEntry[],
+  slice: SessionSlice,
+  /** True when the reviewer just moved an endpoint, false when a session is being
+   * restored. The two want opposite things from the same log: a reviewer who has just
+   * asked for `main → feature/x` wants to see that comparison, not whatever narrower
+   * range they happened to be on beforehand; a session reopening wants the place it was
+   * left, and nothing else. */
+  land: boolean,
+): BrushRange | null {
+  if (entries.length === 0) {
+    return null;
+  }
+  // A comparison is brushed end to end — asking for it means asking for what it holds,
+  // which is the same shape a review session opens in over its own range. A plain
+  // history is not something anyone means "all of" by, so it lands on the newest entry.
+  const whole = (): BrushRange | null =>
+    slice.base !== null ? reviewFullBrush(entries) : { anchor: 0, focus: 0 };
+  if (land || slice.commitSelection === null) {
+    return whole();
+  }
+  // Restoring: a selection the log can no longer place degrades to nothing rather than
+  // to some other diff — reopening a session onto a *different* range than the one it
+  // was left on is worse than reopening onto none.
+  return brushFromSelection(entries, slice.commitSelection);
+}
+
+/** Re-walk the log after the picker moves an endpoint, then place the brush in what came
+ * back. */
+async function reloadLog(set: Setter, get: Getter, sessionId: SessionId): Promise<void> {
+  const bridge = window.reviewer;
+  const slice = get().sessions[sessionId];
+  if (!bridge || slice === undefined) {
+    return;
+  }
+  setSlice(set, get, sessionId, { log: { phase: "loading" } });
+  const log = await bridge.getCommitLog({
+    repoPath: slice.repo.path,
+    range: logRangeFor(slice),
+  });
+  const current = get().sessions[sessionId];
+  if (current === undefined || current.head !== slice.head || current.base !== slice.base) {
+    // The reviewer moved the endpoints again while this was in flight.
+    return;
+  }
+  if (!log.ok) {
+    setSlice(set, get, sessionId, { log: { phase: "failed", failure: log.failure }, brush: null });
+    await runDiffLoad(set, get, sessionId);
+    return;
+  }
+  const entries = log.value.entries;
+  setSlice(set, get, sessionId, {
+    log: { phase: "loaded", entries },
+    brush: brushAfterWalk(entries, current, true),
+  });
+  await runDiffLoad(set, get, sessionId);
+}
+
 /** First activation of a restored slice: fetch log + branches, re-locate the
  * SHA-anchored brush in the fresh log, then load the diff. Never runs twice for
  * one slice — later activations render what is already there. */
@@ -768,12 +875,9 @@ async function deriveSession(set: Setter, get: Getter, sessionId: SessionId): Pr
   });
 
   // A review session lists only its own `base..head` commits; a repo session walks
-  // HEAD (range null). The pin still renders the diff, so a failed ranged log only
-  // costs the reviewer the ability to narrow, never the review itself.
-  const range =
-    slice.reviewOrigin !== null
-      ? { base: slice.reviewOrigin.source.base, head: slice.reviewOrigin.source.head }
-      : null;
+  // whichever branch its picker was left on. The pin still renders the diff, so a
+  // failed ranged log only costs the reviewer the ability to narrow, never the review.
+  const range = logRangeFor(slice);
   const [log, branches] = await Promise.all([
     bridge.getCommitLog({ repoPath: slice.repo.path, range }),
     bridge.listBranches({ repoPath: slice.repo.path }),
@@ -801,11 +905,12 @@ async function deriveSession(set: Setter, get: Getter, sessionId: SessionId): Pr
       review !== null
         ? review.brush
         : log.ok
-          ? recoverBrush(log.value.entries, current.commitSelection)
+          ? brushAfterWalk(log.value.entries, current, false)
           : null,
     reviewSubrange: review !== null ? review.reviewSubrange : current.reviewSubrange,
-    // Persisted picks win; only a never-chosen side gets the fresh-open default.
-    base: current.base ?? (branches.ok ? branches.value.defaultBranch : null),
+    // A persisted pick wins; a fresh session lists the branch it is standing on. `base`
+    // is deliberately not defaulted: a session opens on the branch's own history, and a
+    // comparison is something the reviewer asks for.
     head:
       current.head ??
       (branches.ok ? (branches.value.currentBranch ?? branches.value.defaultBranch) : null),
@@ -831,17 +936,6 @@ async function applyReviewOpen(
   set({ reviewOpenFailure: null });
   await get().syncSessions();
   get().activateSession(response.value.sessionId);
-}
-
-function recoverBrush(
-  entries: LogEntry[],
-  commitSelection: CommitSelection | null,
-): BrushRange | null {
-  if (commitSelection === null) {
-    // Nothing was ever selected — restore like a fresh open: the newest entry.
-    return entries.length > 0 ? { anchor: 0, focus: 0 } : null;
-  }
-  return brushFromSelection(entries, commitSelection);
 }
 
 /** A review session's brush over its `base..head` ranged log, and the subrange to
@@ -1036,12 +1130,11 @@ export const useReviewStore = create<ReviewState>((set, get) => ({
     const slice: SessionSlice = {
       id: session.id,
       repo,
-      mode: "commits",
       log: { phase: "loading" },
       branches: { phase: "loading" },
       brush: null,
-      base: null,
       head: null,
+      base: null,
       selection: null,
       diff: { phase: "loading" },
       selectedFilePath: null,
@@ -1089,7 +1182,6 @@ export const useReviewStore = create<ReviewState>((set, get) => ({
       // The freshest thing in the repo — the working tree when dirty, the newest
       // commit otherwise — is the selection a reviewer wants first.
       brush: log.ok && log.value.entries.length > 0 ? { anchor: 0, focus: 0 } : null,
-      base: branches.ok ? branches.value.defaultBranch : null,
       head: branches.ok ? (branches.value.currentBranch ?? branches.value.defaultBranch) : null,
     });
     await runDiffLoad(set, get, session.id);
@@ -1160,22 +1252,6 @@ export const useReviewStore = create<ReviewState>((set, get) => ({
     }
   },
 
-  setMode: (mode, sessionId) => {
-    const id = sessionId ?? get().activeSessionId;
-    if (id === null) {
-      return;
-    }
-    const slice = get().sessions[id];
-    if (slice === undefined || slice.mode === mode) {
-      return;
-    }
-    // Repo-session only: a review session has no mode switch (its selector is scoped
-    // to the review), so this never fires against a pinned diff.
-    setSlice(set, get, id, { mode });
-    scheduleSessionWriteBack(get, id);
-    void runDiffLoad(set, get, id);
-  },
-
   previewBrush: (action, sessionId) => {
     const id = sessionId ?? get().activeSessionId;
     if (id === null) {
@@ -1238,24 +1314,34 @@ export const useReviewStore = create<ReviewState>((set, get) => ({
     void runDiffLoad(set, get, id);
   },
 
-  setBase: (branch, sessionId) => {
-    const id = sessionId ?? get().activeSessionId;
-    if (id === null) {
-      return;
-    }
-    setSlice(set, get, id, { base: branch });
-    scheduleSessionWriteBack(get, id);
-    void runDiffLoad(set, get, id);
-  },
-
   setHead: (branch, sessionId) => {
     const id = sessionId ?? get().activeSessionId;
     if (id === null) {
       return;
     }
+    const slice = get().sessions[id];
+    if (slice === undefined || slice.reviewOrigin !== null || slice.head === branch) {
+      return;
+    }
     setSlice(set, get, id, { head: branch });
     scheduleSessionWriteBack(get, id);
-    void runDiffLoad(set, get, id);
+    void reloadLog(set, get, id);
+  },
+
+  setBase: (branch, sessionId) => {
+    const id = sessionId ?? get().activeSessionId;
+    if (id === null) {
+      return;
+    }
+    const slice = get().sessions[id];
+    if (slice === undefined || slice.reviewOrigin !== null || slice.base === branch) {
+      return;
+    }
+    // Comparing to yourself is not a comparison; it is the branch's own history, which
+    // is what null already means.
+    setSlice(set, get, id, { base: branch === slice.head ? null : branch });
+    scheduleSessionWriteBack(get, id);
+    void reloadLog(set, get, id);
   },
 
   swapBranches: (sessionId) => {
@@ -1269,7 +1355,7 @@ export const useReviewStore = create<ReviewState>((set, get) => ({
     }
     setSlice(set, get, id, { base: slice.head, head: slice.base });
     scheduleSessionWriteBack(get, id);
-    void runDiffLoad(set, get, id);
+    void reloadLog(set, get, id);
   },
 
   selectFile: (path, sessionId) => {
@@ -1698,7 +1784,9 @@ export const useReviewStore = create<ReviewState>((set, get) => ({
       return;
     }
     const artifact = serializeReview({
-      source: origin.source,
+      repo: origin.repo,
+      base: origin.base,
+      head: origin.head,
       patch: origin.patch,
       overview: slice.overview,
       comments: slice.comments,
@@ -1743,7 +1831,9 @@ export const useReviewStore = create<ReviewState>((set, get) => ({
     const comments = markdownCommentsFrom(slice.comments, files, frozen);
     const response = await bridge.saveReviewMarkdown({
       content: reviewToMarkdown({
-        source: origin.source,
+        repo: origin.repo,
+        base: origin.base,
+        head: origin.head,
         overview: slice.overview,
         layers: slice.layers,
         comments,

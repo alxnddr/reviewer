@@ -62,8 +62,8 @@ export function CommentThread({
           // Drift is a warning about placement, not a chip: the badge fill used here
           // before was `--selected`, the app's neutral selection tone, so a drifted
           // comment read as a *selected* one. The glyph carries the state and the
-          // authored location follows it as quiet mono — the same pairing the sidebar
-          // row uses for the same fact.
+          // authored location follows it quietly — the same pairing the sidebar row uses
+          // for the same fact.
           <div className="mb-1.5 flex min-w-0 items-center gap-1.5 text-xs">
             <History aria-hidden="true" className="size-3 shrink-0 text-warning" />
             <span className="shrink-0 text-warning">Outdated</span>
@@ -71,7 +71,7 @@ export function CommentThread({
               ·
             </span>
             <TooltipHint content={location} whenTruncated side="top" align="start">
-              <span className="truncate font-mono text-text-muted select-text">{location}</span>
+              <span className="truncate text-text-muted tabular-nums select-text">{location}</span>
             </TooltipHint>
           </div>
         )}
@@ -80,24 +80,31 @@ export function CommentThread({
       {/* Its own popover surface, so it reads as hovering above the diff rather than
           printed on it — the same treatment the stepper and the find bar take. */}
       <div className="absolute right-2 bottom-full mb-1 flex items-center gap-0.5 rounded-lg bg-popover p-0.5 opacity-0 shadow-md ring-1 ring-foreground/10 transition-opacity duration-(--duration-fast) group-hover/comment:opacity-100 focus-within:opacity-100">
-        <Button
-          variant="ghost"
-          size="icon-xs"
-          aria-label="Edit comment"
-          className="text-text-muted hover:bg-foreground/10 hover:text-foreground dark:hover:bg-foreground/10"
-          onClick={onEdit}
-        >
-          <Pencil />
-        </Button>
-        <Button
-          variant="ghost"
-          size="icon-xs"
-          aria-label="Discard comment"
-          className="text-text-muted hover:bg-destructive/10 hover:text-destructive dark:hover:bg-destructive/15"
-          onClick={onDiscard}
-        >
-          <Trash2 />
-        </Button>
+        {/* Two glyphs on a surface that only appears on hover: whichever one the reader is
+            reaching for, they arrived without a label. `top`, so the popup opens away from
+            the card it is about rather than over the comment body. */}
+        <TooltipHint content="Edit comment" side="top" align="center">
+          <Button
+            variant="ghost"
+            size="icon-xs"
+            aria-label="Edit comment"
+            className="text-text-muted hover:bg-foreground/10 hover:text-foreground dark:hover:bg-foreground/10"
+            onClick={onEdit}
+          >
+            <Pencil />
+          </Button>
+        </TooltipHint>
+        <TooltipHint content="Discard comment" side="top" align="end">
+          <Button
+            variant="ghost"
+            size="icon-xs"
+            aria-label="Discard comment"
+            className="text-text-muted hover:bg-destructive/10 hover:text-destructive dark:hover:bg-destructive/15"
+            onClick={onDiscard}
+          >
+            <Trash2 />
+          </Button>
+        </TooltipHint>
       </div>
     </div>
   );

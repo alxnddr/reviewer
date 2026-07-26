@@ -1,6 +1,7 @@
 import type { ReactElement } from "react";
 import { Columns2, Rows3 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { TooltipHint } from "@/components/ui/tooltip";
 import { selectActiveSlice, useReviewStore } from "@/stores/review";
 
 // The layout switch only has meaning against a diff, so it appears with one
@@ -30,18 +31,26 @@ export function DiffStyleToggle(): ReactElement | null {
   const Icon = split ? Columns2 : Rows3;
 
   return (
-    <Button
-      variant="ghost"
-      size="icon"
-      // Match the theme trigger: the ghost hover (bg-muted) is invisible on the
-      // bg-sidebar titlebar, so the wash comes from the border tone, with dark:
-      // twins to outrank the variant's own dark arm.
-      className="app-region-no-drag hover:bg-border/60 dark:hover:bg-border/60"
-      disabled={presence === "loading"}
-      aria-label={`Switch to ${split ? "unified" : "split"} view`}
-      onClick={() => setDiffStyle(split ? "unified" : "split")}
+    // The icon names the current layout, which leaves the click itself unlabelled — the one
+    // thing about this control a glyph genuinely cannot say. The hint says it.
+    <TooltipHint
+      side="bottom"
+      align="end"
+      content={split ? "Switch to unified view" : "Switch to split view"}
     >
-      <Icon />
-    </Button>
+      <Button
+        variant="ghost"
+        size="icon"
+        // Match the theme trigger: the ghost hover (bg-muted) is invisible on the
+        // bg-sidebar titlebar, so the wash comes from the border tone, with dark:
+        // twins to outrank the variant's own dark arm.
+        className="app-region-no-drag hover:bg-border/60 dark:hover:bg-border/60"
+        disabled={presence === "loading"}
+        aria-label={`Switch to ${split ? "unified" : "split"} view`}
+        onClick={() => setDiffStyle(split ? "unified" : "split")}
+      >
+        <Icon />
+      </Button>
+    </TooltipHint>
   );
 }

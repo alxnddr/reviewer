@@ -1,7 +1,10 @@
-import { type ReactElement, type ReactNode } from "react";
+import { type ReactElement } from "react";
 import { ChevronLeft, ChevronRight, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { GLASS_DIVIDER, GLASS_MUTED } from "@/components/Glass";
+import { ShortcutHint } from "@/components/ui/kbd";
 import { TooltipHint } from "@/components/ui/tooltip";
+import { cn } from "@/lib/utils";
 
 type CommentNavIndicatorProps = {
   /** 1-based place of the focused comment among the navigable ones. */
@@ -16,16 +19,6 @@ type CommentNavIndicatorProps = {
   onRecenter: () => void;
   onClose: () => void;
 };
-
-/** A shortcut key inside a tooltip. The popup paints `bg-foreground/text-background`,
- * so the chip tints off the *background* token to stay legible on it. */
-function Key({ children }: { children: ReactNode }): ReactElement {
-  return (
-    <kbd className="rounded-sm bg-background/20 px-1 py-px font-mono text-2xs text-background">
-      {children}
-    </kbd>
-  );
-}
 
 /** The comment stepper: the heads-up control for walking a review's comments,
  * floating at the bottom of the diff while a walk is in progress.
@@ -53,27 +46,27 @@ export function CommentNavIndicator({
     <div
       role="group"
       aria-label="Review comments"
-      // The app's floating-surface idiom, shared with every popover in the kit
-      // (select, dropdown, combobox): a hairline ring rather than `border-border`,
-      // which on the dark themes is a near-invisible grey against a near-black diff —
-      // the pill read as an unanchored smudge. A pill, not a panel: the find bar owns
-      // the rounded-rect-with-a-field shape at the top right, and the two overlays
-      // should never be mistaken for each other at a glance.
-      className="absolute bottom-3 left-1/2 z-20 flex -translate-x-1/2 items-center gap-0.5 rounded-full bg-popover p-1 text-popover-foreground shadow-md ring-1 ring-foreground/10"
+      data-glass
+      // The same glass the overview's action island takes, and for the same reason: this is
+      // a control that floats over the reader's content while they work rather than
+      // appearing and going away, so an opaque slab is a hole in the diff for as long as the
+      // walk lasts. The two are the app's only persistent floating surfaces and they now
+      // read as one kind of object — bottom-centre, pill, frosted — which is also what says
+      // they are the same *sort* of thing: where you are, and how to move.
+      //
+      // Still a pill, not a panel: the find bar owns the rounded-rect-with-a-field shape at
+      // the top right, and the two overlays must stay tellable apart at a glance.
+      className="absolute bottom-3 left-1/2 z-20 flex -translate-x-1/2 items-center gap-0.5 rounded-full p-1 text-popover-foreground"
     >
       <TooltipHint
-        content={
-          <>
-            Previous comment <Key>p</Key>
-          </>
-        }
+        content={<ShortcutHint action="Previous comment" keys="p" />}
         side="top"
         align="center"
       >
         <Button
           variant="ghost"
           size="icon-sm"
-          className="rounded-full"
+          className={cn("rounded-full", GLASS_MUTED)}
           aria-label="Previous comment"
           onClick={onPrevious}
         >
@@ -89,7 +82,7 @@ export function CommentNavIndicator({
         <Button
           variant="ghost"
           size="sm"
-          className="rounded-full px-2 tabular-nums"
+          className={cn("rounded-full px-2 tabular-nums", GLASS_MUTED)}
           aria-label={`Comment ${position} of ${count} — scroll back to it`}
           onClick={onRecenter}
         >
@@ -102,18 +95,14 @@ export function CommentNavIndicator({
       </TooltipHint>
 
       <TooltipHint
-        content={
-          <>
-            Next comment <Key>n</Key>
-          </>
-        }
+        content={<ShortcutHint action="Next comment" keys="n" />}
         side="top"
         align="center"
       >
         <Button
           variant="ghost"
           size="icon-sm"
-          className="rounded-full"
+          className={cn("rounded-full", GLASS_MUTED)}
           aria-label="Next comment"
           onClick={onNext}
         >
@@ -123,21 +112,17 @@ export function CommentNavIndicator({
 
       {/* Leaving the walk is a different class of action from moving inside it, so it
           sits past a divider rather than reading as a fourth step. */}
-      <span aria-hidden="true" className="mx-0.5 h-4 w-px shrink-0 bg-border" />
+      <span aria-hidden="true" className={GLASS_DIVIDER} />
 
       <TooltipHint
-        content={
-          <>
-            Stop navigating <Key>Esc</Key>
-          </>
-        }
+        content={<ShortcutHint action="Stop navigating" keys="Esc" />}
         side="top"
         align="center"
       >
         <Button
           variant="ghost"
           size="icon-sm"
-          className="rounded-full"
+          className={cn("rounded-full", GLASS_MUTED)}
           aria-label="Stop navigating comments"
           onClick={onClose}
         >

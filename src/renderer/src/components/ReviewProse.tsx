@@ -29,7 +29,16 @@ type FileChipProps = {
 /** A resolved file reference: a chip that jumps the diff to the file. Set in the prose's
  * own face, not mono — it names a file, it does not quote code, and a mono run inside a
  * sentence reads as a foreign body. Sized and padded a step tighter than the button's `xs`
- * so the chip sits *in* the line rather than swelling it. */
+ * so the chip sits *in* the line rather than swelling it.
+ *
+ * Laid out `inline-block`, not the button's default `inline-flex`: a flex box takes its
+ * baseline from its *first item*, which here is the icon — a glyph with no baseline of its
+ * own, so the browser synthesises one at its bottom edge and the whole chip rides above the
+ * sentence it sits in. As an inline block the baseline comes from the chip's own line of
+ * text, which is the label, so the label sits on the prose's baseline exactly as the words
+ * either side of it do. Height then follows from the line box (no fixed `h-*`, which an
+ * inline block would honour and force the text off-centre inside its own border), and the
+ * icon goes back to being an inline glyph nudged onto the text's optical middle. */
 function FileChip({ label, path, onSelect }: FileChipProps): ReactElement {
   return (
     <Button
@@ -37,11 +46,11 @@ function FileChip({ label, path, onSelect }: FileChipProps): ReactElement {
       variant="ghost"
       size="xs"
       onClick={onSelect}
-      className="mx-0.5 h-5.5 gap-1 rounded border border-border-strong px-1.5 align-baseline text-sm hover:bg-border/60 dark:hover:bg-border/60"
+      className="mx-0.5 inline-block h-auto rounded border border-border-strong px-1.5 align-baseline text-sm leading-5 hover:bg-border/60 dark:hover:bg-border/60"
     >
       {/* The file's own type glyph, exactly as the tree and the doc's file rows draw it —
           a file looks like itself wherever the app names it, mid-sentence included. */}
-      <FileTypeIcon path={path} className="size-3.5" />
+      <FileTypeIcon path={path} className="mr-1 inline size-3.5 align-[-0.2em]" />
       {label}
     </Button>
   );

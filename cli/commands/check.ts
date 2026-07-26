@@ -6,24 +6,34 @@ import {
   validatePlacement,
   type ValidationProblem,
 } from "../../src/tools/review-validator";
-import { coverageOfPatch, isComplete, type CoverageReport } from "../../src/tools/review-coverage";
-import { coverageReportLines } from "../coverage-report";
+import {
+  coverageOfPatch,
+  isComplete,
+  layerExtentsOf,
+  type CoverageReport,
+} from "../../src/tools/review-coverage";
+import { coverageSummaryLines } from "../coverage-report";
 import { artifactDiff } from "../git";
-import { EXIT_CANNOT_RUN, EXIT_PROBLEMS, EXIT_READY, type LocalContext } from "../context";
-import { errorMessage } from "../errors";
+import { EXIT_PROBLEMS, EXIT_READY, type LocalContext } from "../context";
+import { errorMessage, writeCannotRun } from "../errors";
 
-// `rvw check <artifact>` — the one gate an agent runs before handing a review over. It
-// composes the same parse + placement check `rvw validate` runs with the same
-// `coverageOfPatch` `rvw coverage` runs, both over one diff re-derived from the artifact's
-// `source` (a rare embedded/frozen artifact supplies it directly). The composition is where
-// the two severities are kept distinct: a mis-anchor is a hard failure — an artifact whose
-// anchors do not place cannot open clean — while an uncovered changed line is a warning,
-// because a strong review may deliberately skip trivia. Only `--require-complete` promotes a
-// coverage gap to a failure.
+// `rvw check <artifact>` — the one question an agent asks about a review it already has: does
+// this open clean? It is the whole of the old `validate` (parse + placement, hard-fail) with
+// the old `coverage` folded in behind `--coverage`, over one diff re-derived from the
+// artifact's own repo/refs — a rare embedded/frozen artifact supplies it directly.
+//
+// Two severities, kept distinct. A mis-anchor is a hard failure: an artifact whose anchors do
+// not place cannot open clean. An uncovered changed line is at most a warning, because a strong
+// review may deliberately skip trivia, and only `--require-complete` promotes it.
+//
+// Coverage is opt-in rather than default, and the warning is conditional, for the same reason:
+// `layers` is optional now, so telling a comments-only review that "a coverable changed line is
+// in no layer" is telling it off for a walkthrough it never claimed to write. A review with no
+// layers has no coverage story to be incomplete about, so it is not given one.
 //
 // Validation runs first and short-circuits: an artifact that does not parse, or whose anchors
-// do not place, has nothing sound to measure, so it reports validation problems and no
-// coverage — the shape `CheckReport` makes explicit. A diff that will not re-derive is a
+// do not place, has nothing sound to measure, so it reports validation problems and no coverage
+// — the shape `CheckReport` makes explicit. A diff that will not re-derive is a
 // shell-cannot-run (exit 2). Placement's `missingPatch` already caught a diff-less range as a
 // validation problem, so by the time coverage runs the universe is guaranteed present: the
 // coverage guard below can only fire if the cores contradict each other, which is a bug, not a
@@ -31,14 +41,18 @@ import { errorMessage } from "../errors";
 
 type CheckFlags = {
   readonly json?: boolean;
+  readonly coverage?: boolean;
   readonly requireComplete?: boolean;
 };
 
 /** The composite outcome. Modelled as a union on which stage decided it, so "refused by
  * validation" can never carry a coverage report it never computed, and a coverage verdict
- * always carries the report it was read from. `ok` is the exit-0 predicate either way. */
+ * always carries the report it was read from. The plain `stage: "validate"` pass is the
+ * default run's answer: valid, and coverage was never asked for. `ok` is the exit-0 predicate
+ * in every arm. */
 export type CheckReport =
   | { readonly ok: false; readonly stage: "validate"; readonly problems: ValidationProblem[] }
+  | { readonly ok: true; readonly stage: "validate" }
   | {
       readonly ok: boolean;
       readonly stage: "coverage";
@@ -49,21 +63,23 @@ export type CheckReport =
 
 export const checkCommand = buildCommand<CheckFlags, [string], LocalContext>({
   docs: {
-    brief: "The pre-handoff gate: validate (hard-fail) then coverage (warn, or fail on request)",
+    brief: "The pre-handoff gate: does this artifact open clean? (--coverage to also score it)",
     fullDescription: [
-      "Runs the same validator `rvw validate` runs and the same coverage `rvw coverage` runs,",
-      "as one gate with one exit code, over one diff re-derived from the artifact's own branch",
-      "(so the repo must be present; a rare embedded/frozen artifact supplies it directly).",
-      "Validation is a hard failure: an anchor that does not place, a description link that does",
-      "not resolve, or a range with no changes exits 1 and coverage is not reported (there is",
-      "nothing sound to measure). Coverage is advisory: a gap prints a warning and still exits 0,",
-      "unless --require-complete promotes it to exit 1. Exit 2 when the artifact cannot be read or",
-      "its diff cannot be re-derived.",
+      "Runs the same parse and placement check the app anchors with, over one diff re-derived",
+      "from the artifact's own branch (so the repo must be present; a rare embedded/frozen",
+      "artifact supplies it directly). An anchor that does not place, a description link that",
+      "does not resolve, or a range with no changes is a hard failure: exit 1, each problem with",
+      "its exact locator. --coverage adds which changed lines sit in no layer — a headline and a",
+      "per-file rollup in text, the whole report under --json. A gap warns and still exits 0",
+      "(and does not even warn when the review has no layers), unless --require-complete",
+      "promotes it to exit 1. Exit 2 when the artifact cannot be read or its diff cannot be",
+      "re-derived.",
     ].join("\n"),
     customUsage: [
-      "draft.reviewer.json",
-      "draft.reviewer.json --require-complete",
-      "draft.reviewer.json --json",
+      "change.reviewer.json",
+      "change.reviewer.json --coverage",
+      "change.reviewer.json --require-complete",
+      "change.reviewer.json --json",
     ],
   },
   parameters: {
@@ -73,9 +89,14 @@ export const checkCommand = buildCommand<CheckFlags, [string], LocalContext>({
         brief: "Emit the structured CheckReport as JSON on stdout for an agent to parse",
         optional: true,
       },
+      coverage: {
+        kind: "boolean",
+        brief: "Also report which changed lines sit in no layer",
+        optional: true,
+      },
       requireComplete: {
         kind: "boolean",
-        brief: "Promote a coverage gap from a warning to exit 1 (opt-in completeness gate)",
+        brief: "Promote a coverage gap from a warning to exit 1 (implies --coverage)",
         optional: true,
       },
     },
@@ -89,8 +110,10 @@ export const checkCommand = buildCommand<CheckFlags, [string], LocalContext>({
     try {
       bytes = readFileSync(artifact, "utf8");
     } catch (error) {
-      this.process.stderr.write(`cannot read ${artifact}: ${errorMessage(error)}\n`);
-      this.process.exitCode = EXIT_CANNOT_RUN;
+      writeCannotRun(this, flags.json, {
+        code: "artifactUnreadable",
+        message: `cannot read ${artifact}: ${errorMessage(error)}`,
+      });
       return;
     }
 
@@ -105,8 +128,7 @@ export const checkCommand = buildCommand<CheckFlags, [string], LocalContext>({
     if (!capture.ok) {
       // The diff could not be re-derived (repo/ref gone or oversized): neither stage ran, so
       // it is a shell-cannot-run (exit 2), not a review verdict.
-      this.process.stderr.write(`${capture.message}\n`);
-      this.process.exitCode = EXIT_CANNOT_RUN;
+      writeCannotRun(this, flags.json, { code: "gitFailed", message: capture.message });
       return;
     }
 
@@ -117,19 +139,36 @@ export const checkCommand = buildCommand<CheckFlags, [string], LocalContext>({
       return;
     }
 
+    // `--require-complete` is a stronger statement of the same request, so asking for the gate
+    // implies asking for the report — a caller should never have to pass both.
+    const requireComplete = flags.requireComplete === true;
+    if (flags.coverage !== true && !requireComplete) {
+      const report: CheckReport = { ok: true, stage: "validate" };
+      if (flags.json === true) {
+        this.process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
+      } else {
+        this.process.stdout.write(
+          `${artifact}: valid — every anchor places, every link resolves\n`,
+        );
+      }
+      this.process.exitCode = EXIT_READY;
+      return;
+    }
+
     // Unreachable in practice: placement's `missingPatch` already caught a diff-less range as a
     // validation problem above, so coverage always has a universe here. Handled rather than
     // asserted away, because the alternative is a cast — and if the two cores ever disagree,
     // exit 2 says "could not run" instead of reporting a coverage number nobody computed.
-    const coverage = coverageOfPatch(capture.patch, parsed.artifact.layers);
+    const coverage = coverageOfPatch(capture.patch, layerExtentsOf(parsed.artifact.layers));
     if (!coverage.ok) {
-      this.process.stderr.write(`${artifact}: placed but has no diff to score — this is a bug\n`);
-      this.process.exitCode = EXIT_CANNOT_RUN;
+      writeCannotRun(this, flags.json, {
+        code: "internal",
+        message: `${artifact}: placed but has no diff to score — this is a bug`,
+      });
       return;
     }
 
     const complete = isComplete(coverage.report);
-    const requireComplete = flags.requireComplete === true;
     const ok = complete || !requireComplete;
     const report: CheckReport = {
       ok,
@@ -139,10 +178,10 @@ export const checkCommand = buildCommand<CheckFlags, [string], LocalContext>({
       coverage: coverage.report,
     };
 
-    if (flags.json) {
+    if (flags.json === true) {
       this.process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
     } else {
-      writeCoverageOutcome(this, artifact, report);
+      writeCoverageOutcome(this, artifact, report, parsed.artifact.layers.length > 0);
     }
     this.process.exitCode = ok ? EXIT_READY : EXIT_PROBLEMS;
   },
@@ -156,7 +195,7 @@ function writeValidationFailure(
   artifact: string,
   problems: ValidationProblem[],
 ): void {
-  if (flags.json) {
+  if (flags.json === true) {
     const report: CheckReport = { ok: false, stage: "validate", problems };
     context.process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
     return;
@@ -167,16 +206,18 @@ function writeValidationFailure(
   }
 }
 
-/** The coverage arm, reusing `rvw coverage`'s own rendering so the numbers read identically
- * whichever verb produced them. The trailing line is where the advisory/gated distinction
- * becomes visible: a gap warns on stderr but leaves stdout's report intact. */
+/** The coverage arm: the headline and the per-file rollup on stdout, then the one line that
+ * says what the number means. `hasLayers` is why the last branch exists — a review that authored
+ * no walkthrough is not incomplete, it is a different kind of review, and warning it about
+ * uncovered lines would make the common case noisy for nothing. */
 function writeCoverageOutcome(
   context: LocalContext,
   artifact: string,
   report: Extract<CheckReport, { stage: "coverage" }>,
+  hasLayers: boolean,
 ): void {
   context.process.stdout.write(`${artifact}: valid — every anchor places, every link resolves\n`);
-  for (const line of coverageReportLines(artifact, report.coverage)) {
+  for (const line of coverageSummaryLines(report.coverage)) {
     context.process.stdout.write(`${line}\n`);
   }
 
@@ -190,7 +231,9 @@ function writeCoverageOutcome(
     );
     return;
   }
-  context.process.stderr.write(
-    "warning: a coverable changed line is in no layer — add a layer, or hand over deliberately\n",
-  );
+  if (hasLayers) {
+    context.process.stderr.write(
+      "warning: a coverable changed line is in no layer — add a layer, or hand over deliberately\n",
+    );
+  }
 }

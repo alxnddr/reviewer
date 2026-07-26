@@ -1,11 +1,10 @@
 import type { ReactElement } from "react";
-import { ChevronLeft, ChevronRight, Compass } from "lucide-react";
+import { ChevronLeft, ChevronRight } from "lucide-react";
 import type { ReviewLayer } from "../../../shared/review";
 import type { FitToContentRefs } from "@/lib/fit-panel";
 import { isComplete, type ReadTally } from "@/lib/read-progress";
 import { Button } from "@/components/ui/button";
 import { TooltipHint } from "@/components/ui/tooltip";
-import { ShortcutHint } from "@/components/ui/kbd";
 import { ReadRing, readLabel } from "@/components/ReadRing";
 import { ReviewProse } from "@/components/ReviewProse";
 import { cn } from "@/lib/utils";
@@ -34,9 +33,6 @@ type LayerIntroProps = {
   readTally: ReadTally;
   /** Flip the whole chapter: read when it isn't finished, unread when it is. */
   onToggleRead: () => void;
-  /** Whether the review carries a tour doc: the position counter then reads as a
-   * breadcrumb back to it, since the doc is the walkthrough's real first stop. */
-  hasOverview: boolean;
   /** The files currently rendered in the diff (the soloed subset): both the link
    * resolution set and the navigation targets. */
   filePaths: string[];
@@ -59,7 +55,6 @@ export function LayerIntro({
   ordinal,
   hasPrev,
   hasNext,
-  hasOverview,
   readTally,
   onToggleRead,
   filePaths,
@@ -70,10 +65,11 @@ export function LayerIntro({
 }: LayerIntroProps): ReactElement {
   const stepLayer = useReviewStore((state) => state.stepLayer);
   const selectFile = useReviewStore((state) => state.selectFile);
-  const openOverview = useReviewStore((state) => state.openOverview);
 
-  // Falls back to the one-line summary when a layer carries no long-form prose.
-  const content = layer.description ?? layer.summary;
+  // Falls back to the one-line summary when a layer carries no long-form prose — the
+  // inferred not-covered layer is exactly that shape (coverage.ts). A layer that carries
+  // neither is a bare label: the band is then its heading bar and nothing under it.
+  const content = layer.description ?? layer.summary ?? null;
   const complete = isComplete(readTally);
 
   return (
@@ -82,9 +78,11 @@ export function LayerIntro({
         "bg-diff-surface",
         // The heading always occupies the same 44px bar (see the header row below), so
         // expanding never shifts it — the prose simply grows underneath. Collapsed, the
-        // section is that bar exactly (44px incl. border), lining up with the rail's
-        // `h-11` header across the seam; expanded it flex-fills the panel, or the
-        // bounded band, with the prose taking the remaining height.
+        // section is that bar exactly (44px incl. border); expanded it flex-fills the
+        // panel, or the bounded band, with the prose taking the remaining height. The
+        // height is its own content's (a 32px title control between 6px insets) and no
+        // longer echoes the rail's top bar, which is now a 36px section row like every
+        // other row in the rail.
         fill
           ? "flex h-full min-h-0 flex-col"
           : collapsed
@@ -95,12 +93,23 @@ export function LayerIntro({
       {/* When the prose shows, the row keeps the collapsed bar's fixed height so
           nothing jumps. The title reads as a link and is itself the disclosure — clicking
           it expands or collapses the prose. */}
-      <div className={cn("flex w-full shrink-0 items-center gap-3 px-6", !collapsed && "h-11")}>
+      {/* The trailing inset is 14px, not the 24px the prose keeps: the band's read control
+          and every file header's read control below it are one column, and a reader's eye
+          holds that line down the pane. The diff's header band pads 16px and its toggle is
+          24px wide (centre 28px in from the edge); this row's controls are 28px wide, so
+          14px puts their centre on the same 28px. */}
+      <div
+        className={cn("flex w-full shrink-0 items-center gap-3 pl-6 pr-3.5", !collapsed && "h-11")}
+      >
         <h2 className="flex min-w-0 flex-1 items-baseline gap-2">
           {/* The layer's number, in the same tabular figures the rail and the doc set it
-              in — one layer, one number, wherever it is read. */}
+              in — one layer, one number, wherever it is read. It takes the title's own
+              type, size and tone both: a step smaller and fainter on the same baseline
+              read as a number sitting low beside the title rather than as its rank. */}
           {ordinal !== null && (
-            <span className="shrink-0 text-xs tabular-nums text-text-faint">{ordinal}</span>
+            <span className="shrink-0 text-title font-medium tabular-nums text-foreground">
+              {ordinal}
+            </span>
           )}
           <Button
             type="button"
@@ -116,34 +125,20 @@ export function LayerIntro({
             </TooltipHint>
           </Button>
         </h2>
-        {/* One cluster, four verbs, in the order a reader uses them: up to the hub, back,
-            forward, done. Nothing here is prose — the band's whole middle is the chapter's
-            own title, and everything else it used to carry is said better elsewhere.
+        {/* One cluster, three verbs, in the order a reader uses them: back, forward, done.
+            Nothing here is prose — the band's whole middle is the chapter's own title, and
+            everything else it used to carry is said better elsewhere.
 
             The trail of parent links this replaced was navigation nobody needed twice: the
             rail is always beside this band with the selection revealed and its ancestors in
             full ink, so a group is one click away there, and the section number in the
-            heading already says which group this is. */}
+            heading already says which group this is.
+
+            The door back to the overview went the same way, and for the same reason: the
+            rail now leads with a permanent Overview row, on screen beside this band at all
+            times, and `o` reaches it from anywhere. A fourth icon here was a third way to
+            the same place, in the app's densest row. */}
         <div className="ml-auto flex shrink-0 items-center gap-0.5">
-          {hasOverview && (
-            <TooltipHint
-              side="bottom"
-              align="end"
-              content={<ShortcutHint action="Overview" keys="O" />}
-            >
-              <Button
-                variant="ghost"
-                size="icon-sm"
-                aria-label="Open the overview"
-                className="mr-1 hover:bg-border/60 dark:hover:bg-border/60"
-                onClick={() => openOverview()}
-              >
-                {/* The rail's own glyph for the same stop, so the door out is recognisably
-                    the row it leads to. */}
-                <Compass aria-hidden="true" />
-              </Button>
-            </TooltipHint>
-          )}
           <Button
             variant="ghost"
             size="icon-sm"
@@ -198,23 +193,24 @@ export function LayerIntro({
           )}
         </div>
       </div>
-      {!collapsed && (
-        // The scroll viewport spans the full pane so its scrollbar rides the diff's
-        // right edge, not a narrow column; the prose keeps its reading width inside.
-        // In the panel it fills the dragged height; otherwise it stays a bounded band.
-        <div
-          ref={fit?.viewportRef}
-          className={cn("overflow-y-auto pb-3", fill ? "min-h-0 flex-1" : "max-h-48")}
-        >
-          <ReviewProse
-            ref={fit?.contentRef}
-            text={content}
-            filePaths={filePaths}
-            onSelectFile={(file) => selectFile(file)}
-            className="max-w-3xl space-y-2 px-6 text-base leading-relaxed text-foreground select-text"
-          />
-        </div>
-      )}
+      {!collapsed &&
+        content !== null && (
+          // The scroll viewport spans the full pane so its scrollbar rides the diff's
+          // right edge, not a narrow column; the prose keeps its reading width inside.
+          // In the panel it fills the dragged height; otherwise it stays a bounded band.
+          <div
+            ref={fit?.viewportRef}
+            className={cn("overflow-y-auto pb-3", fill ? "min-h-0 flex-1" : "max-h-48")}
+          >
+            <ReviewProse
+              ref={fit?.contentRef}
+              text={content}
+              filePaths={filePaths}
+              onSelectFile={(file) => selectFile(file)}
+              className="max-w-3xl space-y-2 px-6 text-base leading-relaxed text-foreground select-text"
+            />
+          </div>
+        )}
     </section>
   );
 }

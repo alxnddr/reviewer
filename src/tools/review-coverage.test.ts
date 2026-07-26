@@ -1,9 +1,10 @@
 import { describe, expect, it } from "vitest";
-import type { ReviewArtifact, ReviewLayer } from "../shared/review";
+import type { ReviewAnchor, ReviewArtifact, ReviewLayerInput } from "../shared/review";
 import {
   changedLineUniverse,
   coverageOfPatch,
   isComplete,
+  layerExtentsOf,
   type CoverageResult,
 } from "./review-coverage";
 
@@ -46,18 +47,23 @@ function patch(...hunks: string[][]): string {
   return `${hunks.flat().join("\n")}\n`;
 }
 
-function artifact(embeddedPatch: string | undefined, layers: ReviewLayer[]): ReviewArtifact {
+function artifact(embeddedPatch: string | undefined, layers: ReviewLayerInput[]): ReviewArtifact {
   return {
-    version: 1,
-    source: { kind: "local", repo: { path: "/repo", name: "repo" }, base: "main", head: "feature" },
+    repo: "/repo",
+    base: "main",
+    head: "feature",
     patch: embeddedPatch,
     comments: [],
     layers,
   };
 }
 
-function layer(id: string, ranges: ReviewLayer["ranges"]): ReviewLayer {
-  return { id, label: id, summary: id, ranges };
+function layer(
+  label: string,
+  ranges: ReviewAnchor[],
+  children: ReviewLayerInput[] = [],
+): ReviewLayerInput {
+  return { label, summary: label, ranges, children };
 }
 
 function reportOf(result: CoverageResult) {
@@ -67,14 +73,39 @@ function reportOf(result: CoverageResult) {
   return result.report;
 }
 
-/** Coverage over an artifact's own patch — the finished-artifact path (`rvw coverage
- * <artifact>`), which re-derives the diff from `source` in production but here scores the
- * fixture's embedded patch directly through the shared `coverageOfPatch` core. */
+/** Coverage over an artifact's own patch — the finished-artifact path (`rvw check --coverage
+ * <artifact>`), which re-derives the diff from the recorded repo/refs in production but here
+ * scores the fixture's embedded patch directly through the shared `coverageOfPatch` core.
+ * The authored tree is walked flat first, exactly as the CLI does: a nested layer's ranges
+ * count for the diff the same as a top-level one's. */
 function coverageForArtifact(artifact: ReviewArtifact): CoverageResult {
-  return coverageOfPatch(artifact.patch ?? "", artifact.layers);
+  return coverageOfPatch(artifact.patch ?? "", layerExtentsOf(artifact.layers));
 }
 
 describe("coverage over an artifact's diff", () => {
+  it("counts a nested layer's ranges: a grouping parent covers what its children do", () => {
+    const result = coverageForArtifact(
+      artifact(patch(FOO_HUNK), [
+        {
+          label: "Group",
+          summary: "carries no ranges of its own",
+          ranges: [],
+          children: [
+            layer("inner", [
+              { file: "src/foo.ts", side: "additions", startLine: 11, endLine: 12 },
+              { file: "src/foo.ts", side: "deletions", startLine: 11, endLine: 11 },
+            ]),
+          ],
+        },
+      ]),
+    );
+
+    expect(reportOf(result).headline).toEqual({
+      coverableChangedLines: 3,
+      coveredChangedLines: 3,
+    });
+  });
+
   it("reports 100% and no gaps when layers span every changed line, and stays complete", () => {
     const result = coverageForArtifact(
       artifact(patch(FOO_HUNK), [
@@ -316,7 +347,7 @@ describe("changedLineUniverse", () => {
 
   it("is the same universe coverage scores: every span is uncovered when no layer touches it", () => {
     // The load-bearing shared-derivation guarantee (one universe, two consumers): the spans
-    // `rvw anchors` lists are exactly what `rvw coverage` treats as the universe, so an
+    // `rvw diff --json` lists are exactly what `rvw check --coverage` treats as the universe, so an
     // anchor authored from the listing lands inside what coverage will later measure.
     const source = patch(FOO_HUNK, BAR_HUNK);
     const universeSpans = changedLineUniverse(source).flatMap((file) =>
@@ -328,6 +359,6 @@ describe("changedLineUniverse", () => {
 
 /** foo (fully coverable) + bar (a whole-file gap) with the given layers — the shared
  * two-file fixture the gap tests vary only the layers of. */
-function patchedGapArtifact(layers: ReviewLayer[]): ReviewArtifact {
+function patchedGapArtifact(layers: ReviewLayerInput[]): ReviewArtifact {
   return artifact(patch(FOO_HUNK, BAR_HUNK), layers);
 }

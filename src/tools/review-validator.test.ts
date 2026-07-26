@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { ReviewArtifact } from "../shared/review";
+import type { ReviewArtifact, ReviewLayerDraft } from "../shared/review";
 import {
   parseReviewArtifact,
   validatePlacement,
@@ -33,35 +33,39 @@ const PATCH = [
   "",
 ].join("\n");
 
-const SOURCE: ReviewArtifact["source"] = {
-  kind: "local",
-  repo: { path: "/repo", name: "repo" },
-  base: "main",
-  head: "feature",
+/** The artifact as authored — the shape these fixtures write, before the parse fills in
+ * `ranges`/`children`. */
+type Draft = {
+  repo: string;
+  base: string;
+  head: string;
+  patch?: string | undefined;
+  overview?: ReviewArtifact["overview"];
+  comments?: ReviewArtifact["comments"];
+  layers?: ReviewLayerDraft[];
 };
 
-function validArtifact(overrides: Partial<ReviewArtifact> = {}): ReviewArtifact {
+function validArtifact(overrides: Partial<Draft> = {}): Draft {
   return {
-    version: 1,
-    source: SOURCE,
+    repo: "/repo",
+    base: "main",
+    head: "feature",
     patch: PATCH,
     comments: [{ file: "src/foo.ts", side: "additions", startLine: 11, endLine: 13, body: "note" }],
     layers: [
       {
-        id: "rollup",
         label: "Rollup",
         summary: "parent",
-        ranges: [],
-      },
-      {
-        id: "leaf",
-        label: "Leaf",
-        summary: "child",
-        // A resolving link plus an inert code span: only the broken-link case is a
-        // problem, so the code span must not be flagged.
-        description: "Touches [bar](src/bar.ts) via `helper`.",
-        parent: "rollup",
-        ranges: [{ file: "src/bar.ts", side: "additions", startLine: 2, endLine: 2 }],
+        children: [
+          {
+            label: "Leaf",
+            summary: "child",
+            // A resolving link plus an inert code span: only the broken-link case is a
+            // problem, so the code span must not be flagged.
+            description: "Touches [bar](src/bar.ts) via `helper`.",
+            ranges: [{ file: "src/bar.ts", side: "additions", startLine: 2, endLine: 2 }],
+          },
+        ],
       },
     ],
     ...overrides,
@@ -112,17 +116,20 @@ describe("parseReviewArtifact + validatePlacement", () => {
     });
   });
 
-  it("flags an unresolved description link while leaving a parent rollup's empty ranges valid", () => {
+  it("flags an unresolved description link by ordinal, leaving a parent rollup's empty ranges valid", () => {
     const artifact = validArtifact({
       layers: [
-        { id: "rollup", label: "Rollup", summary: "parent", ranges: [] },
         {
-          id: "leaf",
-          label: "Leaf",
-          summary: "child",
-          description: "See [ghost](does/not/exist.ts).",
-          parent: "rollup",
-          ranges: [{ file: "src/bar.ts", side: "additions", startLine: 2, endLine: 2 }],
+          label: "Rollup",
+          summary: "parent",
+          children: [
+            {
+              label: "Leaf",
+              summary: "child",
+              description: "See [ghost](does/not/exist.ts).",
+              ranges: [{ file: "src/bar.ts", side: "additions", startLine: 2, endLine: 2 }],
+            },
+          ],
         },
       ],
     });
@@ -131,7 +138,7 @@ describe("parseReviewArtifact + validatePlacement", () => {
     expect(report.ok).toBe(false);
     if (report.ok) return;
     expect(report.problems).toEqual([
-      { kind: "unresolvedLink", layerId: "leaf", label: "ghost", path: "does/not/exist.ts" },
+      { kind: "unresolvedLink", layer: "1.1", label: "ghost", path: "does/not/exist.ts" },
     ]);
   });
 
@@ -165,13 +172,11 @@ describe("parseReviewArtifact + validatePlacement", () => {
     const artifact = validArtifact({
       layers: [
         {
-          id: "drifted",
           label: "Drifted",
           summary: "range past the hunk",
           ranges: [{ file: "src/foo.ts", side: "additions", startLine: 90, endLine: 90 }],
         },
         {
-          id: "absent",
           label: "Absent",
           summary: "range on a file not in the diff",
           ranges: [{ file: "src/gone.ts", side: "additions", startLine: 1, endLine: 1 }],
@@ -183,17 +188,52 @@ describe("parseReviewArtifact + validatePlacement", () => {
     expect(report.ok).toBe(false);
     if (report.ok) return;
     // A file absent from the patch funnels through the same `null` fileDiff path as an
-    // out-of-hunk range, so both surface as layerRangeOutdated with the layer's id.
+    // out-of-hunk range, so both surface as layerRangeOutdated at the layer's ordinal.
     expect(report.problems).toContainEqual({
       kind: "layerRangeOutdated",
-      layerId: "drifted",
+      layer: "1",
       anchor: { file: "src/foo.ts", side: "additions", startLine: 90, endLine: 90 },
     });
     expect(report.problems).toContainEqual({
       kind: "layerRangeOutdated",
-      layerId: "absent",
+      layer: "2",
       anchor: { file: "src/gone.ts", side: "additions", startLine: 1, endLine: 1 },
     });
+  });
+
+  it("names a nested layer by its ordinal path, the section number the reader will see", () => {
+    const artifact = validArtifact({
+      layers: [
+        {
+          label: "First",
+          ranges: [{ file: "src/bar.ts", side: "additions", startLine: 2, endLine: 2 }],
+        },
+        {
+          label: "Second",
+          children: [
+            {
+              label: "A",
+              ranges: [{ file: "src/bar.ts", side: "additions", startLine: 2, endLine: 2 }],
+            },
+            {
+              label: "B",
+              ranges: [{ file: "src/foo.ts", side: "additions", startLine: 90, endLine: 90 }],
+            },
+          ],
+        },
+      ],
+    });
+
+    const report = validate(JSON.stringify(artifact));
+    expect(report.ok).toBe(false);
+    if (report.ok) return;
+    expect(report.problems).toEqual([
+      {
+        kind: "layerRangeOutdated",
+        layer: "2.2",
+        anchor: { file: "src/foo.ts", side: "additions", startLine: 90, endLine: 90 },
+      },
+    ]);
   });
 
   it("reports non-JSON bytes as a typed problem without throwing", () => {
@@ -235,100 +275,66 @@ describe("parseReviewArtifact + validatePlacement", () => {
   });
 
   it("reports a diff with no changes as the missing-patch problem", () => {
-    // A patch that parses to no file has no diff to place anchors against, whether it is
-    // absent (JSON.stringify drops the `undefined`) or an empty string.
+    // A patch that parses to no file has no diff to place anchors against; an absent one
+    // (JSON.stringify drops the `undefined`) takes the same route.
     expect(validate(JSON.stringify({ ...validArtifact(), patch: undefined }))).toEqual({
-      ok: false,
-      problems: [{ kind: "missingPatch" }],
-    });
-    expect(validate(JSON.stringify(validArtifact({ patch: "" })))).toEqual({
       ok: false,
       problems: [{ kind: "missingPatch" }],
     });
   });
 });
 
-// The outline contract: `layers` is a tree, written in document order, no deeper than the
-// reader can follow, and every layer reaches some code. The app reads a broken outline as
-// flat and still opens; these are the reasons one is never emitted in the first place.
+// What is left of the outline contract once `children` carries the shape: a depth the
+// reader can follow, and every layer reaching some code. Dangling parents, cycles, and a
+// mis-ordered array are gone — nesting cannot express them.
 describe("the outline contract", () => {
-  const group = (extra: Partial<ReviewArtifact["layers"][number]> = {}) => ({
-    id: "group",
-    label: "Group",
+  const group = (label: string, children: ReviewLayerDraft[] = []): ReviewLayerDraft => ({
+    label,
     summary: "a theme",
-    ranges: [],
-    ...extra,
+    children,
   });
-  const stop = (extra: Partial<ReviewArtifact["layers"][number]> = {}) => ({
-    id: "child",
-    label: "Child",
+  const stop = (label = "Child", children: ReviewLayerDraft[] = []): ReviewLayerDraft => ({
+    label,
     summary: "the code",
     ranges: [{ file: "src/bar.ts", side: "additions" as const, startLine: 2, endLine: 2 }],
-    ...extra,
+    children,
   });
 
-  const problemsFor = (layers: ReviewArtifact["layers"]): ValidationProblem[] => {
+  const problemsFor = (layers: ReviewLayerDraft[]): ValidationProblem[] => {
     const report = validate(JSON.stringify(validArtifact({ layers })));
     return report.ok ? [] : report.problems;
   };
 
-  it("accepts a tree written in document order", () => {
-    expect(
-      problemsFor([
-        group(),
-        group({ id: "inner", parent: "group" }),
-        stop({ parent: "inner" }),
-        stop({ id: "after" }),
-      ]),
-    ).toEqual([]);
+  it("accepts a nested tree", () => {
+    expect(problemsFor([group("Group", [group("Inner", [stop()])]), stop("After")])).toEqual([]);
   });
 
   it("accepts a parent that carries ranges of its own — extent is own plus descendants'", () => {
-    expect(problemsFor([stop({ id: "parent" }), stop({ parent: "parent" })])).toEqual([]);
-  });
-
-  it("refuses a parent that does not exist", () => {
-    expect(problemsFor([stop({ parent: "ghost" })])).toContainEqual({
-      kind: "parentNotFound",
-      layerId: "child",
-      parent: "ghost",
-    });
-  });
-
-  it("refuses a parent cycle", () => {
-    expect(
-      problemsFor([stop({ id: "a", parent: "b" }), stop({ id: "b", parent: "a" })]),
-    ).toContainEqual({ kind: "parentCycle", layerId: "a" });
+    expect(problemsFor([stop("Parent", [stop()])])).toEqual([]);
   });
 
   it("refuses nesting past the depth cap", () => {
-    const chain = [
-      group({ id: "l1" }),
-      group({ id: "l2", parent: "l1" }),
-      group({ id: "l3", parent: "l2" }),
-      group({ id: "l4", parent: "l3" }),
-      group({ id: "l5", parent: "l4" }),
-      stop({ id: "l6", parent: "l5" }),
-    ];
-    expect(problemsFor(chain)).toContainEqual({ kind: "nestingTooDeep", layerId: "l6", depth: 6 });
+    const chain = group("l1", [
+      group("l2", [group("l3", [group("l4", [group("l5", [stop("l6")])])])]),
+    ]);
+    expect(problemsFor([chain])).toContainEqual({
+      kind: "nestingTooDeep",
+      layer: "1.1.1.1.1.1",
+      depth: 6,
+    });
   });
 
   it("refuses a layer that reaches no code at all, at any depth", () => {
     // A range-less layer is fine when something under it has ranges; alone it is an
     // outline entry with no review behind it.
-    expect(problemsFor([group(), stop({ parent: "group" })])).toEqual([]);
-    expect(problemsFor([group(), stop({ id: "elsewhere" })])).toContainEqual({
+    expect(problemsFor([group("Group", [stop()])])).toEqual([]);
+    expect(problemsFor([group("Group"), stop("Elsewhere")])).toContainEqual({
       kind: "layerWalksNothing",
-      layerId: "group",
+      layer: "1",
     });
-    expect(
-      problemsFor([group(), group({ id: "inner", parent: "group" }), stop({ id: "elsewhere" })]),
-    ).toContainEqual({ kind: "layerWalksNothing", layerId: "inner" });
-  });
-
-  it("refuses an array that is not the document — a subtree must follow its parent", () => {
-    expect(
-      problemsFor([group(), stop({ id: "outsider" }), stop({ parent: "group" })]),
-    ).toContainEqual({ kind: "outOfDocumentOrder", layerId: "outsider" });
+    expect(problemsFor([group("Group", [group("Inner")]), stop("Elsewhere")])).toContainEqual({
+      kind: "layerWalksNothing",
+      layer: "1.1",
+    });
   });
 });

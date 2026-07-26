@@ -17,7 +17,13 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { Tooltip, TooltipContent, TooltipTrigger, TOOLTIP_DELAY_MS } from "@/components/ui/tooltip";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipHint,
+  TooltipTrigger,
+  TOOLTIP_DELAY_MS,
+} from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 import { useReviewStore } from "@/stores/review";
 
@@ -457,21 +463,23 @@ export function TabBar(): ReactElement {
           saved review file — so the plus offers both; labels mirror the native
           File menu, which carries the accelerators. */}
       <DropdownMenu>
-        <DropdownMenuTrigger
-          render={
-            <Button
-              variant="ghost"
-              size="icon"
-              aria-label="Open repository or review"
-              // Ghost hover on bg-sidebar chrome comes from the border tone; the
-              // dark: twin outranks the ghost variant's own dark hover arm, and the
-              // aria-expanded arm keeps the wash while the menu is open.
-              className="shrink-0 hover:bg-border/60 aria-expanded:bg-border/60 dark:hover:bg-border/60 dark:aria-expanded:bg-border/60"
-            />
-          }
-        >
-          <PlusIcon />
-        </DropdownMenuTrigger>
+        <TooltipHint side="bottom" align="start" content="Open repository or review">
+          <DropdownMenuTrigger
+            render={
+              <Button
+                variant="ghost"
+                size="icon"
+                aria-label="Open repository or review"
+                // Ghost hover on bg-sidebar chrome comes from the border tone; the
+                // dark: twin outranks the ghost variant's own dark hover arm, and the
+                // aria-expanded arm keeps the wash while the menu is open.
+                className="shrink-0 hover:bg-border/60 aria-expanded:bg-border/60 dark:hover:bg-border/60 dark:aria-expanded:bg-border/60"
+              />
+            }
+          >
+            <PlusIcon />
+          </DropdownMenuTrigger>
+        </TooltipHint>
         {/* w-auto min-w-40: the trigger is a 32px icon button, so the default
             anchor-width sizing would wrap the labels. */}
         <DropdownMenuContent align="start" sideOffset={8} className="w-auto min-w-40">

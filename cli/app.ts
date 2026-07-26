@@ -1,37 +1,43 @@
 import { buildApplication, buildRouteMap, type Application, type RouteMap } from "@stricli/core";
 import { EXIT_CANNOT_RUN, type LocalContext } from "./context";
-import { validateCommand } from "./commands/validate";
-import { coverageCommand } from "./commands/coverage";
-import { anchorsCommand } from "./commands/anchors";
 import { emitCommand } from "./commands/emit";
 import { checkCommand } from "./commands/check";
-import { skillsCommand } from "./commands/skills";
-import { schemaCommand } from "./commands/schema";
+import { diffCommand } from "./commands/diff";
 import { openCommand } from "./commands/open";
+import { schemaCommand } from "./commands/schema";
+import { skillsCommand } from "./commands/skills";
 
-// The `rvw` application: one route map over the eight review verbs, all live. Stricli
-// supplies routing, `--help`, and argument scanning for the whole surface, so every command
-// declares flags and positionals one way and shares one help/usage system. This module is
-// pure data (no process, no I/O) — the entrypoint binds it to the real process, and tests
+// The `rvw` application: one route map over the six review verbs, all live. The surface is
+// ordered the way it is used — `emit` presents a review, `check` and `diff` support authoring
+// one, `open` re-opens it, `schema` and `skills` say what the shapes and the instructions are.
+//
+// Six rather than eight, because three of the old verbs were the same work under other names:
+// `validate` was `check` without its second half, `coverage` was `check --coverage` plus a
+// second copy of `emit`'s capture path, and `anchors` existed so an agent could hand-author
+// against a diff `rvw diff` now simply prints. Every verb an agent has to choose between is a
+// chance to choose wrong, so overlapping ones were folded rather than kept as aliases.
+//
+// Stricli supplies routing, `--help`, and argument scanning for the whole surface, so every
+// command declares flags and positionals one way and shares one help/usage system. This module
+// is pure data (no process, no I/O) — the entrypoint binds it to the real process, and tests
 // bind it to capturing streams.
 
 const routes = buildRouteMap<
-  "validate" | "coverage" | "anchors" | "emit" | "check" | "skills" | "schema" | "open",
+  "emit" | "check" | "diff" | "open" | "schema" | "skills",
   LocalContext
 >({
   routes: {
-    validate: validateCommand,
-    coverage: coverageCommand,
-    anchors: anchorsCommand,
     emit: emitCommand,
     check: checkCommand,
-    skills: skillsCommand,
-    schema: schemaCommand,
+    diff: diffCommand,
     open: openCommand,
+    schema: schemaCommand,
+    skills: skillsCommand,
   },
   docs: {
-    brief: "rvw — the review authoring toolchain",
-    fullDescription: "Portable CLI a coding agent uses while authoring a review artifact.",
+    brief: "rvw — present a review in Reviewer",
+    fullDescription:
+      "Portable CLI a coding agent uses to hand a review it has already written to the Reviewer app.",
   },
 });
 

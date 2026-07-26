@@ -3,6 +3,7 @@ import { FileTree, useFileTree } from "@pierre/trees/react";
 import type { GitStatus } from "@pierre/trees";
 import { Search } from "lucide-react";
 import { assertNever } from "../../../shared/assert";
+import { RailFoot, RailNote } from "@/components/rail";
 import { Button } from "@/components/ui/button";
 import { InputGroup, InputGroupAddon, InputGroupInput } from "@/components/ui/input-group";
 import { TooltipHint } from "@/components/ui/tooltip";
@@ -72,7 +73,7 @@ export function FileTreePanel({ files, commentCounts }: FileTreePanelProps): Rea
         </InputGroup>
       </div>
       {visibleFiles.length === 0 ? (
-        <p className="px-3 py-3 text-xs text-text-muted">No files match the filter.</p>
+        <RailNote>No files match the filter.</RailNote>
       ) : (
         // The tree model is immutable after creation, so a filter change means a
         // remount. Keyed by the matched subset rather than the query, so refining
@@ -107,7 +108,7 @@ type ReadStatusLineProps = {
  * what it counted. */
 function ReadStatusLine({ files, tally, onClear }: ReadStatusLineProps): ReactElement {
   return (
-    <div className="flex h-8 shrink-0 items-center gap-1.5 border-t border-border px-2 text-2xs text-text-muted">
+    <RailFoot>
       <ReadRing tally={tally} />
       <span className="min-w-0 truncate tabular-nums">{readLabel(tally)}</span>
       {tally.read > 0 && (
@@ -126,7 +127,7 @@ function ReadStatusLine({ files, tally, onClear }: ReadStatusLineProps): ReactEl
           </Button>
         </TooltipHint>
       )}
-    </div>
+    </RailFoot>
   );
 }
 

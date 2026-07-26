@@ -1,6 +1,7 @@
 import { buildCommand } from "@stricli/core";
 import { bundledSkillsRoot, findSkill, listSkills, type SkillSummary } from "../skills";
-import { EXIT_CANNOT_RUN, EXIT_READY, type LocalContext } from "../context";
+import { EXIT_READY, type LocalContext } from "../context";
+import { writeCannotRun } from "../errors";
 
 // `rvw skills [<name>]` — what reviews this toolchain can run. An agent landing in an
 // unfamiliar repo asks the tool, not out-of-band prose. The listing is read from the bundled
@@ -41,8 +42,7 @@ export const skillsCommand = buildCommand<SkillsFlags, [string | undefined], Loc
     const root = bundledSkillsRoot();
     const result = listSkills(root);
     if (!result.ok) {
-      this.process.stderr.write(`${result.message}\n`);
-      this.process.exitCode = EXIT_CANNOT_RUN;
+      writeCannotRun(this, flags.json, { code: "skillsUnreadable", message: result.message });
       return;
     }
 
@@ -57,14 +57,14 @@ export const skillsCommand = buildCommand<SkillsFlags, [string | undefined], Loc
       // Not a review problem (exit 1) — there is no review here. The agent asked for a skill
       // that does not exist, so the command could not run: name the ones that do.
       const known = result.skills.map((each) => each.name).join(", ");
-      this.process.stderr.write(
-        `no skill named ${name}${known === "" ? "" : ` — try: ${known}`}\n`,
-      );
-      this.process.exitCode = EXIT_CANNOT_RUN;
+      writeCannotRun(this, flags.json, {
+        code: "noSuchSkill",
+        message: `no skill named ${name}${known === "" ? "" : ` — try: ${known}`}`,
+      });
       return;
     }
 
-    if (flags.json) {
+    if (flags.json === true) {
       this.process.stdout.write(`${JSON.stringify(skill, null, 2)}\n`);
     } else {
       this.process.stdout.write(`${skill.path}\n`);

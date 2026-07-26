@@ -1,13 +1,14 @@
 import { useEffect, useMemo, type ReactElement } from "react";
-import { ArrowRight, ListTree } from "lucide-react";
+import { ArrowRight } from "lucide-react";
 import type { Comment, ReviewLayer } from "../../../shared/review";
 import { buildOverview } from "@/lib/overview";
 import { NO_READ_FILES } from "@/lib/read-progress";
 import { Button } from "@/components/ui/button";
-import { TooltipHint } from "@/components/ui/tooltip";
+import { GLASS_PRIMARY } from "@/components/Glass";
 import { ReadRing, readLabel } from "@/components/ReadRing";
 import { OverviewLayerSection, layerSectionDomId } from "@/components/OverviewLayerSection";
 import { ReviewProse } from "@/components/ReviewProse";
+import { cn } from "@/lib/utils";
 import { selectActiveSlice, useReviewStore } from "@/stores/review";
 
 // The tour doc: where a review starts, and the one place the whole review can be *read*
@@ -31,9 +32,15 @@ function countLabel(n: number, noun: string): string {
   return `${n} ${noun}${n === 1 ? "" : "s"}`;
 }
 
-/** One `·`-separated fact row under the title — the shape of the change at a glance.
- * Every number is measured against the diff on screen; the ones that need a loaded diff
- * are simply absent until there is one, rather than showing a stale or zero count. */
+/** The one `·`-separated fact row under the title — the shape of the change at a glance.
+ * Every number is measured against the diff on screen; the ones that need a loaded diff are
+ * simply absent until there is one, rather than showing a stale or zero count.
+ *
+ * Three items, where there were six. The row is read left to right in one pass, so what
+ * made it crowded was never the width — it was having to step over five `·` to find the one
+ * number you came for. Two of the six were said twice on the same screen (the layer count
+ * *is* the numbered sections below it; the comment count is permanently in the rail), and
+ * two more were the same eleven files counted twice, once alone and once as a denominator. */
 function StatRow({ children }: { children: ReactElement[] }): ReactElement {
   return (
     <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-sm text-text-muted tabular-nums">
@@ -63,7 +70,6 @@ export function OverviewScreen(): ReactElement | null {
   const readFiles = useReviewStore((state) => selectActiveSlice(state)?.readFiles ?? NO_READ_FILES);
   const setActiveLayer = useReviewStore((state) => state.setActiveLayer);
   const setLayerRead = useReviewStore((state) => state.setLayerRead);
-  const clearFilesRead = useReviewStore((state) => state.clearFilesRead);
   const selectFile = useReviewStore((state) => state.selectFile);
   const focusComment = useReviewStore((state) => state.focusComment);
 
@@ -96,6 +102,38 @@ export function OverviewScreen(): ReactElement | null {
   const firstLayerId = layers[0]?.id ?? null;
   const resumeLayerId = model.resumeLayerId;
 
+  // The file count and the reader's progress are one item, not two, because they were only
+  // ever one number: `model.files` and `model.read.total` are both the length of the same
+  // array, so "11 files · 3 of 11 files read" printed eleven twice and made the row look
+  // like it held more facts than it did.
+  //
+  // Untouched it is the plain total — an unread review's headline should describe the
+  // change, not open with a zero. The moment anything is read the same slot grows the
+  // numerator and the ring, so the count the reader already knew turns into their place in
+  // it rather than being joined by a second number reciting it back.
+  //
+  // Layer coverage is deliberately not here. It is a figure about how well the review was
+  // *authored*, and this headline is read by someone about to do the reading — a percentage
+  // they cannot act on and did not ask for. The rail states it where it belongs, next to
+  // the layers themselves, and the "Not covered" chapter says the same thing in a form the
+  // reader can actually open.
+  const stats: ReactElement[] = loaded
+    ? [
+        model.read.read > 0 ? (
+          <span key="files" className="flex items-center gap-1.5">
+            <ReadRing tally={model.read} />
+            {readLabel(model.read)}
+          </span>
+        ) : (
+          <span key="files">{countLabel(model.files, "file")}</span>
+        ),
+        <span key="lines">
+          <span className="text-diff-add-fg">+{model.additions}</span>{" "}
+          <span className="text-diff-del-fg">−{model.deletions}</span>
+        </span>,
+      ]
+    : [];
+
   // A layer is opened by soloing it; the file and comment doors do that first, then point
   // the diff at the exact place the reader clicked.
   const openLayer = (layerId: string): void => setActiveLayer(layerId);
@@ -105,72 +143,37 @@ export function OverviewScreen(): ReactElement | null {
   };
 
   return (
-    <div className="flex h-full flex-col bg-diff-surface">
-      {/* The same 44px bar the chapter band uses, so the seam with the rail's header
-          holds whichever surface is on screen. */}
-      <div className="flex h-11 shrink-0 items-center gap-3 border-b border-border px-6">
-        <span className="text-xs text-text-muted">Overview</span>
-        <Button
-          variant="ghost"
-          size="sm"
-          className="ml-auto shrink-0 hover:bg-border/60 dark:hover:bg-border/60"
-          onClick={() => setActiveLayer(null)}
-        >
-          <ListTree aria-hidden="true" />
-          Browse all files
-        </Button>
-      </div>
-
-      <div className="min-h-0 flex-1 overflow-y-auto">
+    <div className="relative flex h-full flex-col bg-diff-surface">
+      {/* No header bar. Every other surface opens with one because it has something only a
+          bar can say — which diff, which chapter. This one had a label the rail's own
+          selected row already carries and the page's title repeats two lines down, plus a
+          "Browse all files" button the footer's action row already holds; a bar whose every
+          part is said elsewhere on the same screen is a rule with chrome attached. The
+          document simply starts, and the extra top inset stands in for the bar's height so
+          the title still clears the window's chrome. */}
+      {/* tabIndex -1, not 0: the doc is not a Tab stop of its own (the reader would land on
+          a whole page before reaching its first link), but it is F6's landing spot for this
+          screen, and focusing a scroll container is what gives PgDn and the arrows something
+          to scroll. */}
+      <div
+        data-overview-doc
+        tabIndex={-1}
+        className="min-h-0 flex-1 overflow-y-auto outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
+      >
         {/* Centred, unlike every other surface in the app: this one is a document, and a
             reading column pinned to the left edge of a wide pane leaves the page looking
             like it failed to load the rest of itself. On a narrow pane the margins fall to
             the padding and it reads exactly as it did before. */}
-        <div className="mx-auto max-w-3xl px-6 py-6 select-text">
+        {/* pb-28 is the island's own height plus its inset plus air: the end of the document
+            has to be able to scroll clear of the pill, or the last thing a reader reaches is
+            permanently half-covered by the control that took them there. */}
+        <div className="mx-auto max-w-3xl px-6 pt-10 pb-28 select-text">
           <h1 className="text-lg leading-7 font-medium text-foreground">{overview.title}</h1>
-          <div className="mt-2">
-            <StatRow>
-              {[
-                ...(loaded
-                  ? [
-                      <span key="files">{countLabel(model.files, "file")}</span>,
-                      <span key="lines">
-                        <span className="text-diff-add-fg">+{model.additions}</span>{" "}
-                        <span className="text-diff-del-fg">−{model.deletions}</span>
-                      </span>,
-                    ]
-                  : []),
-                <span key="layers">{countLabel(layers.length, "layer")}</span>,
-                ...(model.comments > 0
-                  ? [<span key="comments">{countLabel(model.comments, "comment")}</span>]
-                  : []),
-                ...(loaded && layers.length > 0
-                  ? [
-                      <TooltipHint
-                        key="coverage"
-                        content="Share of changed lines the layers cover"
-                        side="bottom"
-                        align="center"
-                      >
-                        <span>{model.linePct}% covered</span>
-                      </TooltipHint>,
-                    ]
-                  : []),
-                // The reader's own place, last in the row: everything before it is a fact
-                // about the change and holds still, this one is about them and moves. It
-                // only appears once there is something to report — an unread review's
-                // headline should describe the change, not open with a zero.
-                ...(loaded && model.read.read > 0
-                  ? [
-                      <span key="read" className="flex items-center gap-1.5">
-                        <ReadRing tally={model.read} />
-                        {readLabel(model.read)}
-                      </span>,
-                    ]
-                  : []),
-              ]}
-            </StatRow>
-          </div>
+          {stats.length > 0 && (
+            <div className="mt-2">
+              <StatRow>{stats}</StatRow>
+            </div>
+          )}
 
           <ReviewProse
             text={overview.body}
@@ -216,51 +219,70 @@ export function OverviewScreen(): ReactElement | null {
             </div>
           )}
 
-          {/* The way on. What it offers is the one thing a returning reader wants and the
-              doc alone can answer: not "start here" but "you were here" — the first chapter
-              in reading order with anything left in it.
+          {/* Nothing but the ending. The two ways *on* moved to the island below, which is
+              on screen the whole time — reaching them here meant scrolling past the entire
+              review first, which is backwards for the control a reader wants at the moment
+              they decide to stop reading the summary and go.
 
-              It says only whether this is a beginning or a resumption, never which chapter.
-              A layer label is written to be a heading, not a button: it can run to a
-              sentence, and a primary button that grows with its target either wraps the
-              footer or elides the very words it was added for. The reader is about to land
-              on that chapter with its title in the band and its row lit in the rail — the
-              button does not need to promise it in advance. */}
-          <div className="mt-8 flex flex-wrap items-center gap-2">
-            {resumeLayerId !== null ? (
-              <Button onClick={() => setActiveLayer(resumeLayerId)}>
-                {model.read.read === 0 ? "Start reviewing" : "Continue reviewing"}
-                <ArrowRight aria-hidden="true" data-icon="inline-end" />
-              </Button>
-            ) : (
-              firstLayerId !== null && (
-                <Button onClick={() => setActiveLayer(firstLayerId)}>
-                  Open the first layer
-                  <ArrowRight aria-hidden="true" data-icon="inline-end" />
-                </Button>
-              )
-            )}
-            <Button variant="outline" onClick={() => setActiveLayer(null)}>
-              Browse all files
-            </Button>
-            {model.read.read > 0 && (
-              <Button
-                variant="ghost"
-                onClick={() => clearFilesRead(filePaths)}
-                className="ml-auto text-text-muted hover:bg-border/50 hover:text-foreground dark:hover:bg-border/50"
-              >
-                Mark all unread
-              </Button>
-            )}
-          </div>
+              "Mark all unread" went too, and not for room: the rail's tree already ends in a
+              Reset that clears the same files by the same call, and it is on screen from the
+              first render rather than at the bottom of a long page. Two buttons, one job, one
+              of them permanently visible — the doc's copy was the one adding nothing. */}
           {/* The end of the walkthrough, stated once, where the reader lands when they come
-              back to the hub after the last chapter. It replaces the resume button rather
-              than joining it, so "finished" is a shape the page takes, not a badge it adds. */}
+              back to the hub after the last chapter. */}
           {loaded && model.read.total > 0 && model.read.read === model.read.total && (
-            <p className="mt-3 flex items-center gap-1.5 text-sm text-text-muted">
+            <p className="mt-8 flex items-center gap-1.5 text-sm text-text-muted">
               <ReadRing tally={model.read} />
               {`Every file in this review is read — all ${model.read.total} of them.`}
             </p>
+          )}
+        </div>
+      </div>
+
+      {/* The island. Pinned to the pane, outside the scroll box, so the two ways on are one
+          click away from anywhere in the document rather than one click away from its end.
+
+          It floats rather than docking as a bar for the same reason it is glass: a solid
+          footer strip would draw a permanent horizontal line under the reading column and
+          cut the page short, which is exactly the shape the header bar above had and exactly
+          why it went. A pill hovering clear of both edges reads as something laid over the
+          page, which is what it is.
+
+          The outer row is `pointer-events-none` so only the pill itself takes the pointer —
+          the strip beside it stays the document's, and text under it is still selectable. */}
+      <div className="pointer-events-none absolute inset-x-0 bottom-0 z-20 flex justify-center pb-6">
+        <div data-glass className="pointer-events-auto flex items-center rounded-full p-1">
+          {/* One action. "Browse all files" left when the rail grew a permanent "Show all"
+              in its Layers header — same call, same destination, on screen the whole time
+              and next to the rows it is about. Two doors to one room, and this was the one
+              that had to be carried.
+
+              Nothing here is filled either. The app's one saturated accent, parked over a
+              reading column for as long as the reader is on the page, is a blue lozenge in
+              the corner of their eye on every line — and the eye keeps going back to it. The
+              glass already says "this is a control, above the page"; the label only has to
+              be legible, so the weight comes from ink at 500 and hover is a wash faint
+              enough to read as glass catching light. */}
+          {resumeLayerId !== null ? (
+            <Button
+              variant="ghost"
+              className={cn("rounded-full", GLASS_PRIMARY)}
+              onClick={() => setActiveLayer(resumeLayerId)}
+            >
+              {model.read.read === 0 ? "Start reviewing" : "Continue reviewing"}
+              <ArrowRight aria-hidden="true" data-icon="inline-end" />
+            </Button>
+          ) : (
+            firstLayerId !== null && (
+              <Button
+                variant="ghost"
+                className={cn("rounded-full", GLASS_PRIMARY)}
+                onClick={() => setActiveLayer(firstLayerId)}
+              >
+                Open the first layer
+                <ArrowRight aria-hidden="true" data-icon="inline-end" />
+              </Button>
+            )
           )}
         </div>
       </div>

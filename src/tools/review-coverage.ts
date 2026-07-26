@@ -1,5 +1,10 @@
 import { assertNever } from "../shared/assert";
-import type { ReviewLayer, ReviewSide } from "../shared/review";
+import {
+  walkLayerInputs,
+  type ReviewAnchor,
+  type ReviewLayerInput,
+  type ReviewSide,
+} from "../shared/review";
 import { parsePatch, type FileChangeStatus, type PatchFile } from "../renderer/src/lib/diff/patch";
 
 // Do the ordered layers cover the whole diff? The universe is every *changed* line of the
@@ -7,8 +12,8 @@ import { parsePatch, type FileChangeStatus, type PatchFile } from "../renderer/s
 // excluded (a walkthrough explains what changed, not the untouched lines a range incidentally
 // spans). A changed line is covered iff some layer `range` on its side spans it. Pure and
 // I/O-free, over the *same* `parsePatch` the app renders with, against whatever diff the caller
-// resolved: the range captured live for a `--draft` audit, re-derived from the artifact's
-// `source` for a finished artifact, or a rare embedded frozen patch. The CLI shell owns the
+// resolved: the range captured live for a `--draft` audit, re-derived from the artifact's own
+// repo/refs for a finished artifact, or a rare embedded frozen patch. The CLI shell owns the
 // patch bytes, the exit code, and the report formatting.
 
 /** Why a changed file cannot be covered — it carries no changed line to anchor into.
@@ -80,6 +85,21 @@ const SIDES: readonly ReviewSide[] = ["deletions", "additions"];
  * walkthrough must explain, keyed by side. */
 export type ChangedLines = Record<ReviewSide, ReadonlySet<number>>;
 
+/** All coverage asks of a layer: the ranges it claims. Structural rather than
+ * `ReviewLayer`, because both shapes of layer answer it — the app's flat, stamped one, and
+ * an artifact's nested one walked flat by the CLI. Nesting is irrelevant here: a layer's
+ * extent is its own ranges plus its descendants', so a walk that visits every node covers
+ * exactly the same lines whichever way they were grouped. */
+export type LayerExtent = { readonly ranges: readonly ReviewAnchor[] };
+
+/** An authored outline flattened to the extents coverage measures — every node of the tree,
+ * so a nested layer's ranges count exactly as a top-level one's do. Lives here, beside the
+ * core, because every artifact-shaped caller needs it and a caller that forgot to descend
+ * would silently under-report coverage and send an agent to re-explain code it already had. */
+export function layerExtentsOf(layers: readonly ReviewLayerInput[]): LayerExtent[] {
+  return walkLayerInputs(layers).map((entry) => entry.layer);
+}
+
 /** The layer ranges that land on one file, grouped by side — a parent rollup's empty
  * `ranges` simply add nothing here, so it can never be a failure. */
 type FileRanges = Record<ReviewSide, LineSpan[]>;
@@ -87,12 +107,12 @@ type FileRanges = Record<ReviewSide, LineSpan[]>;
 type LineSpan = { startLine: number; endLine: number };
 
 /** Coverage of a raw diff against a set of layer ranges — the one core every caller shares.
- * The finished-artifact command feeds it the diff re-derived from the artifact's `source`
+ * The finished-artifact command feeds it the diff re-derived from the artifact's own repo/refs
  * (or a rare embedded frozen patch); the live-range command feeds it the freshly-captured
  * patch and a draft's layers, so a mid-draft check and a post-emit audit describe the same
  * universe. An absent patch takes the same route as an unparseable one: both carry no diff.
  * Pure: no I/O, no clock. */
-export function coverageOfPatch(patch: string, layers: readonly ReviewLayer[]): CoverageResult {
+export function coverageOfPatch(patch: string, layers: readonly LayerExtent[]): CoverageResult {
   const files = parsePatch(patch, CACHE_KEY);
   if (files.length === 0) {
     return { ok: false, error: "missingPatch" };
@@ -104,10 +124,10 @@ export function coverageOfPatch(patch: string, layers: readonly ReviewLayer[]): 
  * `coverageOfPatch`. The CLI parses patch bytes into files then measures; the app already
  * holds the parsed files it rendered (`slice.diff.files`), so it measures those directly,
  * re-parse-free and against the exact diff on screen. Same core either way, so the app's
- * number always matches `rvw coverage`. */
+ * number always matches `rvw check --coverage`. */
 export function coverageOfFiles(
   files: readonly PatchFile[],
-  layers: readonly ReviewLayer[],
+  layers: readonly LayerExtent[],
 ): CoverageReport {
   const rangesByFile = groupRanges(layers);
 
@@ -161,7 +181,7 @@ export function coverageOfFiles(
 }
 
 /** A contiguous run of changed lines on one side of one file — the shape an anchor may
- * span. The atom of the changed-line universe `rvw anchors` lists and coverage measures
+ * span. The atom of the changed-line universe `rvw diff --json` lists and coverage measures
  * against, so an authored anchor targets a real span, not a guessed line number. */
 export type ChangedSpan = {
   side: ReviewSide;
@@ -178,7 +198,7 @@ export type FileUniverse =
   | { file: string; status: FileChangeStatus; coverable: true; spans: ChangedSpan[] };
 
 /** The changed-line universe of a captured patch: per file, the per-side contiguous
- * changed spans (`rvw anchors`). Derived from the *same* `parsePatch` + `changedLines` +
+ * changed spans (`rvw diff --json`). Derived from the *same* `parsePatch` + `changedLines` +
  * `contiguousSpans` that `coverageOfPatch` measures against, so the spans a listing shows
  * are exactly the universe coverage scores — one derivation, never a parallel parse (the
  * drift `changedLineUniverse` and `coverageOfPatch` sharing these helpers rules out). */
@@ -267,7 +287,7 @@ export function changedLines(file: PatchFile): ChangedLines {
 
 /** Layer ranges grouped by file then side. A range covers only its own side (mirroring
  * `coversRange`); empty `ranges` (a parent rollup) contribute nothing. */
-function groupRanges(layers: readonly ReviewLayer[]): Map<string, FileRanges> {
+function groupRanges(layers: readonly LayerExtent[]): Map<string, FileRanges> {
   const byFile = new Map<string, FileRanges>();
   for (const layer of layers) {
     for (const range of layer.ranges) {

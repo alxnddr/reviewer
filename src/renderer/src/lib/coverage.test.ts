@@ -101,16 +101,6 @@ describe("coverageSummary", () => {
       { file: "src/bar.ts", side: "additions", startLine: 2, endLine: 3 },
     ]);
   });
-
-  it("yields to an authored layer that already claims the reserved id", () => {
-    const authored = layer(UNCOVERED_LAYER_ID, [
-      { file: "src/foo.ts", side: "additions", startLine: 11, endLine: 13 },
-    ]);
-    const { uncoveredLayer } = coverageSummary(FILES, [authored]);
-    // A real gap remains (bar is unwalked) but the reserved id is taken, so nothing is
-    // inferred rather than shadowing the authored layer.
-    expect(uncoveredLayer).toBeNull();
-  });
 });
 
 describe("effectiveLayers", () => {

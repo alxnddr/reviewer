@@ -3,7 +3,7 @@ import {
   importReview,
   type Comment,
   type ImportedReview,
-  type ReviewArtifact,
+  type ReviewArtifactDraft,
   type ReviewComment,
   type ReviewStamp,
 } from "../../../shared/review";
@@ -11,32 +11,29 @@ import type { RepoInfo } from "../../../shared/git";
 import {
   exportSourceFor,
   markdownCommentsFrom,
+  nestLayers,
   reviewToMarkdown,
   serializeReview,
   type MarkdownComment,
 } from "./review-export";
 
-// A deterministic stamp: import assigns identity, so a fresh id per comment makes
-// the round-trip reproducible. The authored projection compares with id stripped,
+// A deterministic stamp: import assigns identity, so a fresh id per comment and layer makes
+// the round-trip reproducible. The authored projection compares with identity stripped,
 // so the actual values only need to be distinct.
 function stamp(prefix: string): ReviewStamp {
   let counter = 0;
   return {
     newId: () => {
       counter += 1;
-      return `00000000-0000-4000-8000-${prefix}${String(counter).padStart(8, "0")}`;
+      return `00000000-0000-4000-8000-${prefix}${String(counter).padStart(10, "0")}`;
     },
   };
 }
 
-const FIXTURE: ReviewArtifact = {
-  version: 1,
-  source: {
-    kind: "local",
-    repo: { path: "/repos/app", name: "app" },
-    base: "main",
-    head: "a".repeat(40),
-  },
+const FIXTURE: ReviewArtifactDraft = {
+  repo: "/repos/app",
+  base: "main",
+  head: "a".repeat(40),
   patch: "diff --git a/src/a.ts b/src/a.ts\n@@ -1,1 +1,1 @@\n-old\n+new\n",
   comments: [
     { file: "src/a.ts", side: "additions", startLine: 10, endLine: 12, body: "first" },
@@ -44,13 +41,11 @@ const FIXTURE: ReviewArtifact = {
   ],
   layers: [
     {
-      id: "l1",
       label: "Validation",
       summary: "guards the input",
       ranges: [{ file: "src/a.ts", side: "additions", startLine: 10, endLine: 12 }],
     },
     {
-      id: "l2",
       label: "Feature",
       summary: "adds the endpoint",
       ranges: [{ file: "src/b.ts", side: "deletions", startLine: 3, endLine: 3 }],
@@ -58,7 +53,7 @@ const FIXTURE: ReviewArtifact = {
   ],
 };
 
-function importFixture(artifact: ReviewArtifact, prefix: string): ImportedReview {
+function importFixture(artifact: ReviewArtifactDraft, prefix: string): ImportedReview {
   const result = importReview(JSON.stringify(artifact), stamp(prefix));
   if (!result.ok) {
     throw new Error(`fixture failed to import: ${result.error}`);
@@ -79,6 +74,15 @@ function authored(comment: Comment): ReviewComment {
 }
 
 describe("serializeReview", () => {
+  it("writes the repo as the bare path the artifact carries, refs flat beside it", () => {
+    const serialized = serializeReview(importFixture(FIXTURE, "aa"));
+    expect(serialized.repo).toBe("/repos/app");
+    expect(serialized.base).toBe("main");
+    expect(serialized.head).toBe("a".repeat(40));
+    // The display name is derived on import, never written back.
+    expect(JSON.stringify(serialized)).not.toContain('"name"');
+  });
+
   it("round-trips the tour doc, and omits the key entirely when there is none", () => {
     const review = importFixture(FIXTURE, "cc");
     expect(review.overview).toBeNull();
@@ -104,11 +108,6 @@ describe("serializeReview", () => {
     };
 
     const serialized = serializeReview(edited);
-
-    // The serialized object re-validates against the artifact schema
-    // (serializeReview parses internally, but assert it explicitly here).
-    expect(() => serializeReview(edited)).not.toThrow();
-
     const reimported = importFixture(serialized, "bb");
 
     // Comments equal on the authored projection (id reassigned on import).
@@ -119,31 +118,65 @@ describe("serializeReview", () => {
     expect(reimported.comments.map((comment) => comment.body)).toContain("edited first");
 
     // Layer order and the edited summary survived.
-    expect(reimported.layers.map((layer) => layer.id)).toEqual(["l2", "l1"]);
+    expect(reimported.layers.map((layer) => layer.label)).toEqual(["Feature", "Validation"]);
     expect(reimported.layers[1]!.summary).toBe("edited summary");
   });
 
-  it("preserves a layer description and parent through the round-trip", () => {
-    // description and parent (the rollup hierarchy) are authored layer fields no
-    // earlier test exercises — a projection that dropped them
-    // would still pass the id/label/summary/kind/ranges assertions above.
-    const withHierarchy: ReviewArtifact = {
+  it("re-nests the flat layers on the way out, dropping the stamped id and parent", () => {
+    const nested: ReviewArtifactDraft = {
       ...FIXTURE,
       layers: [
         {
-          ...FIXTURE.layers[0]!,
-          description: "Guards the input.\n\nSee `parse` in [a](src/a.ts).",
+          label: "Group",
+          summary: "the theme",
+          children: [
+            {
+              label: "Inner",
+              description: "Guards the input.\n\nSee `parse` in [a](src/a.ts).",
+              ranges: [{ file: "src/a.ts", side: "additions", startLine: 10, endLine: 12 }],
+              children: [{ label: "Deepest", ranges: [] }],
+            },
+          ],
         },
-        { ...FIXTURE.layers[1]!, parent: "l1" },
+        {
+          label: "Tail",
+          ranges: [{ file: "src/b.ts", side: "deletions", startLine: 3, endLine: 3 }],
+        },
       ],
     };
 
-    const reimported = importFixture(serializeReview(importFixture(withHierarchy, "ee")), "ff");
+    const serialized = serializeReview(importFixture(nested, "ee"));
 
-    expect(reimported.layers[0]!.description).toBe(
-      "Guards the input.\n\nSee `parse` in [a](src/a.ts).",
-    );
-    expect(reimported.layers[1]!.parent).toBe("l1");
+    // The tree comes back exactly as authored — no ids, no parents, and no empty
+    // `children`/`ranges` keys the author never wrote.
+    expect(serialized.layers).toEqual([
+      {
+        label: "Group",
+        summary: "the theme",
+        children: [
+          {
+            label: "Inner",
+            description: "Guards the input.\n\nSee `parse` in [a](src/a.ts).",
+            ranges: [{ file: "src/a.ts", side: "additions", startLine: 10, endLine: 12 }],
+            children: [{ label: "Deepest" }],
+          },
+        ],
+      },
+      {
+        label: "Tail",
+        ranges: [{ file: "src/b.ts", side: "deletions", startLine: 3, endLine: 3 }],
+      },
+    ]);
+
+    // ...and re-importing it rebuilds the same flat outline, depth-first.
+    const reimported = importFixture(serialized, "ff");
+    expect(reimported.layers.map((layer) => layer.label)).toEqual([
+      "Group",
+      "Inner",
+      "Deepest",
+      "Tail",
+    ]);
+    expect(reimported.layers[2]!.parent).toBe(reimported.layers[1]!.id);
   });
 
   it("is idempotent and emits no app-assigned identity or derived state", () => {
@@ -155,12 +188,18 @@ describe("serializeReview", () => {
 
     // The wire comment is the minimal authored shape — no id — and the JSON
     // carries no outdated flag anywhere (derived state stays out).
-    for (const comment of once.comments) {
+    for (const comment of once.comments ?? []) {
       expect(comment).not.toHaveProperty("id");
     }
     const text = JSON.stringify(once);
     expect(text).not.toContain("outdated");
     expect(text).not.toContain("00000000-0000-4000");
+  });
+
+  it("omits the half a review does not carry rather than writing an empty array", () => {
+    const review = importFixture(FIXTURE, "gg");
+    expect(serializeReview({ ...review, layers: [] })).not.toHaveProperty("layers");
+    expect(serializeReview({ ...review, comments: [] })).not.toHaveProperty("comments");
   });
 
   it("preserves the embedded patch verbatim and drops an absent one", () => {
@@ -170,6 +209,22 @@ describe("serializeReview", () => {
     const { patch: _patch, ...noPatchArtifact } = FIXTURE;
     const withoutPatch = serializeReview(importFixture(noPatchArtifact, "ff"));
     expect(withoutPatch).not.toHaveProperty("patch");
+  });
+});
+
+describe("nestLayers", () => {
+  it("keeps sibling order and treats a parent naming no layer as a root", () => {
+    const nested = nestLayers([
+      { id: "a", label: "A", ranges: [] },
+      { id: "b", label: "B", parent: "a", ranges: [] },
+      { id: "c", label: "C", parent: "a", ranges: [] },
+      { id: "d", label: "D", parent: "ghost", ranges: [] },
+    ]);
+
+    expect(nested).toEqual([
+      { label: "A", children: [{ label: "B" }, { label: "C" }] },
+      { label: "D" },
+    ]);
   });
 });
 
@@ -183,9 +238,14 @@ describe("reviewToMarkdown", () => {
     outdated = false,
   ): MarkdownComment => ({ file, side, startLine, endLine, body, outdated });
 
+  const REPO: RepoInfo = { path: "/repos/app", name: "app" };
+  const HEAD = "a".repeat(40);
+
   it("renders layers as ordered sections with grouped comments and an outdated note", () => {
     const markdown = reviewToMarkdown({
-      source: FIXTURE.source,
+      repo: REPO,
+      base: "main",
+      head: HEAD,
       overview: null,
       layers: [
         {
@@ -235,9 +295,39 @@ describe("reviewToMarkdown", () => {
     `);
   });
 
+  it("omits the deck line for a layer that carries only a label", () => {
+    const markdown = reviewToMarkdown({
+      repo: REPO,
+      base: "main",
+      head: HEAD,
+      overview: null,
+      layers: [
+        {
+          id: "l1",
+          label: "Bare",
+          ranges: [{ file: "src/a.ts", side: "additions", startLine: 1, endLine: 40 }],
+        },
+      ],
+      comments: [comment("src/a.ts", "additions", 2, 2, "covered")],
+    });
+
+    expect(markdown).toMatchInlineSnapshot(`
+      "# Review — app
+
+      \`main\` … \`aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\`
+
+      ## Bare
+
+      - \`src/a.ts\` L2 — covered
+      "
+    `);
+  });
+
   it("leads with the tour doc: its title is the document, its body the lead", () => {
     const markdown = reviewToMarkdown({
-      source: FIXTURE.source,
+      repo: REPO,
+      base: "main",
+      head: HEAD,
       overview: {
         title: "Add the greeting API",
         body: "Why this exists.\n\nAnd what to notice in [a.ts](src/a.ts).",
@@ -273,7 +363,9 @@ describe("reviewToMarkdown", () => {
 
   it("ends in exactly one trailing newline", () => {
     const markdown = reviewToMarkdown({
-      source: FIXTURE.source,
+      repo: REPO,
+      base: "main",
+      head: HEAD,
       overview: null,
       layers: [],
       comments: [],
@@ -312,33 +404,21 @@ describe("exportSourceFor", () => {
 
   it("exports a branch comparison as refs, no patch needed", () => {
     const plan = exportSourceFor({ kind: "branches", base: "main", head: "feature" }, repo, HEAD);
-    expect(plan).toEqual({
-      source: { kind: "local", repo, base: "main", head: "feature" },
-      needsPatch: false,
-    });
+    expect(plan).toEqual({ repo, base: "main", head: "feature", needsPatch: false });
   });
 
-  it("freezes a commit range, recording its endpoints as the source", () => {
+  it("freezes a commit range, recording its endpoints as the refs", () => {
     const plan = exportSourceFor({ kind: "commitRange", first: HEAD, last: LAST }, repo, HEAD);
-    expect(plan).toEqual({
-      source: { kind: "local", repo, base: HEAD, head: LAST },
-      needsPatch: true,
-    });
+    expect(plan).toEqual({ repo, base: HEAD, head: LAST, needsPatch: true });
   });
 
   it("sources a working-tree diff at HEAD and freezes it", () => {
     const plan = exportSourceFor({ kind: "uncommitted" }, repo, HEAD);
-    expect(plan).toEqual({
-      source: { kind: "local", repo, base: HEAD, head: HEAD },
-      needsPatch: true,
-    });
+    expect(plan).toEqual({ repo, base: HEAD, head: HEAD, needsPatch: true });
   });
 
   it("falls back to the empty-tree hash for an unborn repo's working tree", () => {
     const plan = exportSourceFor({ kind: "uncommitted" }, repo, null);
-    expect(plan).toEqual({
-      source: { kind: "local", repo, base: EMPTY_TREE, head: EMPTY_TREE },
-      needsPatch: true,
-    });
+    expect(plan).toEqual({ repo, base: EMPTY_TREE, head: EMPTY_TREE, needsPatch: true });
   });
 });

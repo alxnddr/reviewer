@@ -3,13 +3,14 @@ import { resolve } from "node:path";
 import { buildCommand } from "@stricli/core";
 import { REVIEW_EXTENSION } from "../../src/shared/review-file";
 import { launchReviewer } from "../launch";
-import { EXIT_CANNOT_RUN, EXIT_READY, type LocalContext } from "../context";
-import { errorMessage } from "../errors";
+import { EXIT_READY, type LocalContext } from "../context";
+import { errorMessage, writeCannotRun } from "../errors";
 
-// `rvw open <artifact>` — hand a finished `.reviewer.json` to the installed Reviewer so an
-// agent that just emitted a review opens it in one move, no manual File → Open. The app owns
-// every arrival path already (cold-start argv, `second-instance`, `open-file`); this verb is
-// only the launch.
+// `rvw open <artifact>` — hand a finished `.reviewer.json` to the installed Reviewer. `rvw
+// emit` already opens what it writes, so this is the verb for everything else: re-opening an
+// artifact from `~/.rvw/reviews`, one that arrived from elsewhere, or one whose launch failed
+// the first time. The app owns every arrival path already (cold-start argv, `second-instance`,
+// `open-file`); this verb is only the launch.
 //
 // It deliberately does *not* re-validate the artifact's contents — that is `rvw check`'s job
 // and the app's own import guard's, and duplicating the parse here would be a drifting third
@@ -24,8 +25,9 @@ type OpenFlags = {
 
 /** What `--json` reports on a successful launch: the absolute path handed to the app. Named
  * like the other verbs' wire shapes so an agent parses one declared contract. There is no
- * failure arm — a failed open is a shell-cannot-run (exit 2), reported as a stderr message,
- * never a structured "ran, found problems" document. */
+ * failure arm here — a failed open is a shell-cannot-run (exit 2), reported under `--json` as
+ * the shared `{ok:false,error:{code,message}}` envelope, never as a "ran, found problems"
+ * document. */
 type OpenReport = {
   readonly ok: true;
   readonly path: string;
@@ -63,10 +65,10 @@ export const openCommand = buildCommand<OpenFlags, [string], LocalContext>({
     // Extension first, before touching disk — the same order the app's import guard checks:
     // a path that is not a review is refused without a stat, and the message names the rule.
     if (!artifact.endsWith(REVIEW_EXTENSION)) {
-      this.process.stderr.write(
-        `${artifact} is not a review — the path must end ${REVIEW_EXTENSION}\n`,
-      );
-      this.process.exitCode = EXIT_CANNOT_RUN;
+      writeCannotRun(this, flags.json, {
+        code: "badArtifactPath",
+        message: `${artifact} is not a review — the path must end ${REVIEW_EXTENSION}`,
+      });
       return;
     }
 
@@ -75,24 +77,27 @@ export const openCommand = buildCommand<OpenFlags, [string], LocalContext>({
     try {
       stats = statSync(path);
     } catch (error) {
-      this.process.stderr.write(`cannot open ${path}: ${errorMessage(error)}\n`);
-      this.process.exitCode = EXIT_CANNOT_RUN;
+      writeCannotRun(this, flags.json, {
+        code: "badArtifactPath",
+        message: `cannot open ${path}: ${errorMessage(error)}`,
+      });
       return;
     }
     if (!stats.isFile()) {
-      this.process.stderr.write(`cannot open ${path}: not a file\n`);
-      this.process.exitCode = EXIT_CANNOT_RUN;
+      writeCannotRun(this, flags.json, {
+        code: "badArtifactPath",
+        message: `cannot open ${path}: not a file`,
+      });
       return;
     }
 
     const launched = launchReviewer(process.platform, path);
     if (!launched.ok) {
-      this.process.stderr.write(`${launched.message}\n`);
-      this.process.exitCode = EXIT_CANNOT_RUN;
+      writeCannotRun(this, flags.json, { code: "notInstalled", message: launched.message });
       return;
     }
 
-    if (flags.json) {
+    if (flags.json === true) {
       const report: OpenReport = { ok: true, path };
       this.process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
     } else {

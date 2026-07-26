@@ -32,13 +32,9 @@ afterEach(() => {
 });
 
 const VALID_ARTIFACT = JSON.stringify({
-  version: 1,
-  source: {
-    kind: "local",
-    repo: { path: "/repos/app", name: "app" },
-    base: "main",
-    head: "a".repeat(40),
-  },
+  repo: "/repos/app",
+  base: "main",
+  head: "a".repeat(40),
   comments: [{ file: "src/a.ts", side: "additions", startLine: 1, endLine: 1, body: "hi" }],
   layers: [],
 });
@@ -50,8 +46,7 @@ function spyStore(): { store: SessionStore; createFromReview: ReturnType<typeof 
   const createFromReview = vi.fn(
     (review: ImportedReview): Session => ({
       id: CREATED_ID,
-      source: { kind: "local", repo: review.source.repo },
-      mode: "commits",
+      source: { kind: "local", repo: review.repo },
       base: null,
       head: null,
       commitSelection: null,

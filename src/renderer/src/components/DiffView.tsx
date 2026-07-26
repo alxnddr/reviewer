@@ -25,6 +25,7 @@ import { CommentThread } from "@/components/CommentThread";
 import { CommentNavIndicator } from "@/components/CommentNavIndicator";
 import { DiffSearch } from "@/components/DiffSearch";
 import { FileReadToggle } from "@/components/FileReadToggle";
+import { TooltipHint } from "@/components/ui/tooltip";
 import { useDiffSearch } from "@/lib/diff/use-diff-search";
 import {
   indexOfComment,
@@ -429,6 +430,23 @@ export function DiffView({
   const capture = useMemo(() => createScrollCapture(onScrollTop), [onScrollTop]);
   useEffect(() => () => capture.flush(), [capture]);
 
+  // The diff is the largest thing on screen and, until this, the only region of the app a
+  // keyboard could not reach: Pierre owns the scroll container and renders it with no
+  // tabindex, and a scroll box that is not focusable gets no PgDn, no space bar, no arrows —
+  // a reader without a pointer simply could not move down a file. Everything else it needs
+  // is already there (the browser scrolls a focused overflow container for free), so all
+  // that is set here is the focus stop and the label that says what the region is. Done
+  // through `containerRef` rather than a wrapper, because the wrapper would not be the
+  // scroll box and focusing it would scroll nothing.
+  const surfaceRef = useCallback((node: HTMLDivElement | null): void => {
+    if (node === null) {
+      return;
+    }
+    node.tabIndex = 0;
+    node.setAttribute("role", "region");
+    node.setAttribute("aria-label", "Diff");
+  }, []);
+
   // The CodeView container is the scroll context; without overflow-y the document
   // itself grows by the diff's full height and the shell chrome scrolls away. The
   // relative wrapper hosts the floating find bar above that scroll context so the
@@ -461,6 +479,7 @@ export function DiffView({
       )}
       <CodeView
         ref={handleRef}
+        containerRef={surfaceRef}
         items={items}
         options={options}
         onScroll={(scrollTop) => {
@@ -470,8 +489,10 @@ export function DiffView({
             capture.notify(scrollTop);
           }
         }}
-        className="h-full overflow-y-auto"
+        className="h-full overflow-y-auto outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
         onSelectedLinesChange={setSelection}
+        // The focus ring is inset: the surface is flush against the pane's edges, so an
+        // outset ring would be clipped on three sides and read as a stray line on the fourth.
         // The file's own disclosure, at the head of its header band: a folded file is
         // still a file in the diff, and the twisty is what says so. It leads the name
         // for the same reason a tree's does — the thing that opens a row goes before
@@ -483,68 +504,79 @@ export function DiffView({
             onToggle={onSetFileCollapsed}
           />
         )}
-        renderHeaderFilenameSuffix={(item) =>
-          binaryPaths.has(item.id) ? (
-            <span className="font-mono text-xs text-text-muted">binary</span>
-          ) : null
-        }
-        // The header's trailing cluster: the path affordance first, then the read
-        // control at the outer edge — the band's most-reached-for corner, and where
-        // every reviewer's hand already goes for it.
-        renderHeaderMetadata={(item) => (
+        // Copying the path belongs to the name, not to the band's trailing controls:
+        // it acts on the text it sits beside, so it follows the name directly rather
+        // than travelling to the far corner where the read control lives.
+        renderHeaderFilenameSuffix={(item) => (
           <span className="flex items-center gap-1">
             <CopyPathButton path={item.id} />
-            <FileReadToggle path={item.id} />
+            {binaryPaths.has(item.id) ? (
+              <span className="text-xs text-text-muted">binary</span>
+            ) : null}
           </span>
         )}
+        // The read control alone at the outer edge — the band's most-reached-for
+        // corner, and where every reviewer's hand already goes for it.
+        renderHeaderMetadata={(item) => <FileReadToggle path={item.id} />}
         renderAnnotation={renderAnnotation}
         renderGutterUtility={(getHoveredLine, item) => (
           // size-6 (24px) meets the hit-target floor; the glyph stays 12px so
           // the affordance still reads as a gutter micro-control. Accent is the add
           // trigger (only one shows at a time, on the hovered line). The label names
           // the real action: a range when a deliberate multi-line drag covers this
-          // file, a single line otherwise.
-          <Button
-            type="button"
-            size="icon-xs"
-            // Keep the primary fill solid on hover: the default variant's
-            // `hover:bg-primary/80` reads as the add affordance dimming, not lifting.
-            className="hover:bg-primary"
-            aria-label={
+          // file, a single line otherwise — and the hint says the same, because a bare
+          // `+` in a gutter is the one glyph here that could plausibly mean expand.
+          <TooltipHint
+            side="right"
+            align="center"
+            content={
               selectionRange(selection, item.id) === null
-                ? "Add a comment on this line"
-                : "Add a comment on the selected lines"
+                ? "Comment on this line"
+                : "Comment on the selected lines"
             }
-            // Replacing Pierre's default `[data-utility-button]` drops the
-            // stacking lift and gutter offset it carried (z-index + a negative
-            // right margin in the gutter's own lh/ch metric); without them our
-            // composite paints under, and sits inside, the line-number column.
-            // Restore Pierre's exact values so the affordance clears the numbers.
-            style={{ position: "relative", zIndex: 4, marginRight: "calc(-1lh + 1ch)" }}
-            onClick={() => {
-              const handle = handleRef.current;
-              const raw = getHoveredLine();
-              // Narrow Pierre's file|diff hovered union to an anchor-side line, or
-              // null (a file-mode row with no side, never a diff gutter).
-              let hovered: HoveredLine | null = null;
-              if (raw !== undefined && "side" in raw) {
-                const side = raw.side;
-                if (side === "additions" || side === "deletions") {
-                  hovered = { lineNumber: raw.lineNumber, side };
-                }
-              }
-              // A deliberate multi-line drag that covers this `+` commits its range;
-              // otherwise the single hovered line. Clear the selection either way so
-              // its highlight does not linger under the opened editor.
-              const anchor = pickAddAnchor(item.id, hovered, handle?.getSelectedLines() ?? null);
-              if (anchor !== null) {
-                openDraft(item.id, anchor);
-                handle?.clearSelectedLines();
-              }
-            }}
           >
-            <Plus />
-          </Button>
+            <Button
+              type="button"
+              size="icon-xs"
+              // Keep the primary fill solid on hover: the default variant's
+              // `hover:bg-primary/80` reads as the add affordance dimming, not lifting.
+              className="hover:bg-primary"
+              aria-label={
+                selectionRange(selection, item.id) === null
+                  ? "Add a comment on this line"
+                  : "Add a comment on the selected lines"
+              }
+              // Replacing Pierre's default `[data-utility-button]` drops the
+              // stacking lift and gutter offset it carried (z-index + a negative
+              // right margin in the gutter's own lh/ch metric); without them our
+              // composite paints under, and sits inside, the line-number column.
+              // Restore Pierre's exact values so the affordance clears the numbers.
+              style={{ position: "relative", zIndex: 4, marginRight: "calc(-1lh + 1ch)" }}
+              onClick={() => {
+                const handle = handleRef.current;
+                const raw = getHoveredLine();
+                // Narrow Pierre's file|diff hovered union to an anchor-side line, or
+                // null (a file-mode row with no side, never a diff gutter).
+                let hovered: HoveredLine | null = null;
+                if (raw !== undefined && "side" in raw) {
+                  const side = raw.side;
+                  if (side === "additions" || side === "deletions") {
+                    hovered = { lineNumber: raw.lineNumber, side };
+                  }
+                }
+                // A deliberate multi-line drag that covers this `+` commits its range;
+                // otherwise the single hovered line. Clear the selection either way so
+                // its highlight does not linger under the opened editor.
+                const anchor = pickAddAnchor(item.id, hovered, handle?.getSelectedLines() ?? null);
+                if (anchor !== null) {
+                  openDraft(item.id, anchor);
+                  handle?.clearSelectedLines();
+                }
+              }}
+            >
+              <Plus />
+            </Button>
+          </TooltipHint>
         )}
       />
     </div>
@@ -563,16 +595,20 @@ type FileFoldToggleProps = {
  * so a folded file is one click from being read again. */
 function FileFoldToggle({ path, collapsed, onToggle }: FileFoldToggleProps): ReactElement {
   return (
-    <Button
-      variant="ghost"
-      size="icon-xs"
-      aria-expanded={!collapsed}
-      aria-label={collapsed ? `Expand ${path}` : `Collapse ${path}`}
-      className="text-text-muted"
-      onClick={() => onToggle(path, !collapsed)}
-    >
-      {collapsed ? <ChevronRight /> : <ChevronDown />}
-    </Button>
+    // The path is already the loudest thing on the band, so the hint names the verb alone
+    // rather than repeating it back — unlike the aria-label, which has no band to lean on.
+    <TooltipHint content={collapsed ? "Expand file" : "Collapse file"} side="bottom" align="start">
+      <Button
+        variant="ghost"
+        size="icon-xs"
+        aria-expanded={!collapsed}
+        aria-label={collapsed ? `Expand ${path}` : `Collapse ${path}`}
+        className="text-text-muted"
+        onClick={() => onToggle(path, !collapsed)}
+      >
+        {collapsed ? <ChevronRight /> : <ChevronDown />}
+      </Button>
+    </TooltipHint>
   );
 }
 
@@ -581,10 +617,10 @@ type CopyPathButtonProps = { path: string };
 /** How long the copied check glyph stands in for the copy glyph after a click. */
 const COPY_FEEDBACK_MS = 1500;
 
-/** Header-band affordance that puts the file's repo-relative path on the clipboard.
- * The check only shows once the clipboard write resolves — a failed write keeps the
- * copy glyph, never a false success. size-6 (icon-xs) matches the gutter `+`'s
- * micro-control scale and meets the hit-target floor. */
+/** Affordance sitting just after the file's name that puts its repo-relative path on
+ * the clipboard. The check only shows once the clipboard write resolves — a failed
+ * write keeps the copy glyph, never a false success. size-6 (icon-xs) matches the
+ * gutter `+`'s micro-control scale and meets the hit-target floor. */
 function CopyPathButton({ path }: CopyPathButtonProps): ReactElement {
   const [copied, setCopied] = useState(false);
   useEffect(() => {
@@ -596,22 +632,26 @@ function CopyPathButton({ path }: CopyPathButtonProps): ReactElement {
   }, [copied]);
 
   return (
-    <Button
-      variant="ghost"
-      size="icon-xs"
-      aria-label="Copy file path"
-      className="text-text-muted"
-      onClick={() => {
-        navigator.clipboard.writeText(path).then(
-          () => setCopied(true),
-          // A denied/failed write only skips the feedback; there is no state to roll
-          // back, and the header band is no place for an error surface.
-          () => undefined,
-        );
-      }}
-    >
-      {copied ? <Check /> : <Copy />}
-    </Button>
+    // The hint doubles as the success message: the check glyph alone says *something*
+    // happened, the word says what, and both revert together when the timer runs out.
+    <TooltipHint content={copied ? "Path copied" : "Copy file path"} side="bottom" align="start">
+      <Button
+        variant="ghost"
+        size="icon-xs"
+        aria-label="Copy file path"
+        className="text-text-muted"
+        onClick={() => {
+          navigator.clipboard.writeText(path).then(
+            () => setCopied(true),
+            // A denied/failed write only skips the feedback; there is no state to roll
+            // back, and the header band is no place for an error surface.
+            () => undefined,
+          );
+        }}
+      >
+        {copied ? <Check /> : <Copy />}
+      </Button>
+    </TooltipHint>
   );
 }
 

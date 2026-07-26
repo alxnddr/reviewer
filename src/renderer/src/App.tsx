@@ -8,8 +8,10 @@ import { ReviewDropZone } from "@/components/ReviewDropZone";
 import { ReviewExportFailureBanner } from "@/components/ReviewExportFailureBanner";
 import { ReviewOpenFailureBanner } from "@/components/ReviewOpenFailureBanner";
 import { OverviewScreen } from "@/components/OverviewScreen";
+import { ShortcutsDialog } from "@/components/ShortcutsDialog";
 import { Sidebar } from "@/components/Sidebar";
 import { SidebarNav } from "@/components/SidebarNav";
+import { nextRegion, visibleRegions } from "@/lib/focus-regions";
 import { selectActiveSlice, useReviewStore } from "@/stores/review";
 
 /** `o` toggles the tour doc from anywhere in a review — into it from the diff, and back
@@ -50,6 +52,32 @@ function useOverviewShortcut(): void {
   }, [hasOverview, overviewOpen, openOverview, closeOverview]);
 }
 
+/** F6 (⇧F6 backwards) steps focus between the shell's big regions — the layer tree, the
+ * comment overview, the file tree, and the diff or the doc. Mounted at the app level for
+ * the same reason `o` is: the regions it walks are spread across both screens, and it has
+ * to keep working whichever one is up.
+ *
+ * A modifier guard is deliberately absent past shift: F6 is a function key, so it cannot
+ * collide with typing, and it must keep working while focus is in the file filter — that
+ * field is *inside* a region, and being stuck in it is exactly what this key is for. */
+function useRegionShortcut(): void {
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent): void => {
+      if (event.key !== "F6" || event.metaKey || event.ctrlKey || event.altKey) {
+        return;
+      }
+      const target = nextRegion(visibleRegions(), document.activeElement, event.shiftKey ? -1 : 1);
+      if (target === null) {
+        return;
+      }
+      event.preventDefault();
+      target.focus();
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, []);
+}
+
 export function App(): ReactElement {
   const boot = useReviewStore((state) => state.boot);
   const activeSessionId = useReviewStore((state) => state.activeSessionId);
@@ -76,6 +104,7 @@ export function App(): ReactElement {
   }, [hydrate]);
 
   useOverviewShortcut();
+  useRegionShortcut();
 
   useEffect(() => {
     const bridge = window.reviewer;
@@ -111,6 +140,9 @@ export function App(): ReactElement {
 
   return (
     <DiffWorkerPool>
+      {/* Outside the shell, not in it: `?` has to answer from the empty state too, before
+          there is any session for the shell to be about. */}
+      <ShortcutsDialog />
       <ReviewDropZone>
         <AppShell
           banner={

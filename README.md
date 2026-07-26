@@ -2,10 +2,9 @@
 
 Local-first macOS app for reading agent-authored code reviews.
 
-Point any coding agent at your review rules; it writes a `.reviewer.json`. The `rvw` CLI shapes its
-findings into an **overview**, line-anchored comments, and ordered **layers**, and validates every
-anchor against the real diff so a hallucinated line can't reach you. Open it in Reviewer as a
-guided walkthrough.
+Your agent reviews with its own rules; the `rvw` CLI presents the result — an **overview**,
+line-anchored comments, and an optional walkthrough in ordered **layers** — validating every anchor
+against the real diff first, so a hallucinated line can't reach you.
 
 > **Note:** this project was developed entirely by Claude, no one has ever looked at its code.
 
@@ -13,17 +12,16 @@ guided walkthrough.
 
 ## Features
 
-- **Any agent, your rules.** `rvw` is a small, provider-agnostic CLI — no vendor lock-in. It hands
-  the agent the artifact shape (`rvw schema`), real line numbers (`rvw anchors`), and coverage
-  (`rvw coverage`). A human can drive it too.
+- **Any agent, your rules.** `rvw` is a small, provider-agnostic CLI that never tells your agent how
+  to review. It hands over the artifact shape (`rvw schema`) and the exact diff anchors are checked
+  against (`rvw diff`). A human can drive it too.
 - **Validated, not trusted.** `rvw emit` writes nothing unless every comment and layer range places
   against the diff.
-- **Starts with a tour, not a file list.** A review opens on its **overview**: what the change
-  does, then the walkthrough — one card per layer, with its files, line counts and a code preview,
-  derived from the artifact so it can't go stale. Click a chapter to read its diff; come back any
-  time.
-- **A reading path.** Reviews are ordered *layers*, each with a `description`. Read
-  in sequence or solo one.
+- **Starts with a tour, not a file list.** A review opens on its **overview**: what the change does,
+  then one section per layer — its files, line counts and comments derived from the artifact, so
+  they can't go stale. Click a chapter to read its diff; come back any time.
+- **A reading path.** Layers are optional and nestable, and the order you emit is the order they are
+  read. Follow them in sequence or solo one.
 - **Survives drift.** A comment whose code moved is flagged **Outdated**, never shown on the wrong
   line.
 - **High-fidelity diffs** via Pierre's `@pierre/diffs` / `@pierre/trees`. Local-first — no account,
@@ -31,17 +29,22 @@ guided walkthrough.
 
 ## Usage
 
-```bash
-# 1. Author (agent writes draft.json of comments + layers; see `rvw schema`)
-rvw emit --repo /path/to/repo --base main --head feature/foo --draft draft.json
-rvw check <name>.reviewer.json      # validate + coverage
+One call, from inside the repo: the agent pipes its draft in, `rvw` validates every anchor against
+the real diff, writes the artifact, and opens it.
 
-# 2. Read
-rvw open <name>.reviewer.json       # or File → Open, or drag onto the window
+```bash
+rvw emit <<'JSON'
+{ "overview": { ... }, "comments": [ ... ], "layers": [ ... ] }
+JSON
 ```
 
-With Claude Code, point the agent at the bundled skill (`rvw skills`). The artifact is refs-only —
-the app re-derives the diff from your branch on open, so it stays small and current.
+The range is auto-detected (current branch against its fork point) — pass `--repo`/`--base`/`--head`
+to override, `--no-open` to skip opening. See `rvw schema --json` for the draft shape and `rvw diff`
+for the diff anchors are checked against.
+
+Point your agent at the bundled `present-review` skill (`rvw skills`) after it has reviewed the
+change. The artifact is refs-only — the app re-derives the diff from your branch on open, so it
+stays small and current.
 
 ## Install
 

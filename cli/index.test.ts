@@ -11,8 +11,9 @@ import { describe, expect, it } from "vitest";
 // codes, including the negative Stricli failure codes normalized to 2.
 
 const VALID_ARTIFACT = JSON.stringify({
-  version: 1,
-  source: { kind: "local", repo: { path: "/repo", name: "repo" }, base: "main", head: "feature" },
+  repo: "/repo",
+  base: "main",
+  head: "feature",
   patch: [
     "diff --git a/src/bar.ts b/src/bar.ts",
     "index 3333333..4444444 100644",
@@ -27,7 +28,6 @@ const VALID_ARTIFACT = JSON.stringify({
   comments: [{ file: "src/bar.ts", side: "additions", startLine: 2, endLine: 2, body: "note" }],
   layers: [
     {
-      id: "leaf",
       label: "Leaf",
       summary: "child",
       // A stop, so it points at code: a layer with no ranges of its own is a heading, and
@@ -46,8 +46,7 @@ function fixture(bytes: string): string {
 
 function rvw(args: readonly string[]): { status: number | null; stderr: string } {
   // Invoked through the `cli` script so the test also proves package.json forwards the
-  // verb + args to the entrypoint — the exact `bun run cli validate …` path the skill
-  // and an agent use.
+  // verb + args to the entrypoint — the exact `bun run cli check …` path an agent uses.
   const result = spawnSync("bun", ["run", "cli", ...args], {
     cwd: process.cwd(),
     encoding: "utf8",
@@ -57,7 +56,7 @@ function rvw(args: readonly string[]): { status: number | null; stderr: string }
 
 describe("rvw entrypoint exit codes (real process)", () => {
   it("exits 0 on a valid artifact", () => {
-    expect(rvw(["validate", fixture(VALID_ARTIFACT)]).status).toBe(0);
+    expect(rvw(["check", fixture(VALID_ARTIFACT)]).status).toBe(0);
   });
 
   it("exits 1 on a mis-anchored artifact", () => {
@@ -65,13 +64,13 @@ describe("rvw entrypoint exit codes (real process)", () => {
     misAnchored.comments = [
       { file: "src/bar.ts", side: "additions", startLine: 900, endLine: 900, body: "drifted" },
     ];
-    const { status, stderr } = rvw(["validate", fixture(JSON.stringify(misAnchored))]);
+    const { status, stderr } = rvw(["check", fixture(JSON.stringify(misAnchored))]);
     expect(status).toBe(1);
     expect(stderr).toContain("does not place");
   });
 
   it("exits 2 when the artifact cannot be read", () => {
-    const { status, stderr } = rvw(["validate", join(tmpdir(), "reviewer-rvw-missing.json")]);
+    const { status, stderr } = rvw(["check", join(tmpdir(), "reviewer-rvw-missing.json")]);
     expect(status).toBe(2);
     expect(stderr).toContain("cannot read");
   });

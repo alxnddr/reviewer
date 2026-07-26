@@ -3,32 +3,38 @@ import type {
   CoverageReport,
   FileCoverage,
   NonCoverableReason,
-  UncoveredSpan,
 } from "../src/tools/review-coverage";
 
-// The human rendering of a `CoverageReport`: a headline percentage, the per-file breakdown,
-// and the flattened uncovered spans. Lives apart from any one command because two verbs
-// print it — `rvw coverage` as its whole output and `rvw check` as the second half of the
-// composite gate — and a reviewer reading one must see the same numbers laid out the same
-// way. Pure: it returns lines, so the command owns the stream and the exit code.
+// The human rendering of a `CoverageReport`: a headline percentage and a per-file rollup, and
+// deliberately nothing more. It used to also flatten every uncovered span, which on a real
+// range meant ~200 lines of output for a caller who asked one yes/no question — pure context
+// burn for an agent and a wall for a human. The spans are still computed and still shipped
+// under `--json`, where a consumer that wants them can read them; the text channel is a
+// summary, so it is written like one, capped so that a diff touching eighty files cannot
+// swamp the answer it is attached to.
+//
+// Pure: it returns lines, so the command owns the stream and the exit code.
 
-/** The report as display lines (no trailing newlines). `label` is whatever the caller
- * measured — an artifact path for the embedded form, a draft path for the live-range one. */
-export function coverageReportLines(label: string, report: CoverageReport): string[] {
+/** How many files the rollup names before it starts counting instead. Small on purpose: past a
+ * handful, a file list stops being something a reader scans and becomes something they scroll,
+ * and `--json` is right there for the caller that actually wants all of them. */
+const MAX_ROLLUP_FILES = 10;
+
+/** The report as display lines (no trailing newlines): the headline, then one line per changed
+ * file, then — when the diff has more files than the cap — the count that was left out, so a
+ * truncated list never reads like a complete one. */
+export function coverageSummaryLines(report: CoverageReport): string[] {
   const { coverableChangedLines, coveredChangedLines } = report.headline;
   const lines = [
-    `${label}: coverage ${percent(coveredChangedLines, coverableChangedLines)} (${coveredChangedLines}/${coverableChangedLines} changed lines)`,
+    `coverage ${percent(coveredChangedLines, coverableChangedLines)} (${coveredChangedLines}/${coverableChangedLines} changed lines)`,
   ];
 
-  for (const file of report.files) {
+  for (const file of report.files.slice(0, MAX_ROLLUP_FILES)) {
     lines.push(`  ${describeFile(file)}`);
   }
-
-  if (report.uncoveredSpans.length > 0) {
-    lines.push("  uncovered spans:");
-    for (const span of report.uncoveredSpans) {
-      lines.push(`    - ${describeSpan(span)}`);
-    }
+  const hidden = report.files.length - MAX_ROLLUP_FILES;
+  if (hidden > 0) {
+    lines.push(`  … and ${hidden} more file(s) — \`--json\` lists every one`);
   }
   return lines;
 }
@@ -60,7 +66,7 @@ function describeFile(file: FileCoverage): string {
   }
 }
 
-/** The one rendering of a non-coverable reason, shared by `rvw coverage` and `rvw anchors`
+/** The one rendering of a non-coverable reason, shared by `rvw check --coverage` and `rvw diff`
  * so the two verbs never describe the same file differently. Exhaustive: a new reason is a
  * compile error, not a file quietly mislabelled as the last arm. */
 export function describeReason(reason: NonCoverableReason): string {
@@ -74,8 +80,4 @@ export function describeReason(reason: NonCoverableReason): string {
     default:
       return assertNever(reason);
   }
-}
-
-function describeSpan(span: UncoveredSpan): string {
-  return `${span.file} ${span.side} ${span.startLine}-${span.endLine}`;
 }

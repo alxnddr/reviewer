@@ -275,7 +275,6 @@ function siblingSlice(ordinal: number, name: string): SessionSlice {
   return {
     id: `${digit.repeat(8)}-${digit.repeat(4)}-4000-8000-${digit.repeat(12)}`,
     repo: { path: `/preview/${name}`, name },
-    mode: "commits",
     log: null,
     branches: null,
     brush: null,
@@ -325,11 +324,12 @@ function seedSession(overrides: Partial<SessionSlice>): void {
   const slice: SessionSlice = {
     id: FIXTURE_SESSION_ID,
     repo: { path: "/preview/fixture", name: "fixture" },
-    mode: "commits",
     log: { phase: "loaded", entries: fixtureEntries() },
     branches: { phase: "loaded", list: FIXTURE_BRANCHES },
     brush: { anchor: 0, focus: 0 },
-    base: FIXTURE_BRANCHES.defaultBranch,
+    // A fresh session lists the branch it is standing on and compares to nothing; the
+    // states that show a comparison set `base` themselves.
+    base: null,
     head: FIXTURE_BRANCHES.currentBranch,
     selection: { kind: "uncommitted" },
     diff: { phase: "empty" },
@@ -410,7 +410,7 @@ export function applyPreviewState(): void {
     case "branches": {
       const files = parsePatch(MULTI_STATUS_PATCH, "preview:branches");
       seedSession({
-        mode: "branches",
+        base: "main",
         selection: {
           kind: "branches",
           base: "main",
@@ -423,7 +423,11 @@ export function applyPreviewState(): void {
     }
     case "branch-empty":
       seedSession({
-        mode: "branches",
+        base: "main",
+        // What `base..head` actually walks: only the commits head adds, and never the
+        // working-tree row — a comparison is between two committed refs.
+        log: { phase: "loaded", entries: fixtureEntries().slice(1, 4) },
+        brush: { anchor: 0, focus: 2 },
         selection: {
           kind: "branches",
           base: "main",
@@ -582,6 +586,61 @@ export function applyPreviewState(): void {
         overview: fixtureOverview(),
         overviewOpen: true,
         ...readFixture(files, ["added.txt", "notes.txt"]),
+      });
+      break;
+    }
+    case "commits-many": {
+      // The log at the cap `git log` is given (LOG_MAX_COUNT): what the picker's
+      // virtualization is for, and the state to watch a drag-brush in.
+      const entries: LogEntry[] = [{ kind: "uncommitted" }];
+      for (let index = 0; index < 2000; index += 1) {
+        const sha = index.toString(16).padStart(40, "0");
+        entries.push({
+          kind: "commit",
+          commit: {
+            sha,
+            shortSha: sha.slice(0, 7),
+            author: index % 3 === 0 ? "alex" : "mira",
+            authoredAt: new Date(Date.now() - (index + 1) * HOUR_MS).toISOString(),
+            subject: `${SUBJECTS[index % SUBJECTS.length]} (#${index})`,
+          },
+        });
+      }
+      seedSession({
+        diff: { phase: "empty" },
+        log: { phase: "loaded", entries },
+        brush: { anchor: 0, focus: 0 },
+      });
+      break;
+    }
+    case "review-picker": {
+      // A review session with its picker forced open (no diff to fall back to): the
+      // review-scoped selector — the review's own commits, narrowed to two of them, and
+      // no way out to another diff. Its endpoints are named by the bar above it.
+      const source = {
+        repo: { path: "/preview/fixture", name: "fixture" },
+        base: "main",
+        head: "feature/brush-selection",
+      } as const;
+      const entries = fixtureEntries();
+      const first = entries[3];
+      const last = entries[2];
+      seedSession({
+        diff: { phase: "empty" },
+        selection: null,
+        log: { phase: "loaded", entries },
+        brush: { anchor: 2, focus: 3 },
+        comments: fixtureComments(),
+        layers: fixtureLayers(),
+        reviewOrigin: { ...source, patch: null },
+        reviewDiff: { kind: "refs", base: source.base, head: source.head },
+        reviewSubrange:
+          first !== undefined &&
+          first.kind === "commit" &&
+          last !== undefined &&
+          last.kind === "commit"
+            ? { kind: "commitRange", first: first.commit.sha, last: last.commit.sha }
+            : null,
       });
       break;
     }

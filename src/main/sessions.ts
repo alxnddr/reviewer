@@ -14,7 +14,6 @@ import {
   type ImportedReview,
 } from "../shared/review";
 import {
-  SelectionMode,
   Session,
   SessionStoreFile,
   type SessionId,
@@ -83,7 +82,6 @@ const NewerEnvelope = z.object({ version: z.number().int().gt(CURRENT_VERSION) }
 const SessionWithViewStateSalvage = z.object({
   id: Session.shape.id,
   source: Session.shape.source,
-  mode: SelectionMode.catch("commits"),
   base: BranchName.nullable().catch(null),
   head: BranchName.nullable().catch(null),
   commitSelection: CommitSelection.nullable().catch(null),
@@ -134,7 +132,6 @@ function buildSession(source: SessionSource, seed: ReviewSeed): Session {
   return {
     id: randomUUID(),
     source,
-    mode: "commits",
     base: null,
     head: null,
     commitSelection: null,
@@ -260,7 +257,7 @@ export function createSessionStore(options: SessionStoreOptions = {}): SessionSt
     createFromReview: (review) =>
       addSession(
         buildSession(
-          { kind: "local", repo: review.source.repo },
+          { kind: "local", repo: review.repo },
           {
             comments: review.comments,
             layers: review.layers,

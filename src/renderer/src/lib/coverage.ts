@@ -3,7 +3,7 @@ import { coverageOfFiles, type CoverageReport } from "../../../tools/review-cove
 import type { PatchFile } from "./diff/patch";
 
 // Layer coverage for the app, computed — never read from an artifact field. The
-// numbers come from the *same* `coverageOfFiles` core the `rvw coverage` CLI uses, run
+// numbers come from the *same* `coverageOfFiles` core the `rvw check --coverage` CLI uses, run
 // against the diff already on screen (`slice.diff.files`), so what the reviewer reads
 // matches what the CLI reports with no re-parse and no drift. On top of the raw report
 // this adds the two view concerns the surfaces need: the headline counts, and the
@@ -11,10 +11,10 @@ import type { PatchFile } from "./diff/patch";
 // layer machinery (`soloFiles`, `layerFilePaths`, `resolveLayerScroll`) filters the tree
 // and diff to exactly the skipped files with no new plumbing.
 
-/** The id of the inferred "not covered by layers" layer. Namespaced so it cannot be a
- * plausible authored id; still guarded against collision at injection time. Never
- * persisted or exported — it only ever lives in the derived `effectiveLayers` list and,
- * transiently, in the ephemeral `activeLayerId`. */
+/** The id of the inferred "not covered by layers" layer. Collision-free by construction:
+ * every real layer's id is app-stamped on import, never authored, so nothing on the wire
+ * can name this one. Never persisted or exported — it only ever lives in the derived
+ * `effectiveLayers` list and, transiently, in the ephemeral `activeLayerId`. */
 export const UNCOVERED_LAYER_ID = "reviewer:uncovered";
 
 /** The headline + the inferred remainder. `uncoveredLayer` is null exactly when every
@@ -22,7 +22,7 @@ export const UNCOVERED_LAYER_ID = "reviewer:uncovered";
  * exists" rule the UI keys the whole not-covered treatment on.
  *
  * The headline numbers stay *line*-based (they are the coverage-quality readout, and the
- * same ones `rvw coverage` prints); the remainder is *file*-based, because soloing is
+ * same ones `rvw check --coverage` prints); the remainder is *file*-based, because soloing is
  * file-granular — see `buildUncoveredLayer`. */
 export type CoverageSummary = {
   report: CoverageReport;
@@ -93,15 +93,11 @@ export function coverageSummary(
  * both in a layer and not covered by layers. The headline % stays line-based; that is the
  * coverage-*quality* question, and it is a different one.
  *
- * Null when every coverable file is walked, and null if an authored layer already claims
- * the reserved id (the authored one wins rather than being shadowed by the inference). */
+ * Null when every coverable file is walked. */
 function buildUncoveredLayer(
   report: CoverageReport,
   layers: readonly ReviewLayer[],
 ): ReviewLayer | null {
-  if (layers.some((layer) => layer.id === UNCOVERED_LAYER_ID)) {
-    return null;
-  }
   // Every file any layer references. A bare parent rollup contributes nothing here, which
   // is correct — its descendants carry the ranges.
   const walked = new Set(layers.flatMap((layer) => layer.ranges.map((range) => range.file)));

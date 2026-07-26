@@ -32,20 +32,23 @@ const COMMENTS = [
   { file: "src/foo.ts", side: "additions", startLine: 11, endLine: 13, body: "why" },
 ];
 const LAYERS = [
-  { id: "rollup", label: "Rollup", summary: "parent", ranges: [] },
   {
-    id: "leaf",
-    label: "Leaf",
-    summary: "child",
-    description: "Adds [bar](src/bar.ts).",
-    parent: "rollup",
-    ranges: [{ file: "src/bar.ts", side: "additions", startLine: 2, endLine: 2 }],
+    label: "Rollup",
+    summary: "parent",
+    children: [
+      {
+        label: "Leaf",
+        summary: "child",
+        description: "Adds [bar](src/bar.ts).",
+        ranges: [{ file: "src/bar.ts", side: "additions", startLine: 2, endLine: 2 }],
+      },
+    ],
   },
 ];
 
 function input(overrides: Partial<EmitInput> = {}): EmitInput {
   return {
-    repo: { path: "/repo", name: "repo" },
+    repo: "/repo",
     base: "main",
     head: "feature",
     patch: PATCH,
@@ -56,7 +59,7 @@ function input(overrides: Partial<EmitInput> = {}): EmitInput {
 }
 
 describe("emitReviewArtifact", () => {
-  it("assembles a version:1 refs-only artifact whose anchors place against the captured diff", () => {
+  it("assembles a refs-only artifact whose anchors place against the captured diff", () => {
     const result = emitReviewArtifact(input());
     expect(result.ok).toBe(true);
     if (!result.ok) return;
@@ -66,22 +69,33 @@ describe("emitReviewArtifact", () => {
     if (!parsed.ok) return;
 
     // Refs-only: the artifact carries no embedded patch — the app re-derives the diff
-    // from `source` on open, and re-validation places against that captured diff, not stored bytes.
+    // from the recorded repo/refs on open, and re-validation places against that captured
+    // diff, not stored bytes.
     expect(parsed.artifact.patch).toBeUndefined();
     expect(validatePlacement(parsed.artifact, PATCH)).toEqual([]);
 
     const artifact = ReviewArtifact.parse(JSON.parse(result.bytes));
-    expect(artifact.version).toBe(1);
-    expect(artifact.source).toEqual({
-      kind: "local",
-      repo: { path: "/repo", name: "repo" },
-      base: "main",
-      head: "feature",
-    });
-    expect(artifact.layers).toHaveLength(2);
-    // Layer order is emitted as authored — the app never re-sorts.
-    expect(artifact.layers.map((layer) => layer.id)).toEqual(["rollup", "leaf"]);
+    expect(artifact.repo).toBe("/repo");
+    expect(artifact.base).toBe("main");
+    expect(artifact.head).toBe("feature");
+    // The authored nesting is emitted as authored — the CLI never flattens or re-sorts.
+    expect(artifact.layers).toHaveLength(1);
+    expect(artifact.layers[0]?.children.map((child) => child.label)).toEqual(["Leaf"]);
     expect(artifact.comments[0]?.side).toBe("additions");
+  });
+
+  it("emits a comments-only draft, and a layers-only one, without either placeholder key", () => {
+    // A draft that carries only one half writes only that half: `JSON.stringify` drops the
+    // undefined, and the schema defaults the absent key to empty.
+    const commentsOnly = emitReviewArtifact(input({ layers: undefined }));
+    expect(commentsOnly.ok).toBe(true);
+    if (!commentsOnly.ok) return;
+    expect(JSON.parse(commentsOnly.bytes)).not.toHaveProperty("layers");
+
+    const layersOnly = emitReviewArtifact(input({ comments: undefined }));
+    expect(layersOnly.ok).toBe(true);
+    if (!layersOnly.ok) return;
+    expect(JSON.parse(layersOnly.bytes)).not.toHaveProperty("comments");
   });
 
   it("refuses handoff — no bytes — when a comment anchor sits outside every hunk", () => {
@@ -135,7 +149,6 @@ describe("emitReviewArtifact", () => {
       input({
         layers: [
           {
-            id: "leaf",
             label: "Leaf",
             summary: "child",
             description: "See [ghost](does/not/exist.ts).",
@@ -148,7 +161,7 @@ describe("emitReviewArtifact", () => {
     if (result.ok) return;
     expect(result.problems).toContainEqual({
       kind: "unresolvedLink",
-      layerId: "leaf",
+      layer: "1",
       label: "ghost",
       path: "does/not/exist.ts",
     });

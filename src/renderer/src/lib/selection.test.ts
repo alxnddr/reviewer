@@ -6,6 +6,7 @@ import {
   brushFromSelection,
   brushReducer,
   brushSummary,
+  commitSelectionLabel,
   logEntryKey,
   selectionFromBrush,
   type BrushAction,
@@ -224,6 +225,40 @@ describe("brushSummary", () => {
     expect(brushSummary(DIRTY_LOG, { anchor: 0, focus: 0 })).toBe("uncommitted changes");
     expect(brushSummary(CLEAN_LOG, { anchor: 2, focus: 2 })).toBe("1 commit");
     expect(brushSummary(CLEAN_LOG, { anchor: 0, focus: 1 })).toBe("2 commits");
+  });
+});
+
+describe("commitSelectionLabel", () => {
+  it("calls a single commit by its subject, never its sha", () => {
+    expect(
+      commitSelectionLabel(CLEAN_LOG, { kind: "commitRange", first: sha("b"), last: sha("b") }),
+    ).toBe("commit b");
+  });
+
+  it("counts anything wider", () => {
+    expect(
+      commitSelectionLabel(CLEAN_LOG, { kind: "commitRange", first: sha("c"), last: sha("a") }),
+    ).toBe("3 commits");
+    expect(
+      commitSelectionLabel(DIRTY_LOG, { kind: "commitRangeWithUncommitted", first: sha("b") }),
+    ).toBe("2 commits + uncommitted");
+  });
+
+  it("names the working tree", () => {
+    expect(commitSelectionLabel(DIRTY_LOG, { kind: "uncommitted" })).toBe("Uncommitted changes");
+  });
+
+  it("falls back to shas only when the log cannot place the selection", () => {
+    const missing: CommitSelection = { kind: "commitRange", first: sha("f"), last: sha("f") };
+    expect(commitSelectionLabel(CLEAN_LOG, missing)).toBe(`Commit ${sha("f").slice(0, 7)}`);
+    // A log that hasn't loaded is the same situation: nothing to look a subject up in.
+    expect(
+      commitSelectionLabel(null, { kind: "commitRange", first: sha("a"), last: sha("c") }),
+    ).toBe(`Commits ${sha("a").slice(0, 7)} → ${sha("c").slice(0, 7)}`);
+    expect(
+      commitSelectionLabel(null, { kind: "commitRangeWithUncommitted", first: sha("a") }),
+    ).toBe(`Commits since ${sha("a").slice(0, 7)}`);
+    expect(commitSelectionLabel(null, { kind: "uncommitted" })).toBe("Uncommitted changes");
   });
 });
 

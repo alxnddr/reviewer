@@ -1,5 +1,6 @@
 import { assertNever } from "../../../shared/assert";
 import type { CommitSelection, CommitSha, LogEntry } from "../../../shared/git";
+import { shortSha as abbreviate } from "./refs";
 
 /** Inclusive index pair into the newest-first log list. `anchor` is where the brush
  * started and stays put; `focus` is the end the user moves (drag, shift-click,
@@ -170,6 +171,57 @@ export function brushSummary(entries: LogEntry[], range: BrushRange): string {
   }
   const commits = commitCount === 1 ? "1 commit" : `${commitCount} commits`;
   return withUncommitted ? `${commits} + uncommitted` : commits;
+}
+
+/** What the log can no longer name: a selection whose shas are not in the current
+ * list (rewritten history, or a log that hasn't loaded). The abbreviated sha is all
+ * that is left to say — everything a human would recognise it by lives in the entry
+ * this selection can no longer be matched to. */
+function staleCommitLabel(selection: CommitSelection): string {
+  switch (selection.kind) {
+    case "uncommitted":
+      return "Uncommitted changes";
+    case "commitRangeWithUncommitted":
+      return `Commits since ${abbreviate(selection.first)}`;
+    case "commitRange":
+      return selection.first === selection.last
+        ? `Commit ${abbreviate(selection.first)}`
+        : `Commits ${abbreviate(selection.first)} → ${abbreviate(selection.last)}`;
+    default:
+      return assertNever(selection);
+  }
+}
+
+/** What a brushed band is *called* — the one line the rail shows for it.
+ *
+ * A single commit reads as its own subject, because that is what a human calls a
+ * commit; the sha is machine identity and says nothing about which change this is.
+ * Anything wider is a count ("3 commits + uncommitted"), because nobody reads a range
+ * by its endpoints either. */
+export function commitRangeLabel(entries: LogEntry[], range: BrushRange): string {
+  const { top, bottom } = brushBounds(range);
+  if (top === bottom) {
+    const entry = entries[top];
+    return entry === undefined || entry.kind === "uncommitted"
+      ? "Uncommitted changes"
+      : entry.commit.subject;
+  }
+  // Every wider band holds at least one commit, so the summary always opens on a
+  // digit and needs no sentence-casing.
+  return brushSummary(entries, range);
+}
+
+/** The same label for a settled selection. Only one the log cannot place falls back to
+ * shas, where there is genuinely nothing else left to print. */
+export function commitSelectionLabel(
+  entries: LogEntry[] | null,
+  selection: CommitSelection,
+): string {
+  if (entries === null) {
+    return staleCommitLabel(selection);
+  }
+  const range = brushFromSelection(entries, selection);
+  return range === null ? staleCommitLabel(selection) : commitRangeLabel(entries, range);
 }
 
 /** Stable identity for a log row across refreshes (shas survive, indexes don't). */

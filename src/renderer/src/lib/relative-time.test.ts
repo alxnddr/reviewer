@@ -1,23 +1,35 @@
 import { describe, expect, it } from "vitest";
-import { relativeTime } from "./relative-time";
+import { absoluteTime, shortAge } from "./relative-time";
 
 const NOW = new Date("2026-07-04T12:00:00Z");
 
-describe("relativeTime", () => {
-  it("formats each magnitude at commit-list density", () => {
-    expect(relativeTime("2026-07-04T11:59:40Z", NOW)).toBe("just now");
-    expect(relativeTime("2026-07-04T11:45:00Z", NOW)).toBe("15m ago");
-    expect(relativeTime("2026-07-04T09:00:00Z", NOW)).toBe("3h ago");
-    expect(relativeTime("2026-07-01T12:00:00Z", NOW)).toBe("3d ago");
-    expect(relativeTime("2026-05-01T12:00:00Z", NOW)).toBe("2mo ago");
-    expect(relativeTime("2024-07-04T12:00:00Z", NOW)).toBe("2y ago");
+describe("shortAge", () => {
+  it("formats the same magnitudes as a column, without the 'ago'", () => {
+    expect(shortAge("2026-07-04T11:59:40Z", NOW)).toBe("now");
+    expect(shortAge("2026-07-04T11:45:00Z", NOW)).toBe("15m");
+    expect(shortAge("2026-07-04T09:00:00Z", NOW)).toBe("3h");
+    expect(shortAge("2026-07-01T12:00:00Z", NOW)).toBe("3d");
+    expect(shortAge("2026-05-01T12:00:00Z", NOW)).toBe("2mo");
+    expect(shortAge("2024-07-04T12:00:00Z", NOW)).toBe("2y");
   });
 
-  it("treats a skewed future timestamp as just now, never negative", () => {
-    expect(relativeTime("2026-07-04T12:05:00Z", NOW)).toBe("just now");
+  it("never goes negative on a skewed future timestamp, and stays empty on garbage", () => {
+    expect(shortAge("2026-07-04T12:05:00Z", NOW)).toBe("now");
+    expect(shortAge("not a date", NOW)).toBe("");
+  });
+});
+
+describe("absoluteTime", () => {
+  it("names the day the age cannot", () => {
+    // Locale-formatted, so the assertion is on the parts rather than the punctuation
+    // between them — the point is that the day, month, year and clock time are there.
+    const formatted = absoluteTime("2026-07-04T09:30:00Z");
+    expect(formatted).toMatch(/Jul/);
+    expect(formatted).toMatch(/4/);
+    expect(formatted).toMatch(/2026/);
   });
 
   it("returns empty for an unparseable timestamp", () => {
-    expect(relativeTime("not a date", NOW)).toBe("");
+    expect(absoluteTime("not a date")).toBe("");
   });
 });

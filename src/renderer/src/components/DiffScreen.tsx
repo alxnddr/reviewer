@@ -145,21 +145,15 @@ function TerminalState({ title, message, withOpenAction }: TerminalStateProps): 
   );
 }
 
-/** A clean diff reads differently per selection: branch mode names both sides
- * (refs render mono — machine tokens inside a sans sentence). */
+/** A clean diff reads differently per selection: branch mode names both sides. The
+ * refs set in the shell sans like every other ref in the app — mono is for code, and a
+ * branch name is a name. */
 function emptyDiffMessage(selection: DiffSelection | null): ReactNode {
   if (selection === null) {
     return "Nothing to select in this repository.";
   }
   if (selection.kind === "branches") {
-    return (
-      <>
-        {"No changes between "}
-        <span className="font-mono">{selection.base}</span>
-        {" and "}
-        <span className="font-mono">{selection.head}</span>.
-      </>
-    );
+    return `No changes between ${selection.base} and ${selection.head}.`;
   }
   return "No changes.";
 }
@@ -442,7 +436,6 @@ export function DiffScreen(): ReactElement | null {
         return (
           <LayerIntro
             layer={activeLayer}
-            hasOverview={hasOverview}
             ordinal={entry?.ordinal ?? null}
             // With a tour doc, "previous" from the first layer is the doc itself — the
             // review's real first stop — so the chevron only dead-ends without one.

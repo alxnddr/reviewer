@@ -12,13 +12,13 @@ import { reviewArtifactJsonSchema } from "./review-schema";
 // rather than leaving a stale comment behind.
 
 const VALID = {
-  version: 1,
-  source: { kind: "local", repo: { path: "/repo", name: "repo" }, base: "main", head: "feature" },
+  repo: "/repo",
+  base: "main",
+  head: "feature",
   patch: "diff --git a/a.ts b/a.ts\n",
   comments: [{ file: "a.ts", side: "additions", startLine: 2, endLine: 4, body: "why" }],
   layers: [
     {
-      id: "one",
       label: "One",
       summary: "first",
       ranges: [{ file: "a.ts", side: "additions", startLine: 2, endLine: 4 }],
@@ -47,12 +47,28 @@ describe("reviewArtifactJsonSchema", () => {
     expect(ReviewArtifact.safeParse(artifact).success).toBe(false);
   });
 
-  it("rejects a version other than 1, so a future schema is never mis-read as v1", () => {
-    expect(compiled()({ ...VALID, version: 2 })).toBe(false);
-  });
-
   it("rejects an unknown top-level key rather than silently ignoring it", () => {
     expect(compiled()({ ...VALID, submitted: true })).toBe(false);
+    expect(ReviewArtifact.safeParse({ ...VALID, submitted: true }).success).toBe(false);
+  });
+
+  it("describes what may be *written*: only repo/base/head are required", () => {
+    // The schema is what an authoring agent writes against, so it must not demand the keys
+    // the parse fills in — an artifact with no comments, or a layer with no children, is
+    // written by leaving them out, and the schema has to say so.
+    const schema = reviewArtifactJsonSchema();
+    expect(schema.required).toEqual(["repo", "base", "head"]);
+    expect(compiled()({ repo: "/repo", base: "main", head: "feature" })).toBe(true);
+    expect(compiled()({ ...VALID, layers: [{ label: "Bare" }] })).toBe(true);
+  });
+
+  it("carries the recursive layer through $defs, so `children` nests to any depth", () => {
+    expect(
+      compiled()({
+        ...VALID,
+        layers: [{ label: "Group", children: [{ label: "Inner", children: [{ label: "Deep" }] }] }],
+      }),
+    ).toBe(true);
   });
 
   it("documents the descending-range rule it structurally cannot enforce, which zod enforces", () => {
@@ -61,25 +77,26 @@ describe("reviewArtifactJsonSchema", () => {
       comments: [{ file: "a.ts", side: "additions", startLine: 9, endLine: 4, body: "why" }],
     };
     // JSON Schema has no keyword relating two sibling properties, so the emitted document
-    // cannot reject this. The contract does — which is why `rvw validate` is the authority.
+    // cannot reject this. The contract does — which is why `rvw check` is the authority.
     expect(compiled()(descending)).toBe(true);
     expect(ReviewArtifact.safeParse(descending).success).toBe(false);
 
     // ...and the rule an agent must honor is stated in the schema it authors against.
     const schema = reviewArtifactJsonSchema();
     expect(JSON.stringify(schema)).toContain("endLine must be greater than or equal to startLine");
-    expect(schema.description).toContain("`rvw validate`");
+    expect(schema.description).toContain("`rvw check`");
   });
 
   it("is derived from the contract, not hand-written: every artifact key appears in the schema", () => {
     const properties = reviewArtifactJsonSchema().properties ?? {};
     expect(Object.keys(properties).sort()).toEqual([
+      "base",
       "comments",
+      "head",
       "layers",
       "overview",
       "patch",
-      "source",
-      "version",
+      "repo",
     ]);
   });
 });

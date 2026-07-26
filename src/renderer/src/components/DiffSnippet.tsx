@@ -28,7 +28,9 @@ type DiffSnippetProps = {
 export function DiffSnippet({ file, lines, hidden, className }: DiffSnippetProps): ReactElement {
   return (
     <div className={cn("overflow-hidden rounded-md border border-border", className)}>
-      <div className="truncate border-b border-border bg-border/20 px-2 py-1 font-mono text-xs text-text-faint">
+      {/* The header names the file, so it is chrome and sets in the shell sans; only the
+          lines below it are code. */}
+      <div className="truncate border-b border-border bg-border/20 px-2 py-1 text-xs text-text-faint">
         {file}
       </div>
       {lines.map((line, index) => (

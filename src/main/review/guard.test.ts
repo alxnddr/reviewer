@@ -27,13 +27,9 @@ afterEach(() => {
 });
 
 const VALID_ARTIFACT = JSON.stringify({
-  version: 1,
-  source: {
-    kind: "local",
-    repo: { path: "/repos/app", name: "app" },
-    base: "main",
-    head: "a".repeat(40),
-  },
+  repo: "/repos/app",
+  base: "main",
+  head: "a".repeat(40),
   comments: [
     { file: "src/a.ts", side: "additions", startLine: 10, endLine: 12, body: "look here" },
   ],
@@ -62,7 +58,7 @@ describe("importReviewFromPath", () => {
     if (result.ok) {
       expect(result.review.comments).toHaveLength(1);
       expect(result.review.comments[0]?.id).toBe("11111111-1111-4111-8111-111111111111");
-      expect(result.review.source.repo.name).toBe("app");
+      expect(result.review.repo).toEqual({ path: "/repos/app", name: "app" });
     }
   });
 
@@ -107,18 +103,14 @@ describe("importReviewFromPath", () => {
   });
 
   it("rejects a source ref smuggling a spawn flag as invalidContent, never a spawn", async () => {
-    // A hand-tampered artifact whose `source.base` is a git flag, not a ref. The
+    // A hand-tampered artifact whose `base` is a git flag, not a ref. The
     // guard never spawns git — but even reaching one is barred: the same ref schema
     // that guards a `git` child fails the parse, so the disk→guard→import path lands
     // invalidContent, exactly as a garbage or over-cap artifact does.
     const tampered = JSON.stringify({
-      version: 1,
-      source: {
-        kind: "local",
-        repo: { path: "/repos/app", name: "app" },
-        base: "--upload-pack=/tmp/evil",
-        head: "main",
-      },
+      repo: "/repos/app",
+      base: "--upload-pack=/tmp/evil",
+      head: "main",
       comments: [],
       layers: [],
     });

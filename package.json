@@ -32,6 +32,7 @@
     "@pierre/trees": "^1.0.0-beta.5",
     "@stricli/core": "^1.2.9",
     "@tailwindcss/vite": "^4.3.2",
+    "@tanstack/react-virtual": "^3.14.8",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "electron-store": "^11.0.2",

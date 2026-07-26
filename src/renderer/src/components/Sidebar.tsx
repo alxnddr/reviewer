@@ -1,8 +1,9 @@
 import type { ReactElement, ReactNode } from "react";
 
 type SidebarProps = {
-  /** The modal diff-selector / changed-file tree once a session is active; the
-   * rail stays quiet (an empty column) without one. */
+  /** The rail's sections once a session is active — the diff bar and, under it, the
+   * picker or the review's own stops; the rail stays quiet (an empty column) without
+   * a session. */
   children?: ReactNode;
 };
 

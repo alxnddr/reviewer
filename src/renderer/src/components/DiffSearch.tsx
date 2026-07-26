@@ -2,7 +2,9 @@ import { useEffect, useRef, type ReactElement } from "react";
 import { CaseSensitive, ChevronDown, ChevronUp, Search, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { ShortcutHint } from "@/components/ui/kbd";
 import { Toggle } from "@/components/ui/toggle";
+import { TooltipHint } from "@/components/ui/tooltip";
 
 type DiffSearchProps = {
   query: string;
@@ -93,36 +95,59 @@ export function DiffSearch({
       <span className="min-w-14 px-1 text-center text-xs text-text-muted tabular-nums">
         {hasQuery ? (noMatches ? "No results" : `${activePosition}/${matchCount}`) : ""}
       </span>
-      <Toggle
-        size="sm"
-        aria-label="Match case"
-        pressed={caseSensitive}
-        onPressedChange={onToggleCase}
-        className="size-7 min-w-7 p-0"
+      {/* The bar already answers to ⏎, ⇧⏎ and Esc from inside the field; until now it said
+          so nowhere. Each button names its own key, so the reader who reached for the mouse
+          once learns the gesture that means they need not again. */}
+      <TooltipHint content="Match case" side="bottom" align="center">
+        <Toggle
+          size="sm"
+          aria-label="Match case"
+          pressed={caseSensitive}
+          onPressedChange={onToggleCase}
+          className="size-7 min-w-7 p-0"
+        >
+          <CaseSensitive />
+        </Toggle>
+      </TooltipHint>
+      <TooltipHint
+        content={<ShortcutHint action="Previous match" keys="⇧⏎" />}
+        side="bottom"
+        align="center"
       >
-        <CaseSensitive />
-      </Toggle>
-      <Button
-        variant="ghost"
-        size="icon-sm"
-        aria-label="Previous match"
-        disabled={noMatches}
-        onClick={onPrevious}
+        <Button
+          variant="ghost"
+          size="icon-sm"
+          aria-label="Previous match"
+          disabled={noMatches}
+          onClick={onPrevious}
+        >
+          <ChevronUp />
+        </Button>
+      </TooltipHint>
+      <TooltipHint
+        content={<ShortcutHint action="Next match" keys="⏎" />}
+        side="bottom"
+        align="center"
       >
-        <ChevronUp />
-      </Button>
-      <Button
-        variant="ghost"
-        size="icon-sm"
-        aria-label="Next match"
-        disabled={noMatches}
-        onClick={onNext}
+        <Button
+          variant="ghost"
+          size="icon-sm"
+          aria-label="Next match"
+          disabled={noMatches}
+          onClick={onNext}
+        >
+          <ChevronDown />
+        </Button>
+      </TooltipHint>
+      <TooltipHint
+        content={<ShortcutHint action="Close find" keys="Esc" />}
+        side="bottom"
+        align="end"
       >
-        <ChevronDown />
-      </Button>
-      <Button variant="ghost" size="icon-sm" aria-label="Close find" onClick={onClose}>
-        <X />
-      </Button>
+        <Button variant="ghost" size="icon-sm" aria-label="Close find" onClick={onClose}>
+          <X />
+        </Button>
+      </TooltipHint>
     </div>
   );
 }

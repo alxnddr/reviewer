@@ -12,10 +12,6 @@ import { Comment, ReviewDiff, ReviewLayer, ReviewOrigin, ReviewOverview } from "
 export const SessionId = z.uuid();
 export type SessionId = z.infer<typeof SessionId>;
 
-/** Which selection mode the session's UI is in. */
-export const SelectionMode = z.enum(["commits", "branches"]);
-export type SelectionMode = z.infer<typeof SelectionMode>;
-
 /** Where the session's diff comes from. Single-arm on purpose: the union is the
  * seam a `github` arm plugs into without reshaping persisted data. */
 export const SessionSource = z.discriminatedUnion("kind", [
@@ -23,17 +19,27 @@ export const SessionSource = z.discriminatedUnion("kind", [
 ]);
 export type SessionSource = z.infer<typeof SessionSource>;
 
-/** Persisted inputs only — log, branches, and the patch are re-derived from git
- * on load so the diff reflects the repo now. Both modes' inputs persist side by
- * side and `mode` names the driver: switching modes must not lose the other
- * mode's picks across a restart. The commit selection anchors to SHAs,
- * never brush indices (indices drift when the repo gains commits). */
+/** Persisted inputs only — log, branches, and the patch are re-derived from git on load
+ * so the diff reflects the repo now.
+ *
+ * There is no mode: a session lists one branch's commits (`head`, or the checked-out
+ * one when null) and, when `base` is set, lists only what `head` adds over it — the
+ * same range a pull request shows. Which of those the diff renders follows from how
+ * much of that list is brushed, so there is no second flag that could disagree with the
+ * list on screen. The commit selection anchors to SHAs, never brush indices (indices
+ * drift when the repo gains commits). */
 export const Session = z.object({
   id: SessionId,
   source: SessionSource,
-  mode: SelectionMode,
-  base: BranchName.nullable(),
+  // The branch whose commits the picker lists, or null for whichever is checked out —
+  // the walk that also carries the working tree. Persisted, because the commit
+  // selection anchors to SHAs: a session restored against the wrong log could not
+  // re-locate the very range it was reviewing.
   head: BranchName.nullable(),
+  // What to compare `head` against, or null to list its own history instead. Set, the
+  // list holds exactly the commits `head` adds over `base`, and brushing narrows within
+  // them. `.default(null)` lets a session written before this meaning parse strictly.
+  base: BranchName.nullable().default(null),
   commitSelection: CommitSelection.nullable(),
   selectedFilePath: z.string().min(1).nullable(),
   scrollTop: z.number().finite().nonnegative(),
@@ -61,10 +67,10 @@ export const Session = z.object({
   // session (a frozen review, whose diff can't be narrowed, never carries one).
   // `.default(null)` keeps a pre-scope session parsing strictly, like the pins above.
   reviewSubrange: CommitSelection.nullable().default(null),
-  // The authored source + embedded patch this session was opened from (for
+  // The authored repo, refs, and embedded patch this session was opened from (for
   // round-trip export), and the marker that this is a review session at all. Carries
   // the base/head a frozen `reviewDiff` drops, so the curated review always
-  // re-serializes to its authored `source`. Null for a plain repo session.
+  // re-serializes to its authored range. Null for a plain repo session.
   // `.default(null)` keeps an older session parsing strictly, like `reviewDiff`.
   reviewOrigin: ReviewOrigin.nullable().default(null),
 });

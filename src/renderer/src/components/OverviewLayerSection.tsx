@@ -122,27 +122,23 @@ function FileRow({ entry, onOpen }: FileRowProps): ReactElement {
  * padding below — so the line sits centred in the gap between two chapters instead of
  * riding up against the end of the one before it. No section carries bottom space: every
  * gap belongs to the section beneath it, which is the only way a rule can know how much
- * room is above it. */
-function rankStyle(depth: number): { section: string; heading: string; ordinal: string } {
+ * room is above it.
+ *
+ * The number takes no type of its own: it is set exactly as the title it leads, and its
+ * job is done by position. Sized or toned a step down, it shared the title's baseline at a
+ * different cap height and weight — which reads as a number sitting slightly low beside
+ * the heading rather than as the heading's own rank. */
+function rankStyle(depth: number): { section: string; heading: string } {
   if (depth === 0) {
     return {
       section: "mt-7 border-t border-border pt-7",
       heading: "text-lg leading-7 font-medium",
-      ordinal: "text-base text-text-faint",
     };
   }
   if (depth === 1) {
-    return {
-      section: "mt-6",
-      heading: "text-base font-medium",
-      ordinal: "text-sm text-text-faint",
-    };
+    return { section: "mt-6", heading: "text-base font-medium" };
   }
-  return {
-    section: "mt-5",
-    heading: "text-base font-medium",
-    ordinal: "text-sm text-text-faint",
-  };
+  return { section: "mt-5", heading: "text-base font-medium" };
 }
 
 type OverviewLayerSectionProps = {
@@ -188,7 +184,7 @@ export function OverviewLayerSection({
         {/* The section number leads the title rather than sitting in a gutter: `4.2.1` in a
             fixed column would either clip or hold a wide empty aisle open for every
             shallower section on the page. */}
-        <span className={cn("shrink-0 tabular-nums", rank.ordinal)}>
+        <span className="shrink-0 tabular-nums text-foreground">
           {chapter.ordinal ?? (
             <AlertTriangle aria-hidden="true" className="size-3.5 text-text-muted" />
           )}
@@ -211,8 +207,11 @@ export function OverviewLayerSection({
 
       {/* The one-line summary reads as the section's deck; the long-form description
           follows it as the body. A layer with no description keeps the deck alone — that
-          is then the whole of what its author said about this slice. */}
-      <p className="mt-1.5 text-sm text-text-muted">{layer.summary}</p>
+          is then the whole of what its author said about this slice — and a layer with
+          neither is a heading over its files, never an empty deck line. */}
+      {layer.summary !== undefined && (
+        <p className="mt-1.5 text-sm text-text-muted">{layer.summary}</p>
+      )}
       {layer.description !== undefined && (
         <ReviewProse
           text={layer.description}

@@ -1,14 +1,7 @@
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import {
-  installBundle,
-  minimalRepo,
-  REPO_ROOT,
-  rvw,
-  type InstalledCli,
-  type RvwResult,
-} from "./fixtures";
+import { installBundle, minimalRepo, rvw, type InstalledCli, type RvwResult } from "./fixtures";
 
 // The load-bearing claim: `rvw` is the *agent's* tool, runnable in any repo — not a
 // Reviewer-repo dev script. Asserting that requires actually leaving the repo, so this suite
@@ -77,57 +70,46 @@ describe("rvw runs from a repo that is not the Reviewer checkout", () => {
     const foreign = repo();
     expect(existsSync(join(foreign.path, "node_modules"))).toBe(false);
 
-    const result = rvw(cli, foreign, [
-      "anchors",
-      "--repo",
-      ".",
-      "--base",
-      foreign.base,
-      "--head",
-      foreign.head,
-    ]);
+    const result = rvw(cli, foreign, ["diff", "--base", foreign.base, "--json"]);
     expect(result.status, output(result)).toBe(0);
-    expect(result.stdout).toContain("a.txt");
-    expect(result.stdout).toContain("additions 2-2");
-    expect(result.stdout).toContain("additions 4-4");
-    expect(result.stdout).toContain("deletions 2-2");
+    const files = JSON.parse(result.stdout) as {
+      file: string;
+      coverable: boolean;
+      spans?: { side: string; startLine: number; endLine: number }[];
+    }[];
+    expect(files.map((file) => file.file)).toEqual(["a.txt"]);
+    expect(files[0]?.spans).toEqual([
+      { side: "deletions", startLine: 2, endLine: 2 },
+      { side: "additions", startLine: 2, endLine: 2 },
+      { side: "additions", startLine: 4, endLine: 4 },
+    ]);
   });
 
   it("emits an artifact, then checks it — the authoring loop, entirely outside the checkout", () => {
     const foreign = repo();
-    const draft = join(foreign.path, "draft.json");
-    writeFileSync(
-      draft,
-      JSON.stringify({
-        comments: [{ file: "a.txt", side: "additions", startLine: 2, endLine: 2, body: "why" }],
-        layers: [
-          {
-            id: "all",
-            label: "All",
-            summary: "the change",
-            ranges: [
-              { file: "a.txt", side: "additions", startLine: 2, endLine: 4 },
-              { file: "a.txt", side: "deletions", startLine: 2, endLine: 2 },
-            ],
-          },
-        ],
-      }),
-    );
+    const draft = JSON.stringify({
+      comments: [{ file: "a.txt", side: "additions", startLine: 2, endLine: 2, body: "why" }],
+      layers: [
+        {
+          label: "All",
+          summary: "the change",
+          ranges: [
+            { file: "a.txt", side: "additions", startLine: 2, endLine: 4 },
+            { file: "a.txt", side: "deletions", startLine: 2, endLine: 2 },
+          ],
+        },
+      ],
+    });
     const out = join(foreign.path, "change.reviewer.json");
 
-    const emitted = rvw(cli, foreign, [
-      "emit",
-      "--repo",
-      ".",
-      "--base",
-      foreign.base,
-      "--head",
-      foreign.head,
-      "--draft",
+    // Draft on stdin, range defaulted to the repo the bundle is standing in: the invocation an
+    // agent actually makes, proven across the bundle boundary.
+    const emitted = rvw(
+      cli,
+      foreign,
+      ["emit", "--base", foreign.base, "--no-open", "--out", out],
       draft,
-      "--out",
-      out,
-    ]);
+    );
     expect(emitted.status, output(emitted)).toBe(0);
 
     const checked = rvw(cli, foreign, ["check", out, "--require-complete"]);
@@ -147,21 +129,12 @@ describe("rvw runs from a repo that is not the Reviewer checkout", () => {
     const skills = rvw(cli, foreign, ["skills", "--json"]);
     expect(skills.status, output(skills)).toBe(0);
     const listed = JSON.parse(skills.stdout) as { name: string }[];
-    expect(listed.map((skill) => skill.name)).toContain("authoring-review");
+    expect(listed.map((skill) => skill.name)).toContain("present-review");
     expect(listed.map((skill) => skill.name)).not.toContain("decoy");
 
     const schema = rvw(cli, foreign, ["schema", "--json"]);
     expect(schema.status, output(schema)).toBe(0);
     expect(JSON.parse(schema.stdout)).toMatchObject({ title: ".reviewer.json" });
-  });
-
-  it("no longer requires the authoring skill to run from the Reviewer repo root", () => {
-    const skill = readFileSync(join(REPO_ROOT, "skills/authoring-review/SKILL.md"), "utf8");
-    // Normalized: the claim must survive a markdown reflow, so it is asserted against the
-    // prose with its hard wraps collapsed, not against one particular line break.
-    const prose = skill.replace(/\s+/g, " ");
-    expect(prose).not.toContain("from the Reviewer repo root");
-    expect(prose).toContain("from any working directory, in any repo");
   });
 
   it("keeps the 0/1/2 exit contract across the bundle boundary", () => {
@@ -177,6 +150,6 @@ describe("rvw runs from a repo that is not the Reviewer checkout", () => {
 
     const misAnchored = join(foreign.path, "bad.reviewer.json");
     writeFileSync(misAnchored, "}{ not json");
-    expect(rvw(cli, foreign, ["validate", misAnchored]).status).toBe(1);
+    expect(rvw(cli, foreign, ["check", misAnchored]).status).toBe(1);
   });
 });

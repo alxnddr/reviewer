@@ -6,13 +6,14 @@ type GitFailureTextProps = {
   failure: GitFailure;
 };
 
-/** gitFailureMessage with the design rule applied: machine tokens (here the repo
- * path) render mono inside an otherwise sans sentence. */
+/** gitFailureMessage, with the path carrying the sentence's ink so it reads as the
+ * subject of it. Sans, like every other path in the app: mono is reserved for code —
+ * the diff, a snippet, an inline `code` span — and a filesystem path is none of those. */
 export function GitFailureText({ failure }: GitFailureTextProps): ReactElement {
   if (failure.code === "notARepo") {
     return (
       <>
-        <span className="font-mono">{failure.path}</span>
+        <span className="text-foreground">{failure.path}</span>
         {NOT_A_REPO_SUFFIX}
       </>
     );

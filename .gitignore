@@ -6,3 +6,4 @@ out
 *.tsbuildinfo
 shots/
 scratch-demo/
+.claude/worktrees

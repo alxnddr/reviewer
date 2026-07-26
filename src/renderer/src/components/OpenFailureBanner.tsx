@@ -29,15 +29,17 @@ export function OpenFailureBanner(): ReactElement | null {
           <GitFailureText failure={failure} />
         </p>
       </TooltipHint>
-      <Button
-        variant="ghost"
-        size="icon-sm"
-        aria-label="Dismiss"
-        onClick={clearOpenFailure}
-        className="ml-auto shrink-0 hover:bg-border/60 dark:hover:bg-border/60"
-      >
-        <XIcon className="size-3.5" />
-      </Button>
+      <TooltipHint content="Dismiss" side="bottom" align="end">
+        <Button
+          variant="ghost"
+          size="icon-sm"
+          aria-label="Dismiss"
+          onClick={clearOpenFailure}
+          className="ml-auto shrink-0 hover:bg-border/60 dark:hover:bg-border/60"
+        >
+          <XIcon className="size-3.5" />
+        </Button>
+      </TooltipHint>
     </div>
   );
 }

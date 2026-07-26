@@ -8,6 +8,7 @@ import {
   DropdownMenuRadioItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { TooltipHint } from "@/components/ui/tooltip";
 import { useThemeStore } from "@/stores/theme";
 import { ThemeId } from "../../../shared/contracts";
 import { THEMES } from "../../../shared/themes.generated";
@@ -18,21 +19,26 @@ export function ThemeMenu(): ReactElement {
 
   return (
     <DropdownMenu>
-      <DropdownMenuTrigger
-        render={
-          <Button
-            variant="ghost"
-            size="icon"
-            // The ghost hover (bg-muted) is invisible on the bg-sidebar titlebar —
-            // the wash must come from the border tone to register on chrome
-            // surfaces, with dark: twins to outrank the variant's own dark arm.
-            className="app-region-no-drag hover:bg-border/60 aria-expanded:bg-border/60 dark:hover:bg-border/60 dark:aria-expanded:bg-border/60"
-            aria-label="Change theme"
-          />
-        }
-      >
-        <ContrastIcon />
-      </DropdownMenuTrigger>
+      {/* The hint wraps the menu trigger rather than the button inside it: both are
+          prop-mergers onto the same element, and hanging it outside keeps the tooltip from
+          having to know the button is also a trigger. */}
+      <TooltipHint side="bottom" align="end" content="Change theme">
+        <DropdownMenuTrigger
+          render={
+            <Button
+              variant="ghost"
+              size="icon"
+              // The ghost hover (bg-muted) is invisible on the bg-sidebar titlebar —
+              // the wash must come from the border tone to register on chrome
+              // surfaces, with dark: twins to outrank the variant's own dark arm.
+              className="app-region-no-drag hover:bg-border/60 aria-expanded:bg-border/60 dark:hover:bg-border/60 dark:aria-expanded:bg-border/60"
+              aria-label="Change theme"
+            />
+          }
+        >
+          <ContrastIcon />
+        </DropdownMenuTrigger>
+      </TooltipHint>
       {/* w-auto min-w-40 overrides the menu's default anchor-width sizing (the trigger is a 32px icon
           button, so the names would otherwise wrap) — size to the widest theme label instead. */}
       <DropdownMenuContent align="end" sideOffset={8} className="w-auto min-w-40">

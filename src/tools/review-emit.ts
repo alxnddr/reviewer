@@ -1,7 +1,7 @@
 import { parseReviewArtifact, validatePlacement, type ValidationProblem } from "./review-validator";
 
 // The assembly half of the authoring skill: turn the agent's authored comments/layers into the
-// minimal `version: 1` wire shape and gate every anchor's placement against the captured patch
+// minimal wire shape and gate every anchor's placement against the captured patch
 // before any bytes escape — but write a **refs-only** artifact (no embedded `patch`), which the
 // app re-derives `base...head` from git on open. The captured diff is the validation authority,
 // not artifact content: it proves each anchor places, then is discarded. Pure and I/O-free — the
@@ -10,18 +10,15 @@ import { parseReviewArtifact, validatePlacement, type ValidationProblem } from "
 // of the returned value, not of prose the agent might skip: only a clean pass yields bytes, so
 // the shell has nothing to write on failure.
 
-/** The repo a captured patch came from, kept loose (plain strings, not the branded
- * `RepoPath`): the gate re-parses it through `RepoInfo`/`RepoPath`, so a second brand
- * here would be a drifting duplicate. */
-export type EmitRepo = { path: string; name: string };
-
-/** The pieces the shell captures for one artifact. `patch` is the captured diff used
- * *only* to validate anchor placement — it is never written into the artifact.
+/** The pieces the shell captures for one artifact. `repo` is the work-tree toplevel, kept
+ * loose (a plain string, not the branded `RepoPath`): the gate re-parses it through
+ * `RepoPath`, so a second brand here would be a drifting duplicate. `patch` is the captured
+ * diff used *only* to validate anchor placement — it is never written into the artifact.
  * `comments`/`layers` stay `unknown` because they are untrusted draft content the agent
  * hand-authored — the single validation authority below schema-checks them (parse-don't-trust);
  * a second shape check here would be a drifting duplicate of `ReviewArtifact`. */
 export type EmitInput = {
-  repo: EmitRepo;
+  repo: string;
   base: string;
   head: string;
   patch: string;
@@ -43,11 +40,15 @@ export type EmitResult = { ok: true; bytes: string } | { ok: false; problems: Va
  * rather than a second checker that could pass what the app fails. */
 export function emitReviewArtifact(input: EmitInput): EmitResult {
   // The minimal wire shape, **refs-only**: no embedded `patch`, so the app re-derives
-  // `base...head` from git on open. The app assigns each comment an `id` and re-sorts nothing,
-  // so `layers` order is emitted as authored.
+  // `base...head` from git on open. The draft's `comments`/`layers` pass through untouched —
+  // the app stamps every id on import and re-sorts nothing, so what the agent nested and
+  // ordered is what a reader sees. An absent key stays absent (`JSON.stringify` drops an
+  // undefined value) and the schema defaults it to empty, so a comments-only or layers-only
+  // draft needs no placeholder for the half it does not carry.
   const candidate = {
-    version: 1,
-    source: { kind: "local", repo: input.repo, base: input.base, head: input.head },
+    repo: input.repo,
+    base: input.base,
+    head: input.head,
     // `JSON.stringify` drops an undefined value, so a draft with no overview emits no
     // key at all — the optional-absent shape, not an explicit null the schema rejects.
     overview: input.overview,

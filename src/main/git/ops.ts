@@ -148,8 +148,10 @@ export async function getCommitLog(
   repoPath: RepoPath,
   range: LogRange | null,
 ): Promise<GitResult<CommitLog>> {
-  // Only HEAD's log carries the working tree: a review's `base..head` is a diff
-  // between two committed refs, so the uncommitted pseudo-entry has no place in it.
+  // Only HEAD's log carries the working tree: every other walk names a committed ref
+  // — a review's `base..head`, or another branch's history — and uncommitted changes
+  // belong to none of them. The picker keeps `range` null while it is listing the
+  // checked-out branch precisely so that list keeps its working-tree row.
   let isDirty = false;
   if (range === null) {
     const statusResult = await runner.run({ cwd: repoPath, args: ["status", "--porcelain", "-z"] });
@@ -158,10 +160,13 @@ export async function getCommitLog(
   }
 
   // base/head already passed the ref deny-list; the two-dot `base..head` is one
-  // argument, so no flag or rev-expression can smuggle past the spawn boundary.
+  // argument, so no flag or rev-expression can smuggle past the spawn boundary — and a
+  // lone `head` is the same guarded ref, so it cannot become a flag either.
   const logArgs = ["log", "-z", `--max-count=${LOG_MAX_COUNT}`, LOG_FORMAT];
   if (range !== null) {
-    logArgs.push(`${range.base}..${range.head}`);
+    // A base narrows the walk to what `head` adds over it; without one, `head`'s own
+    // history is the list — a branch the reviewer wants to read rather than compare.
+    logArgs.push(range.base === null ? range.head : `${range.base}..${range.head}`);
   }
   const logResult = await runner.run({ cwd: repoPath, args: logArgs });
 

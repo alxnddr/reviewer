@@ -26,15 +26,17 @@ export function ReviewExportFailureBanner(): ReactElement | null {
       <TooltipHint content={message} whenTruncated side="bottom" align="start">
         <p className="min-w-0 truncate text-sm">{message}</p>
       </TooltipHint>
-      <Button
-        variant="ghost"
-        size="icon-sm"
-        aria-label="Dismiss"
-        onClick={clearReviewExportFailure}
-        className="ml-auto shrink-0 hover:bg-border/60 dark:hover:bg-border/60"
-      >
-        <XIcon className="size-3.5" />
-      </Button>
+      <TooltipHint content="Dismiss" side="bottom" align="end">
+        <Button
+          variant="ghost"
+          size="icon-sm"
+          aria-label="Dismiss"
+          onClick={clearReviewExportFailure}
+          className="ml-auto shrink-0 hover:bg-border/60 dark:hover:bg-border/60"
+        >
+          <XIcon className="size-3.5" />
+        </Button>
+      </TooltipHint>
     </div>
   );
 }

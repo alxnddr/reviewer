@@ -178,6 +178,21 @@ describe("getCommitLog", () => {
     expect(subjects).toContain("add delta");
     expect(subjects).not.toContain("main moves on");
   });
+
+  it("lists a branch's whole history when the range carries no base", async () => {
+    // The picker asking "show me this branch" rather than "compare these two": the walk
+    // is `git log <head>`, so it reaches back past the merge base to the root commit.
+    const log = expectOk(
+      await getCommitLog(runner, workRepo, { base: null, head: "feature/delta" }),
+    );
+    const subjects = log.entries.flatMap((entry) =>
+      entry.kind === "commit" ? [entry.commit.subject] : [],
+    );
+    expect(subjects).toContain("add delta");
+    expect(subjects).toContain("add alpha");
+    // Still a committed ref, so still no working-tree row — that belongs to HEAD alone.
+    expect(log.entries.every((entry) => entry.kind === "commit")).toBe(true);
+  });
 });
 
 describe("getDiff", () => {

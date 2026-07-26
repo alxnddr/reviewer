@@ -1,27 +1,54 @@
 import {
+  useCallback,
   useEffect,
   useRef,
+  useState,
   type KeyboardEvent,
   type PointerEvent,
   type ReactElement,
   type ReactNode,
 } from "react";
-import { GitBranch } from "lucide-react";
-import type { BranchName, LogEntry } from "../../../shared/git";
+import { defaultRangeExtractor, useVirtualizer } from "@tanstack/react-virtual";
+import type { LogEntry } from "../../../shared/git";
+import {
+  RAIL_ACTIVE_ITEM,
+  RAIL_LIST,
+  RAIL_ROW_TALL_PX,
+  RailNote,
+  RailRow,
+  RailRowMeta,
+} from "@/components/rail";
 import { TooltipHint } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
-import { relativeTime } from "@/lib/relative-time";
+import { absoluteTime, shortAge } from "@/lib/relative-time";
 import { useCoarseNow } from "@/lib/use-coarse-now";
-import { brushBounds, brushContains, logEntryKey, type BrushRange } from "@/lib/selection";
+import { brushContains, logEntryKey, type BrushRange } from "@/lib/selection";
 import { useReviewStore } from "@/stores/review";
 
 // Hand-built listbox: no registry piece offers brush range-selection — pointer
 // drag across rows plus shift/arrow extension. The ARIA contract is a
 // multiselectable listbox whose options form one contiguous band; the store's
 // reducer guarantees contiguity.
+//
+// Virtualized, unlike every other list in the rail. The others are bounded by something
+// a person wrote — a review's layers, its comments, one diff's files — and render whole.
+// This one is bounded by the repository: `git log` comes back with up to 2000 entries
+// (LOG_MAX_COUNT), and every row here carries a hover hint, so rendering the lot would
+// mount two thousand tooltip triggers and reconcile them on every frame of a
+// range-brush drag — the one gesture in this list that has to stay smooth.
+//
+// Fixed-size, because the rail has exactly one row height (RAIL_ROW_PX): no measurement
+// pass, no cumulative offsets, and an index maps to an offset exactly. The rendered rows
+// stay in normal flow inside one translated block (TanStack's own recommendation over
+// absolutely positioning each row), so a row is laid out here exactly as it is anywhere
+// else in the rail and `elementFromPoint` still finds it mid-drag.
 
 /** How close to the list edge (px) a drag must get before the list auto-scrolls. */
 const DRAG_SCROLL_MARGIN = 24;
+
+/** Rows kept mounted beyond each edge of the viewport. Enough that a flick of the wheel
+ * lands on painted rows, small enough that the list stays cheap. */
+const OVERSCAN = 8;
 
 function rowDomId(index: number): string {
   return `commit-brush-option-${index}`;
@@ -41,95 +68,108 @@ type CommitRowProps = {
   index: number;
   selected: boolean;
   focused: boolean;
-  bandStart: boolean;
-  bandEnd: boolean;
   now: Date;
+  /** Where this row sits in the virtual list, in px from its top. */
+  offset: number;
 };
 
-function CommitRow({
-  entry,
-  index,
-  selected,
-  focused,
-  bandStart,
-  bandEnd,
-  now,
-}: CommitRowProps): ReactElement {
+/** One commit: what it is, then which one it is.
+ *
+ * Line one is the subject, in the ink you read with — a thirty-row history set entirely
+ * in muted grey is a wall, and the subject is the one thing on the row anyone actually
+ * reads — with the age at the outer edge, in the rail's meta column. Line two is the
+ * identity: the short sha, then who wrote it. Those two are not decoration a hint can
+ * absorb; they are how a reviewer confirms the commit is the one they meant, and a
+ * confirmation you have to hover for is one you will not make.
+ *
+ * The band of selected rows is a flat fill running the rail's full width, like every
+ * other selection in the rail. It used to round its top and bottom rows into a pill —
+ * the only rounded corners in a column of square ones, which said the band was a
+ * floating object rather than a run of rows, and put a hairline of unfilled surface
+ * beside the first and last commit of the very range being selected. */
+function CommitRow({ entry, index, selected, focused, now, offset }: CommitRowProps): ReactElement {
+  const sub =
+    entry.kind === "uncommitted"
+      ? "working tree"
+      : `${entry.commit.shortSha} · ${entry.commit.author}`;
+
   return (
-    <div
+    <RailRow
       role="option"
       id={rowDomId(index)}
       data-brush-index={index}
       aria-selected={selected}
+      lines="two"
+      selected={selected}
+      quiet={false}
       className={cn(
-        // min-h-7 is the 28px macOS-chrome floor; the two-line anatomy lands
-        // around 38px — dense-tool register, rows read adjacent.
-        "flex min-h-7 cursor-default flex-col justify-center gap-0 px-2 py-1 select-none",
-        // Selected rows form the brush band in the themed selection fill
-        // (bg-selected); hover stays a neutral wash a step below so a hovered row
-        // never visually joins the band.
-        selected ? "bg-selected text-foreground" : "text-text-muted hover:bg-border/30",
-        selected && bandStart && "rounded-t-md",
-        selected && bandEnd && "rounded-b-md",
-        // The focus end of the band — where shift+arrow extends from — is marked
-        // only while the listbox itself has keyboard focus.
-        focused && "ring-ring group-focus-visible:ring-1 group-focus-visible:ring-inset",
+        // The focus end of the band — where shift+arrow extends from, and this
+        // listbox's `aria-activedescendant` — wears the ring while the list has the
+        // keyboard, which is the whole of this list's focus indicator.
+        focused && RAIL_ACTIVE_ITEM,
       )}
+      // Each row placed at its own offset rather than the whole block translated to the
+      // first one's: the rendered range is not always contiguous — the focused row is
+      // kept mounted wherever it is (see `rangeExtractor`) — and a translated block can
+      // only express a run.
+      style={{ position: "absolute", top: 0, left: 0, transform: `translateY(${offset}px)` }}
     >
-      {entry.kind === "uncommitted" ? (
-        <>
-          <span className="truncate text-sm">Uncommitted changes</span>
-          <span
-            className={cn("truncate text-xs", selected ? "text-foreground/80" : "text-text-muted")}
+      <span className="flex w-full min-w-0 items-center gap-1.5">
+        {entry.kind === "uncommitted" ? (
+          // The one row that is not a commit, and the one whose meaning is not on it:
+          // what counts as "uncommitted" (staged? unstaged? both?) is exactly the
+          // question a reviewer has before they trust the diff it loads. It carries no
+          // age — it is always now — so the meta column simply stays empty.
+          <TooltipHint
+            side="right"
+            align="center"
+            content="Everything not yet committed — staged and unstaged, against HEAD"
           >
-            working tree
-          </span>
-        </>
-      ) : (
-        <>
-          <span className="truncate text-sm">{entry.commit.subject}</span>
-          <span
-            className={cn("truncate text-xs", selected ? "text-foreground/80" : "text-text-muted")}
-          >
-            <span className="font-mono">{entry.commit.shortSha}</span>
-            {` · ${entry.commit.author} · ${relativeTime(entry.commit.authoredAt, now)}`}
-          </span>
-        </>
-      )}
-    </div>
-  );
-}
-
-/** The ref the log is walking (HEAD), so the commit list is never an anonymous
- * history — null names a detached HEAD, which `git log` walks all the same. The
- * label/value typography mirrors the Base/Head fields in branch-compare mode. */
-export function BranchHeading({ branch }: { branch: BranchName | null }): ReactElement {
-  return (
-    <div className="flex flex-col gap-1 px-2 pb-2">
-      <span className="text-xs text-text-muted">On branch</span>
-      <span className="flex items-center gap-1.5 text-sm">
-        <GitBranch aria-hidden="true" className="size-3.5 shrink-0 text-text-muted" />
-        {branch === null ? (
-          <span className="text-text-muted">Detached HEAD</span>
-        ) : (
-          <TooltipHint content={branch} whenTruncated side="bottom" align="start">
-            <span className="truncate font-mono text-foreground">{branch}</span>
+            <span className="min-w-0 flex-1 truncate">Uncommitted changes</span>
           </TooltipHint>
+        ) : (
+          <>
+            {/* The hint hangs off the subject, not the row: the row is the drag target
+                for range-brushing, and a popup tracking the pointer through a drag would
+                follow it across the whole list. It carries what the two lines cannot —
+                the subject in full, and the date behind the age. */}
+            <TooltipHint
+              side="right"
+              align="center"
+              content={
+                <div className="flex flex-col gap-0.5">
+                  <span className="whitespace-pre-wrap">{entry.commit.subject}</span>
+                  <span className="text-background/70">
+                    {`${entry.commit.author} · ${absoluteTime(entry.commit.authoredAt)}`}
+                  </span>
+                </div>
+              }
+            >
+              <span className="min-w-0 flex-1 truncate">{entry.commit.subject}</span>
+            </TooltipHint>
+            <RailRowMeta>{shortAge(entry.commit.authoredAt, now)}</RailRowMeta>
+          </>
         )}
       </span>
-    </div>
+      {/* The sha keeps tabular figures so the column of them reads as a column; the
+          author trails it in the same quiet ink. */}
+      <span
+        className={cn(
+          "w-full min-w-0 truncate text-xs",
+          selected ? "text-foreground/80" : "text-text-muted",
+        )}
+      >
+        <span className="tabular-nums">{sub}</span>
+      </span>
+    </RailRow>
   );
 }
 
 type CommitBrushListProps = {
   entries: LogEntry[];
   brush: BrushRange | null;
-  /** The block above the list — an "On branch" heading in commits mode, the review
-   * range plus its full-review reset in review mode. Rendered in both the populated
-   * and empty states so the list is never headless. */
-  heading: ReactNode;
-  /** The affordance line between heading and list (the brush summary), or null. */
-  summary: ReactNode;
+  /** The line under the list (the range affordance), or null. */
+  foot: ReactNode;
   /** What the list says when there are no rows to brush. */
   emptyMessage: ReactNode;
 };
@@ -137,8 +177,7 @@ type CommitBrushListProps = {
 export function CommitBrushList({
   entries,
   brush,
-  heading,
-  summary,
+  foot,
   emptyMessage,
 }: CommitBrushListProps): ReactElement {
   const previewBrush = useReviewStore((state) => state.previewBrush);
@@ -152,16 +191,44 @@ export function CommitBrushList({
 
   const now = useCoarseNow();
 
-  const bounds = brush === null ? null : brushBounds(brush);
   const focusIndex = brush?.focus ?? null;
+  // Where the keyboard is when the brush names nothing — a restored session whose
+  // selection the log could no longer place. Same job as the layer tree's cursor: the
+  // row the ring sits on and the row the first arrow steps from, chosen on arrival and
+  // dropped when focus leaves, so a focused list never has to ring itself.
+  const [cursorIndex, setCursorIndex] = useState<number | null>(null);
+  const currentIndex = focusIndex ?? cursorIndex;
+
+  const virtualizer = useVirtualizer({
+    count: entries.length,
+    getScrollElement: () => listRef.current,
+    estimateSize: () => RAIL_ROW_TALL_PX,
+    overscan: OVERSCAN,
+    // The focus row stays mounted however far it is scrolled away, because
+    // `aria-activedescendant` names it by id and an id that resolves to nothing is a
+    // broken listbox — worse for a screen reader than an off-screen row is for anyone
+    // else. This is the same lever the docs use to pin sticky headers.
+    rangeExtractor: useCallback(
+      (range: { startIndex: number; endIndex: number; overscan: number; count: number }) => {
+        const rendered = defaultRangeExtractor(range);
+        return currentIndex === null || rendered.includes(currentIndex)
+          ? rendered
+          : [...rendered, currentIndex].sort((a, b) => a - b);
+      },
+      [currentIndex],
+    ),
+  });
 
   useEffect(() => {
     // Keyboard moves must keep the focus row visible; during a drag the
-    // auto-scroll loop owns the scroll position instead.
+    // auto-scroll loop owns the scroll position instead. `auto` alignment is
+    // `scrollIntoView({ block: "nearest" })` — it moves only when the row is off screen,
+    // and only far enough — which the DOM call itself can no longer do here, since the
+    // row it would scroll to may not be mounted.
     if (focusIndex !== null && !draggingRef.current) {
-      document.getElementById(rowDomId(focusIndex))?.scrollIntoView({ block: "nearest" });
+      virtualizer.scrollToIndex(focusIndex, { align: "auto" });
     }
-  }, [focusIndex]);
+  }, [focusIndex, virtualizer]);
 
   useEffect(() => {
     return () => {
@@ -172,12 +239,7 @@ export function CommitBrushList({
   }, []);
 
   if (entries.length === 0) {
-    return (
-      <div className="flex min-h-0 flex-col">
-        {heading}
-        <p className="px-2 pb-3 text-xs text-text-muted">{emptyMessage}</p>
-      </div>
-    );
+    return <RailNote>{emptyMessage}</RailNote>;
   }
 
   const extendAtPoint = (x: number, y: number): void => {
@@ -243,6 +305,8 @@ export function CommitBrushList({
     }
   };
 
+  const items = virtualizer.getVirtualItems();
+
   const onKeyDown = (event: KeyboardEvent<HTMLDivElement>): void => {
     switch (event.key) {
       case "ArrowDown":
@@ -269,40 +333,54 @@ export function CommitBrushList({
   };
 
   return (
-    <div className="flex min-h-0 flex-col">
-      {heading}
-      {summary !== null && <p className="px-2 pb-1.5 text-xs text-text-muted">{summary}</p>}
+    <div className="flex min-h-0 flex-1 flex-col">
       <div
         ref={listRef}
         role="listbox"
         aria-label="Commits"
         aria-multiselectable="true"
-        aria-activedescendant={focusIndex === null ? undefined : rowDomId(focusIndex)}
+        aria-activedescendant={currentIndex === null ? undefined : rowDomId(currentIndex)}
         tabIndex={0}
+        onFocus={() => {
+          if (focusIndex === null && cursorIndex === null) {
+            setCursorIndex(0);
+          }
+        }}
+        onBlur={() => setCursorIndex(null)}
         onPointerDown={onPointerDown}
         onPointerMove={onPointerMove}
         onPointerUp={endDrag}
         onPointerCancel={endDrag}
         onKeyDown={onKeyDown}
-        // -mx-3 cancels SelectionPanel's px-3 so the scroll track sits flush
-        // against the sidebar border instead of leaving a gutter; px-4 restores
-        // the row inset. ring-inset keeps the focus ring inside the flush right
-        // edge rather than under the border.
-        className="group -mx-3 min-h-0 flex-1 overflow-y-auto rounded-md px-4 outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
+        // Runs edge to edge: the rows carry their own inset, so the scroll track sits
+        // flush against the sidebar border instead of leaving a gutter. ring-inset keeps
+        // the focus ring inside that flush edge rather than under the border.
+        className={cn("min-h-0 flex-1 overflow-y-auto", RAIL_LIST)}
       >
-        {entries.map((entry, index) => (
-          <CommitRow
-            key={logEntryKey(entry)}
-            entry={entry}
-            index={index}
-            selected={brush !== null && brushContains(brush, index)}
-            focused={focusIndex === index}
-            bandStart={bounds?.top === index}
-            bandEnd={bounds?.bottom === index}
-            now={now}
-          />
-        ))}
+        {/* The full height of every row, so the scrollbar means what it says, with the
+            mounted block translated to where those rows would have been. */}
+        <div
+          role="presentation"
+          className="relative w-full"
+          style={{ height: virtualizer.getTotalSize() }}
+        >
+          {items.map((item) => {
+            const entry = entries[item.index];
+            return entry === undefined ? null : (
+              <CommitRow
+                key={logEntryKey(entry)}
+                entry={entry}
+                index={item.index}
+                offset={item.start}
+                selected={brush !== null && brushContains(brush, item.index)}
+                focused={currentIndex === item.index}
+                now={now}
+              />
+            );
+          })}
+        </div>
       </div>
+      {foot}
     </div>
   );
 }

@@ -4,7 +4,6 @@ import {
   capturesScroll,
   emptySoloReason,
   layerAncestors,
-  layerDocumentOrder,
   layerFilePaths,
   layerOutline,
   layerOwning,
@@ -194,20 +193,6 @@ describe("layerOutline", () => {
     ];
     const outline = layerOutline(chain);
     expect(outline.map((entry) => entry.depth)).toEqual([0, 1, 2, 3, 4, 0]);
-  });
-});
-
-describe("layerDocumentOrder", () => {
-  it("puts each subtree straight after its parent — the order the artifact must be in", () => {
-    const parent = layer("parent", { ranges: [] });
-    const child = layer("child", { parent: "parent" });
-    const other = layer("other");
-    // Authored out of order: the child trails a later top-level layer.
-    expect(layerDocumentOrder([parent, other, child]).map((l) => l.id)).toEqual([
-      "parent",
-      "child",
-      "other",
-    ]);
   });
 });
 

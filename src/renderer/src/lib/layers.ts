@@ -4,9 +4,10 @@ import { resolveAnchor } from "./diff/anchor";
 import type { PatchFile } from "./diff/patch";
 
 // The layer outline: `layers` is a **tree in document order**, and this is the one place
-// that reads it. A layer may hang off another through `parent`; the array order is the
-// order it is read, which the artifact guarantees is a pre-order walk of that tree
-// (a subtree is contiguous and follows its parent).
+// that reads it. A layer hangs off another through the `parent` id `importReview` stamped;
+// the array order is the order it is read, and it is a pre-order walk of that tree by
+// construction — the flatten that produced it walked the authored `children` depth-first,
+// so a subtree is contiguous and follows its parent with nothing left to enforce.
 //
 // One rule governs the whole model: **a layer's footprint is its own ranges plus
 // everything under it.** A parent is not a special kind of node with special rules — it is
@@ -57,8 +58,10 @@ type LayerTree = {
 
 /** The chain from a layer up to its root, outermost first — or null when the chain is
  * illegal (a missing parent, a self-link, a cycle, or deeper than the cap). An illegal
- * link is *ignored* rather than fatal: a hand-edited artifact still opens and still reads
- * top to bottom, just flat. The CLI gate is where such an artifact is refused. */
+ * link is *ignored* rather than fatal: the layer still opens and still reads in place,
+ * just flat. Only the depth cap is reachable from an artifact — the stamped `id`/`parent`
+ * pair comes from walking an authored tree, so a dangling link or a cycle would take a bug
+ * in this app, not a bad file — and the CLI gate refuses a too-deep artifact upstream. */
 function ancestorChain(
   layer: ReviewLayer,
   byId: ReadonlyMap<string, ReviewLayer>,
@@ -109,28 +112,6 @@ function buildTree(layers: readonly ReviewLayer[]): LayerTree {
   }
 
   return { byId, parentOf, childrenOf, roots, depthOf };
-}
-
-/** Document order: roots in authored order, each immediately followed by its subtree —
- * the order the artifact is required to be written in, and the order everything is read
- * in. The CLI gate holds an artifact to it by comparing this against the authored array,
- * so "the array is the document" is proven rather than assumed. */
-export function layerDocumentOrder(layers: readonly ReviewLayer[]): ReviewLayer[] {
-  return documentOrder(buildTree(layers));
-}
-
-function documentOrder(tree: LayerTree): ReviewLayer[] {
-  const ordered: ReviewLayer[] = [];
-  const visit = (layer: ReviewLayer): void => {
-    ordered.push(layer);
-    for (const child of tree.childrenOf.get(layer.id) ?? []) {
-      visit(child);
-    }
-  };
-  for (const root of tree.roots) {
-    visit(root);
-  }
-  return ordered;
 }
 
 /** The outline, in the artifact's own order. */
