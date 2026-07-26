@@ -1,36 +1,32 @@
 # Reviewer
 
-Local-first macOS app for reading agent-authored code reviews.
+A macOS app for reading code reviews written by your coding agent.
 
-Your agent reviews with its own rules; the `rvw` CLI presents the result — an **overview**,
-line-anchored comments, and an optional walkthrough in ordered **layers** — validating every anchor
-against the real diff first, so a hallucinated line can't reach you.
+Agents write good reviews and then dump them into a terminal, where you scroll past a wall of text
+with no diff next to it. Reviewer takes that same review and shows it the way GitHub would: a
+summary up front, comments pinned to the exact lines they talk about, and an optional order to read
+the change in.
 
-> **Note:** this project was developed entirely by Claude, no one has ever looked at its code.
+> **Note:** fully vibecoded. Every line was written by Claude and no human has read the code.
 
 ![Reviewer showing a diff grouped into ordered layers with anchored review comments](assets/screenshot.png)
 
-## Features
+## Why
 
-- **Any agent, your rules.** `rvw` is a small, provider-agnostic CLI that never tells your agent how
-  to review. It hands over the artifact shape (`rvw schema`) and the exact diff anchors are checked
-  against (`rvw diff`). A human can drive it too.
-- **Validated, not trusted.** `rvw emit` writes nothing unless every comment and layer range places
-  against the diff.
-- **Starts with a tour, not a file list.** A review opens on its **overview**: what the change does,
-  then one section per layer — its files, line counts and comments derived from the artifact, so
-  they can't go stale. Click a chapter to read its diff; come back any time.
-- **A reading path.** Layers are optional and nestable, and the order you emit is the order they are
-  read. Follow them in sequence or solo one.
-- **Survives drift.** A comment whose code moved is flagged **Outdated**, never shown on the wrong
-  line.
-- **High-fidelity diffs** via Pierre's `@pierre/diffs` / `@pierre/trees`. Local-first — no account,
-  no server.
+- **Works with any agent.** `rvw` is a small CLI that takes a review as JSON. It never tells your
+  agent what to look for — your rules stay yours. You can write the JSON by hand too.
+- **No made-up line numbers.** Every comment is checked against the real diff before anything is
+  saved. If a line doesn't exist, `rvw` rejects the review instead of showing you a comment on the
+  wrong code.
+- **Opens with a summary, not a file tree.** You start by reading what the change does, then click
+  into the parts you care about.
+- **Reads in order.** The agent can group the diff into steps, so you read the new data structure
+  before the code that uses it.
+- **Local-first.** No account, no server. Reviews live in your repo.
 
-## Usage
+## Use it
 
-One call, from inside the repo: the agent pipes its draft in, `rvw` validates every anchor against
-the real diff, writes the artifact, and opens it.
+From inside the repo, your agent pipes the review in:
 
 ```bash
 rvw emit <<'JSON'
@@ -38,17 +34,19 @@ rvw emit <<'JSON'
 JSON
 ```
 
-The range is auto-detected (current branch against its fork point) — pass `--repo`/`--base`/`--head`
-to override, `--no-open` to skip opening. See `rvw schema --json` for the draft shape and `rvw diff`
-for the diff anchors are checked against.
+That validates the review, saves it, and opens the app. The commit range is detected automatically
+(current branch against its fork point); override it with `--repo` / `--base` / `--head`, or skip
+opening with `--no-open`.
 
-Point your agent at the bundled `present-review` skill (`rvw skills`) after it has reviewed the
-change. The artifact is refs-only — the app re-derives the diff from your branch on open, so it
-stays small and current.
+To set your agent up, run `rvw skills` to install the bundled `present-review` skill, then invoke it
+after the agent has finished reviewing. Two other commands are useful: `rvw schema --json` prints
+the exact JSON shape, and `rvw diff` prints the diff that comments are checked against.
+
+Reviews store only refs, so the app rebuilds the diff from your branch each time you open it.
 
 ## Install
 
-macOS. Grab the `.dmg` from the [latest release](../../releases/latest), or build from source:
+macOS. Download the `.dmg` from the [latest release](../../releases/latest), or build it:
 
 ```bash
 bun install
@@ -56,7 +54,7 @@ bun run build:mac    # → Reviewer.app + .dmg in dist/
 bun run build:cli    # → rvw CLI at dist/rvw.js
 ```
 
-Release builds are unsigned — on first launch, right-click → **Open**, or:
+Builds are unsigned, so on first launch right-click → **Open**, or run:
 `xattr -dr com.apple.quarantine /Applications/Reviewer.app`
 
 ## Develop
