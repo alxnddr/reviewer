@@ -167,3 +167,47 @@ describe("emitReviewArtifact", () => {
     });
   });
 });
+
+describe("emitReviewArtifact — carrying the diff", () => {
+  it("embeds the captured patch verbatim when asked, so the artifact needs no repo", () => {
+    const result = emitReviewArtifact(input({ embedPatch: true }));
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+
+    const artifact = ReviewArtifact.parse(JSON.parse(result.bytes));
+    // Verbatim, not re-serialized: the app renders an embedded patch as-is, so a byte that
+    // changed here would be a line the reader sees differently from the one that was gated.
+    expect(artifact.patch).toBe(PATCH);
+    // And the anchors still place — against the very bytes the file now carries, which is
+    // the stronger of the two checks, not a weaker one.
+    expect(validatePlacement(artifact, artifact.patch ?? "")).toEqual([]);
+  });
+
+  it("still omits the key by default, so the ordinary artifact stays refs-only", () => {
+    const result = emitReviewArtifact(input());
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(ReviewArtifact.parse(JSON.parse(result.bytes)).patch).toBeUndefined();
+  });
+
+  it("refuses to write an empty patch as an embedded one — it would freeze an empty diff", () => {
+    // An empty capture cannot be embedded: the schema's `patch` is a non-empty string, and
+    // `reviewDiffFor` would fall through to the refs form anyway, so writing it would only
+    // promise a portability the file cannot keep. The gate then refuses the artifact on its
+    // own terms — anchors cannot place against no diff — which is the correct outcome; what
+    // matters here is that the failure is the empty *range*, not an invalid artifact shape.
+    const result = emitReviewArtifact(input({ patch: "", embedPatch: true }));
+    expect(result.ok).toBe(false);
+  });
+
+  it("leaves everything else about the artifact untouched", () => {
+    const refs = emitReviewArtifact(input());
+    const embedded = emitReviewArtifact(input({ embedPatch: true }));
+    expect(refs.ok && embedded.ok).toBe(true);
+    if (!refs.ok || !embedded.ok) return;
+
+    const { patch, ...withoutPatch } = ReviewArtifact.parse(JSON.parse(embedded.bytes));
+    expect(patch).toBeDefined();
+    expect(withoutPatch).toEqual(ReviewArtifact.parse(JSON.parse(refs.bytes)));
+  });
+});

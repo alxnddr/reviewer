@@ -44,6 +44,11 @@
   --trees-accent-override: var(--primary);
   --trees-focus-ring-color-override: var(--ring);
   --trees-input-bg-override: var(--muted);
+  /* Pierre insets its whole list by 16px, which put the tree out of line with the filter
+   * box above it (px-2) and every rail row beside it. 8px is that same inset: Pierre
+   * splits it into container padding plus each item's 2px margin, and discounts the
+   * reserved scrollbar gutter on the end side, so both edges of a row land at 8px. */
+  --trees-padding-inline-override: 8px;
   /* Git status glyphs follow the theme's diff-signal + status hues, not Pierre's
    * fixed set, so an added/deleted file reads in the same green/red as the diff. */
   --trees-status-added-override: var(--diff-add-fg);
@@ -98,6 +103,62 @@
 html[data-theme="github-light"] {
   --elevated: #ffffff;
   --popover: #ffffff;
+}
+
+/* ── Dark themes: the secondary ink, lifted ────────────────────────────────────
+ * The generated dark ramps put --text-muted at ~5.8:1 and --text-faint at ~3.5:1
+ * against the page. Those pass on paper (the report grades faint as "faint/large
+ * text") but they were graded against the token, not against where the token is
+ * actually spent: the rail's section labels and every quiet row under them, and
+ * the doc's fact rows — "8 files across the sections below", the line counts, the
+ * read tallies. All of that is 12–14px, all of it is read rather than glanced at,
+ * and faint at 3.5:1 does not even clear AA for text that size. On a dark surface
+ * it read as switched off.
+ *
+ * So both tokens move up one step, per theme, holding each theme's own hue and
+ * chroma and moving only lightness: muted to ~7:1 and faint to ~4.8:1 against the
+ * page (a hair under against the sidebar, which sits one tone up). Two rules keep
+ * it from flattening the ramp — each token stays a fixed distance below its own
+ * theme's --foreground (0.12 and 0.20 in oklch L), which is what caps nord, whose
+ * ink is the dimmest of the four and whose muted was already the brightest.
+ *
+ * --muted-foreground moves with --text-muted because every theme defines them as
+ * the same colour: they are one ink with two names (ours and shadcn's), and a lift
+ * applied to one of them would split the menus and placeholders off from the rail.
+ *
+ * Here rather than in design/globals.css for the reason given above: that file is
+ * a generator artifact with no regeneration script in this repo, so an edit to it
+ * is lost the next time it is produced. Same selectors, later source order, so
+ * these win — and each dark data-theme is listed explicitly, because those beat a
+ * bare `.dark` on specificity. */
+.dark {
+  --muted-foreground: oklch(0.7041 0 0);
+  --text-muted: oklch(0.7041 0 0);
+  --text-faint: oklch(0.6049 0 0);
+}
+
+html[data-theme="pierre-dark"] {
+  --muted-foreground: oklch(0.7041 0 0);
+  --text-muted: oklch(0.7041 0 0);
+  --text-faint: oklch(0.6049 0 0);
+}
+
+html[data-theme="github-dark"] {
+  --muted-foreground: #b0b3b9;
+  --text-muted: #b0b3b9;
+  --text-faint: #909499;
+}
+
+html[data-theme="dracula"] {
+  --muted-foreground: #b4b6b7;
+  --text-muted: #b4b6b7;
+  --text-faint: #94959a;
+}
+
+html[data-theme="nord"] {
+  --muted-foreground: #b1b7c2;
+  --text-muted: #b1b7c2;
+  --text-faint: #989eab;
 }
 
 @theme inline {
@@ -409,6 +470,21 @@ html[data-theme="github-light"] {
       display: none;
     }
   }
+}
+
+/* ── The tree's focus ring, on keyboard input only ─────────────────────────────
+ * Pierre rings whichever row holds DOM focus, which after a click is the row the reader
+ * just clicked — a hard accent outline drawn around a row that is already wearing the
+ * selection fill, saying the same thing twice. The rule lives in its shadow root and
+ * keys off a data attribute rather than `:focus-visible`, so it cannot be narrowed from
+ * out here; its colour, though, is a custom property, and those inherit through the
+ * boundary. So the ring goes transparent while the pointer is the input device and comes
+ * back on the first key press, which is `:focus-visible`'s bargain by another route —
+ * the ring is there whenever it is the only thing marking where the keys will land.
+ * `initInputModality` maintains the attribute. */
+html[data-input-modality="pointer"] {
+  --trees-focus-ring-color-override: transparent;
+  --trees-selected-focused-border-color-override: transparent;
 }
 
 /* Electron-only window-drag surfaces (titleBarStyle "hiddenInset" removes the system one). */

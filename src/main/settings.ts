@@ -9,6 +9,10 @@ import { ThemeId } from "../shared/contracts";
 // papered over with a placeholder.
 export const Settings = z.object({
   theme: ThemeId.optional(),
+  // Whether the first-run guide has been through once. Absent means "never launched this app
+  // before", which is exactly the condition the guide opens on — so the unset state carries the
+  // meaning and there is no separate "first launch" record to keep in sync with it.
+  onboarded: z.boolean().optional(),
 });
 export type Settings = z.infer<typeof Settings>;
 

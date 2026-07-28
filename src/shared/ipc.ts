@@ -1,3 +1,4 @@
+import type { CliInstallResult, CliStatus } from "./cli";
 import type { ThemeId } from "./contracts";
 import type {
   BranchesResponse,
@@ -10,6 +11,7 @@ import type {
   OpenRepoResponse,
   RepoRequest,
 } from "./git";
+import type { RecentReviewsResponse } from "./recent-reviews";
 import type { ReviewOpenPathRequest, ReviewOpenResponse } from "./review-open";
 import type { ReviewSaveRequest, ReviewSaveResponse } from "./review-save";
 import type {
@@ -26,11 +28,22 @@ import type {
 export const IpcChannel = {
   themeGet: "theme:get",
   themeSet: "theme:set",
+  // The `rvw` launcher, as the first-run guide needs it: where it stands, and the one
+  // button that changes that. The install runs in main because it writes outside the app
+  // and asks the OS for admin rights to do it.
+  cliStatus: "cli:status",
+  cliInstall: "cli:install",
+  // The first-run guide's one bit of memory, kept beside the theme in app settings.
+  onboardingGet: "onboarding:get",
+  onboardingComplete: "onboarding:complete",
   repoOpen: "repo:open",
   // The dialog path shows the picker in main and answers through the invoke; the
   // path variant guards a renderer-supplied (dropped) path. Both hit one guard.
   reviewOpen: "review:open",
   reviewOpenPath: "review:open-path",
+  // What `rvw emit` has left in its managed directory, for the recents picker. A read of
+  // one folder in main; the renderer never sees a filesystem.
+  reviewsRecent: "reviews:recent",
   // Export the curated review: the renderer serializes it (pure generators) and
   // main shows the native save sheet + writes. One channel per format so each
   // carries its own filter and default filename; both share the write seam.
@@ -58,6 +71,9 @@ export type IpcChannelName = (typeof IpcChannel)[keyof typeof IpcChannel];
 export const IpcEvent = {
   menuOpenRepo: "menu:open-repo",
   menuOpenReview: "menu:open-review",
+  // Toggles the in-app recents picker. A command like the rest of these — the list it shows
+  // is read by the renderer over `reviews:recent`, not carried on the event.
+  menuOpenRecentReviews: "menu:open-recent-reviews",
   // Export commands: like the open commands they carry no data — the
   // renderer owns the serialize→save flow the same way it owns the open flow.
   menuExportReviewJson: "menu:export-review-json",
@@ -112,11 +128,20 @@ export const TAB_ORDINAL_EVENTS = [
 export type IpcContract = {
   "theme:get": { request: void; response: ThemeId };
   "theme:set": { request: ThemeId; response: void };
+  "cli:status": { request: void; response: CliStatus };
+  // Answers with the state *after* the attempt rather than a bare success flag: the guide
+  // shows where the launcher landed, and "installed" is a fact on disk either way.
+  "cli:install": { request: void; response: CliInstallResult };
+  "onboarding:get": { request: void; response: boolean };
+  "onboarding:complete": { request: void; response: void };
   "repo:open": { request: void; response: OpenRepoResponse };
   // Dialog: main owns the picker, so the request is void. Path: the renderer
   // supplies the dropped path, guarded in main before use.
   "review:open": { request: void; response: ReviewOpenResponse };
   "review:open-path": { request: ReviewOpenPathRequest; response: ReviewOpenResponse };
+  // Answers plainly rather than in a result envelope: "the directory would not open" is a
+  // field on the answer (see RecentReviewsResponse), not a failed call.
+  "reviews:recent": { request: void; response: RecentReviewsResponse };
   "review:save-json": { request: ReviewSaveRequest; response: ReviewSaveResponse };
   "review:save-markdown": { request: ReviewSaveRequest; response: ReviewSaveResponse };
   "git:branches": { request: RepoRequest; response: BranchesResponse };
@@ -139,6 +164,14 @@ export type IpcResponse<Channel extends IpcChannelName> = IpcContract[Channel]["
 export type ReviewerBridge = {
   getThemeSelection: () => Promise<IpcResponse<"theme:get">>;
   setThemeSelection: (selection: IpcRequest<"theme:set">) => Promise<void>;
+  /** Whether `rvw` is on the box, and where it goes — re-read on every call. */
+  getCliStatus: () => Promise<IpcResponse<"cli:status">>;
+  /** Installs the `rvw` launcher (one admin prompt); resolves with where that left it. */
+  installCli: () => Promise<IpcResponse<"cli:install">>;
+  /** Whether the first-run guide has been through once. */
+  getOnboarded: () => Promise<IpcResponse<"onboarding:get">>;
+  /** Records that it has — finished or skipped, which are the same thing to the reader. */
+  completeOnboarding: () => Promise<IpcResponse<"onboarding:complete">>;
   openRepo: () => Promise<IpcResponse<"repo:open">>;
   /** File → Open Review…: main shows the native picker and guards the pick. */
   openReview: () => Promise<IpcResponse<"review:open">>;
@@ -146,6 +179,10 @@ export type ReviewerBridge = {
   openReviewByPath: (
     request: IpcRequest<"review:open-path">,
   ) => Promise<IpcResponse<"review:open-path">>;
+  /** The reviews `rvw emit` has written, newest first, for the recents picker. Re-read on
+   * every call: the CLI writes into that directory while the app is running, which is the
+   * whole point of it, so a cached list would be stale by the time it is looked at. */
+  listRecentReviews: () => Promise<IpcResponse<"reviews:recent">>;
   /** Export the curated review as `.reviewer.json`: main shows the save sheet and
    * writes the serialized artifact the renderer passes. */
   saveReviewJson: (
@@ -187,6 +224,8 @@ export type ReviewerBridge = {
   onOpenRepoCommand: (listener: () => void) => () => void;
   /** Subscribes to the File → Open Review… menu command; returns unsubscribe. */
   onOpenReviewCommand: (listener: () => void) => () => void;
+  /** Subscribes to the File → Recent Reviews command (⇧⌘R); returns unsubscribe. */
+  onOpenRecentReviewsCommand: (listener: () => void) => () => void;
   /** Subscribes to the File → Export Review (.reviewer.json) command; unsubscribe. */
   onExportReviewJsonCommand: (listener: () => void) => () => void;
   /** Subscribes to the File → Export Review as Markdown command; unsubscribe. */

@@ -36,6 +36,9 @@ const routes = buildRouteMap<
   },
   docs: {
     brief: "rvw — present a review in Reviewer",
+    // The pointer an agent needs first is printed *above* this block by the entrypoint, not
+    // in it (see agent-header.ts): Stricli puts the usage listing before the description, so
+    // anything stated here is already the seventh line of the answer.
     fullDescription:
       "Portable CLI a coding agent uses to hand a review it has already written to the Reviewer app.",
   },

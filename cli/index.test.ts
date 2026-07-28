@@ -44,14 +44,18 @@ function fixture(bytes: string): string {
   return file;
 }
 
-function rvw(args: readonly string[]): { status: number | null; stderr: string } {
+function rvw(args: readonly string[]): {
+  status: number | null;
+  stdout: string;
+  stderr: string;
+} {
   // Invoked through the `cli` script so the test also proves package.json forwards the
   // verb + args to the entrypoint — the exact `bun run cli check …` path an agent uses.
   const result = spawnSync("bun", ["run", "cli", ...args], {
     cwd: process.cwd(),
     encoding: "utf8",
   });
-  return { status: result.status, stderr: result.stderr };
+  return { status: result.status, stdout: result.stdout, stderr: result.stderr };
 }
 
 describe("rvw entrypoint exit codes (real process)", () => {
@@ -77,5 +81,20 @@ describe("rvw entrypoint exit codes (real process)", () => {
 
   it("exits 2 on an unknown verb (Stricli's negative code normalized to shell-cannot-run)", () => {
     expect(rvw(["frobnicate"]).status).toBe(2);
+  });
+
+  // The agent header, on the real streams: what a bare `rvw` actually shows an agent that
+  // has been told the tool's name and nothing else. It has to be above Stricli's usage
+  // block, not inside the description Stricli prints after it.
+  it("opens a bare run and --help with the skill to read, ahead of the usage listing", () => {
+    for (const args of [[], ["--help"]]) {
+      const { stdout } = rvw(args);
+      expect(stdout).toContain("rvw skills present-review");
+      expect(stdout.indexOf("rvw skills present-review")).toBeLessThan(stdout.indexOf("USAGE"));
+    }
+  });
+
+  it("keeps the header out of machine-read output", () => {
+    expect(rvw(["schema", "--json"]).stdout).not.toContain("AGENTS START HERE");
   });
 });

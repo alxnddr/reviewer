@@ -13,6 +13,7 @@ import {
   NO_READ_FILES,
   withCollapsed,
 } from "../lib/read-progress";
+import { useOnboardingStore } from "../stores/onboarding";
 import { useReviewStore, type SessionSlice } from "../stores/review";
 
 const HOUR_MS = 3600 * 1000;
@@ -714,6 +715,66 @@ export function applyPreviewState(): void {
       seedSiblingTabs(["reviewer"], []);
       useReviewStore.setState({
         openFailure: { code: "notARepo", path: "/Users/demo/Downloads/not-a-repo" },
+      });
+      break;
+    }
+    // The first-run guide, at each of its three stops and in the two states step two can be
+    // found in. Outside Electron there is no bridge to answer "is rvw installed", so the
+    // launcher status is seeded here — it is the one thing on the card the browser cannot
+    // discover, and the step reads completely differently on either side of it.
+    case "onboarding":
+    case "onboarding-cli":
+    case "onboarding-cli-installed":
+    case "onboarding-prompt": {
+      useReviewStore.setState({ boot: "ready", sessions: {}, activeSessionId: null });
+      const installed = state === "onboarding-cli-installed";
+      useOnboardingStore.setState({
+        open: true,
+        step: state === "onboarding" ? 0 : state === "onboarding-prompt" ? 2 : 1,
+        cli: { supported: true, installed, path: "/usr/local/bin/rvw", shadowedBy: null },
+      });
+      break;
+    }
+    case "no-sessions": {
+      // The empty state proper: the guide already run, nothing open. Same card, same
+      // backdrop, inside the content pane rather than over the whole window.
+      useReviewStore.setState({ boot: "ready", sessions: {}, activeSessionId: null });
+      useOnboardingStore.setState({
+        open: false,
+        cli: { supported: true, installed: true, path: "/usr/local/bin/rvw", shadowedBy: null },
+      });
+      break;
+    }
+    case "cli-shadowed": {
+      // Installed, and still unreachable: another launcher answers to `rvw` first.
+      const files = parsePatch(MULTI_STATUS_PATCH, "preview:cli-shadowed");
+      seedSession({
+        diff: { phase: "loaded", loadId: 1, files },
+        selectedFilePath: files[0]?.path ?? null,
+      });
+      useOnboardingStore.setState({
+        open: false,
+        cli: {
+          supported: true,
+          installed: true,
+          path: "/usr/local/bin/rvw",
+          shadowedBy: "~/.local/bin/rvw",
+        },
+      });
+      break;
+    }
+    case "cli-banner": {
+      // The standing notice over a working session: what it has to stay legible against,
+      // and the one place the app's glass sits above the diff at the top of the window.
+      const files = parsePatch(MULTI_STATUS_PATCH, "preview:cli-banner");
+      seedSession({
+        diff: { phase: "loaded", loadId: 1, files },
+        selectedFilePath: files[0]?.path ?? null,
+        comments: fixtureComments(),
+      });
+      useOnboardingStore.setState({
+        open: false,
+        cli: { supported: true, installed: false, path: "/usr/local/bin/rvw", shadowedBy: null },
       });
       break;
     }

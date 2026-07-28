@@ -85,7 +85,7 @@ type RailSectionProps = {
   selected?: boolean;
   disabled?: boolean;
   onSelect: () => void;
-  /** A control that acts on the section, at the far end of its bar (Layers' "Show
+  /** A control that acts on the section, at the far end of its bar (Layers' "View
    * all"). Outside the bar's own button, so it is not part of the disclosure's hit
    * target. */
   action?: ReactNode;

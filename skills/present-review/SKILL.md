@@ -116,6 +116,14 @@ The range is auto-detected — the cwd's repo, the current branch, the fork poin
 upstream or the default branch — and echoed back so you can check it. Pass `--repo`, `--base` or
 `--head` only to override. Any git revision expression works; refs are resolved for you.
 
+Without `--out` the artifact lands in `~/.rvw/reviews/`, where the app's Recent Reviews picker
+(⇧⌘R) finds it. Pass `--out` only when someone asked for the file somewhere specific.
+
+If the review is being emitted somewhere the reader is not — CI, a container, any machine whose
+checkout they do not have — add `--embed-patch`, which carries the diff inside the artifact so it
+opens without the repo. Do not reach for it otherwise: a review that keeps its refs shows the
+change as it stands now and can expand context around a hunk, and an embedded one cannot.
+
 Outcomes:
 
 - **Exit 0** — the review was written and opened.

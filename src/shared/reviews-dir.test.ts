@@ -3,11 +3,17 @@ import { reviewFileName, reviewsDir } from "./reviews-dir";
 
 // The default-output location and name are pure of the process and the clock (env, home, and
 // the timestamp are arguments), so both are proven here without writing a file or touching the
-// real home directory. `emit.test.ts` proves they are actually written to.
+// real home directory. `emit.test.ts` proves they are actually written to, and
+// `main/review/recent.test.ts` proves the app reads the same place.
 
 describe("reviewsDir", () => {
   it("defaults to ~/.rvw/reviews under the given home", () => {
     expect(reviewsDir({}, "/home/dev")).toBe("/home/dev/.rvw/reviews");
+  });
+
+  it("does not double a separator when home or the override carries a trailing slash", () => {
+    expect(reviewsDir({}, "/home/dev/")).toBe("/home/dev/.rvw/reviews");
+    expect(reviewsDir({ RVW_HOME: "/tmp/rvw/" }, "/home/dev")).toBe("/tmp/rvw/reviews");
   });
 
   it("honors a non-empty RVW_HOME override so a test never writes to the real home", () => {

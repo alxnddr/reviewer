@@ -241,7 +241,7 @@ export function OverviewScreen(): ReactElement | null {
           the strip beside it stays the document's, and text under it is still selectable. */}
       <div className="pointer-events-none absolute inset-x-0 bottom-0 z-20 flex justify-center pb-6">
         <div data-glass className="pointer-events-auto flex items-center rounded-full p-1">
-          {/* One action. "Browse all files" left when the rail grew a permanent "Show all"
+          {/* One action. "Browse all files" left when the rail grew a permanent "View all"
               in its Layers header — same call, same destination, on screen the whole time
               and next to the rows it is about. Two doors to one room, and this was the one
               that had to be carried.

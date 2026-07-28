@@ -56,12 +56,35 @@ function makeBridge(overrides: Partial<ReviewerBridge>): ReviewerBridge {
   return {
     getThemeSelection: vi.fn(),
     setThemeSelection: vi.fn(),
+    getCliStatus: vi.fn().mockResolvedValue({
+      supported: true,
+      installed: true,
+      path: "/usr/local/bin/rvw",
+      shadowedBy: null,
+    }),
+    installCli: vi.fn().mockResolvedValue({
+      status: {
+        supported: true,
+        installed: true,
+        path: "/usr/local/bin/rvw",
+        shadowedBy: null,
+      },
+      problem: null,
+    }),
+    getOnboarded: vi.fn().mockResolvedValue(true),
+    completeOnboarding: vi.fn(),
     openRepo: vi.fn().mockResolvedValue({
       ok: true,
       value: { kind: "opened", repo: { path: "/repo", name: "repo" } },
     }),
     openReview: vi.fn().mockResolvedValue({ ok: true, value: { kind: "canceled" } }),
     openReviewByPath: vi.fn().mockResolvedValue({ ok: true, value: { kind: "canceled" } }),
+    listRecentReviews: vi.fn().mockResolvedValue({
+      dir: "/home/dev/.rvw/reviews",
+      reviews: [],
+      truncated: 0,
+      unreadable: false,
+    }),
     saveReviewJson: vi.fn().mockResolvedValue({ ok: true, value: { kind: "canceled" } }),
     saveReviewMarkdown: vi.fn().mockResolvedValue({ ok: true, value: { kind: "canceled" } }),
     getPathForFile: vi.fn().mockReturnValue(null),
@@ -93,6 +116,7 @@ function makeBridge(overrides: Partial<ReviewerBridge>): ReviewerBridge {
     reorderSessions: vi.fn().mockResolvedValue(undefined),
     onOpenRepoCommand: vi.fn().mockReturnValue(() => {}),
     onOpenReviewCommand: vi.fn().mockReturnValue(() => {}),
+    onOpenRecentReviewsCommand: vi.fn().mockReturnValue(() => {}),
     onExportReviewJsonCommand: vi.fn().mockReturnValue(() => {}),
     onExportReviewMarkdownCommand: vi.fn().mockReturnValue(() => {}),
     onSessionsChanged: vi.fn().mockReturnValue(() => {}),
@@ -651,6 +675,47 @@ describe("review-pinned diff", () => {
     expect(slice(ID_A).selection).toBeNull();
     expect(slice(ID_A).reviewDiff).toEqual({ kind: "frozenPatch", patch: MULTI_STATUS_PATCH });
     expect(bridge.getDiff).not.toHaveBeenCalled();
+  });
+
+  it("asks git nothing at all for a frozen review — not even its log or branches", async () => {
+    // A frozen artifact is not backed by a repo that has to exist: emitted on a CI runner,
+    // its `repo` is a checkout path that means nothing on this machine. The diff comes out of
+    // the file, and the two things the derivation would otherwise ask git for are things a
+    // frozen review has no use for — the commit brush is replaced by a note, and the branch
+    // picker is not its picker. Asking anyway is how such an artifact used to open with two
+    // failed panels beside a diff that rendered perfectly.
+    const bridge = makeBridge({});
+    await hydrateWith(bridge, {
+      sessions: [frozenReviewSession(ID_A, "/nonexistent/ci/workspace", MULTI_STATUS_PATCH)],
+      activeSessionId: ID_A,
+    });
+
+    await vi.waitFor(() => {
+      expect(slice(ID_A).diff.phase).toBe("loaded");
+    });
+    expect(bridge.getCommitLog).not.toHaveBeenCalled();
+    expect(bridge.listBranches).not.toHaveBeenCalled();
+    expect(bridge.getDiff).not.toHaveBeenCalled();
+    // Left null — the same "never asked" they hold before any derivation — rather than a
+    // `failed` phase, which would invite a retry of a question with no answer.
+    expect(slice(ID_A).log).toBeNull();
+    expect(slice(ID_A).branches).toBeNull();
+  });
+
+  it("still derives log and branches for a refs review, which does need its repo", async () => {
+    // The guard above must key on the frozen pin, not on being a review: a refs review
+    // re-derives its diff from git and lists its own base..head commits.
+    const bridge = makeBridge({});
+    await hydrateWith(bridge, {
+      sessions: [refsReviewSession(ID_A, "/repo-a", "main", SHA_A)],
+      activeSessionId: ID_A,
+    });
+
+    await vi.waitFor(() => {
+      expect(slice(ID_A).diff.phase).toBe("loaded");
+    });
+    expect(bridge.getCommitLog).toHaveBeenCalledTimes(1);
+    expect(bridge.listBranches).toHaveBeenCalledTimes(1);
   });
 
   it("lands a non-empty but unparseable frozen patch in the visible unreadable state", async () => {

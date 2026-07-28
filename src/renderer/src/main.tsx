@@ -3,12 +3,17 @@ import "./index.css";
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { App } from "./App";
+import { initInputModality } from "./lib/input-modality";
 import { useReviewStore } from "./stores/review";
 import { initTheme } from "./stores/theme";
 
 // Theme class before first render: with show:false + ready-to-show in main, the
 // window becomes visible only after this has applied, so cold start cannot flash.
 initTheme();
+
+// Document-level listeners with no React state behind them, so they mount once here
+// rather than riding a component's effect.
+initInputModality();
 
 // The renderer owns the write-back debounce, so the renderer must flush
 // it: a mutation still in the timer window is sent before the window goes away,

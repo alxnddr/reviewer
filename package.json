@@ -1,13 +1,15 @@
 {
   "name": "reviewer",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "description": "Local-first desktop diff viewer with high-fidelity rendering, agent-authored reviews, and semantic layers",
   "license": "MIT",
   "author": "Aleksandr Lesnenko",
   "main": "./out/main/index.js",
   "scripts": {
-    "dev": "electron-vite dev",
+    "dev": "bun run build:cli && electron-vite dev",
+    "reset": "node scripts/reset-state.mjs",
+    "dev:fresh": "node scripts/reset-state.mjs && bun run dev",
     "cli": "bun cli/index.ts",
     "build:cli": "bun build cli/index.ts --target=node --outfile dist/rvw.js && printf '{\"type\":\"module\"}\\n' > dist/package.json",
     "start": "electron-vite preview",

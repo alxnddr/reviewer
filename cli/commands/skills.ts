@@ -23,7 +23,7 @@ export const skillsCommand = buildCommand<SkillsFlags, [string | undefined], Loc
       "reviewing, so it is the same wherever you run it. Exit 0 on a listing or a found skill;",
       "2 when the skills directory cannot be read or no skill claims the name.",
     ].join("\n"),
-    customUsage: ["", "--json", "authoring-review", "authoring-review --json"],
+    customUsage: ["", "--json", "present-review", "present-review --json"],
   },
   parameters: {
     flags: {

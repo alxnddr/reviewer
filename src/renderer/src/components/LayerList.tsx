@@ -140,14 +140,10 @@ function TreeRow({
       )}
       {glyph}
       {row.ordinal !== null && (
-        <span
-          className={cn(
-            "shrink-0 text-xs tabular-nums",
-            selected ? "text-foreground/70" : "text-text-faint",
-          )}
-        >
-          {row.ordinal}
-        </span>
+        // The number reads as part of the name, not as metadata beside it: same size, same
+        // ink as the label it numbers, inherited from the row so it tracks the row's state
+        // instead of keeping its own pair of greys.
+        <span className="shrink-0 tabular-nums">{row.ordinal}</span>
       )}
       <TooltipHint
         side="right"
@@ -530,10 +526,13 @@ export function LayerList({
             <Button
               variant="ghost"
               size="sm"
-              className="shrink-0 hover:bg-border/60 dark:hover:bg-border/60"
+              // Size and ink overriding the variant's own: it rides the Layers bar and has
+              // to read as part of it — same 14px, same muted ink, same lift to full ink
+              // under the pointer as the bar's own label (see `RailSection`).
+              className="shrink-0 text-sm text-text-muted hover:bg-border/60 hover:text-foreground dark:hover:bg-border/60"
               onClick={() => setActiveLayer(null)}
             >
-              Show all
+              View all
             </Button>
           ) : undefined
         }

@@ -6,7 +6,9 @@ import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from "@/componen
 type AppShellProps = {
   /** App-level notices that belong to the shell, not a session pane. */
   banner: ReactNode;
-  sidebar: ReactNode;
+  /** The rail, or null when there is no review for it to index — the shell then gives the
+   * whole width to the content well rather than framing it with an empty column. */
+  sidebar: ReactNode | null;
   children: ReactNode;
 };
 
@@ -18,6 +20,18 @@ export function AppShell({ banner, sidebar, children }: AppShellProps): ReactEle
     id: "reviewer.shell",
     storage: localStorage,
   });
+
+  // No rail, no seam, no panel group: the start screen is one full-width surface, and a
+  // group with a single panel would still park a drag handle against the window edge.
+  if (sidebar === null) {
+    return (
+      <div className="flex h-dvh flex-col">
+        <TitleBar />
+        {banner}
+        <main className="min-h-0 flex-1 bg-background">{children}</main>
+      </div>
+    );
+  }
 
   return (
     <div className="flex h-dvh flex-col">

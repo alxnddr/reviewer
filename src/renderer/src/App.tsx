@@ -1,17 +1,21 @@
-import { useEffect, type ReactElement } from "react";
+import { useEffect, useRef, type ReactElement } from "react";
 import { AppShell } from "@/components/AppShell";
+import { CliBanner } from "@/components/CliBanner";
 import { DiffScreen } from "@/components/DiffScreen";
 import { DiffWorkerPool } from "@/components/DiffWorkerPool";
-import { EmptyState } from "@/components/EmptyState";
 import { OpenFailureBanner } from "@/components/OpenFailureBanner";
 import { ReviewDropZone } from "@/components/ReviewDropZone";
 import { ReviewExportFailureBanner } from "@/components/ReviewExportFailureBanner";
 import { ReviewOpenFailureBanner } from "@/components/ReviewOpenFailureBanner";
 import { OverviewScreen } from "@/components/OverviewScreen";
+import { RecentReviews } from "@/components/RecentReviews";
 import { ShortcutsDialog } from "@/components/ShortcutsDialog";
 import { Sidebar } from "@/components/Sidebar";
 import { SidebarNav } from "@/components/SidebarNav";
+import { StartScreen } from "@/components/StartScreen";
 import { nextRegion, visibleRegions } from "@/lib/focus-regions";
+import { useOnboardingStore } from "@/stores/onboarding";
+import { useRecentReviewsStore } from "@/stores/recent-reviews";
 import { selectActiveSlice, useReviewStore } from "@/stores/review";
 
 /** `o` toggles the tour doc from anywhere in a review — into it from the diff, and back
@@ -78,8 +82,66 @@ function useRegionShortcut(): void {
   }, []);
 }
 
+/** The first-run guide's two app-level facts: it asks main whether it has ever run, and it
+ * counts itself run the moment a review turns up while it is open — the CLI is installed,
+ * the agent knows the way, and there is a diff waiting behind the card, which is every
+ * question the guide asks answered at once.
+ *
+ * Both live here rather than in the card because the card unmounts at exactly the moment the
+ * second one has to fire: a session arriving is what takes the start screen off the screen.
+ *
+ * "Turns up" is strictly an arrival — a tab restored from last launch is not evidence of
+ * anything, and treating it as one marked the guide read on behalf of every reader who had
+ * one open. The boot phase is part of that test because hydration settles the store and
+ * restores the strip in a single commit, so "there was no session and now there is" is
+ * otherwise true of every launch that restores one. */
+function useOnboardingLifecycle(): void {
+  const hydrate = useOnboardingStore((state) => state.hydrate);
+  const open = useOnboardingStore((state) => state.open);
+  const finish = useOnboardingStore((state) => state.finish);
+  const activeSessionId = useReviewStore((state) => state.activeSessionId);
+  const booted = useReviewStore((state) => state.boot === "ready");
+
+  useEffect(() => {
+    void hydrate();
+  }, [hydrate]);
+
+  const previous = useRef({ booted: false, sessionId: null as string | null });
+  useEffect(() => {
+    const arrived =
+      previous.current.booted && previous.current.sessionId === null && activeSessionId !== null;
+    previous.current = { booted, sessionId: activeSessionId };
+    if (open && arrived) {
+      finish();
+    }
+  }, [open, activeSessionId, booted, finish]);
+}
+
+/** The recents picker, wired to the same command the File menu sends so the accelerator and
+ * the menu item are one action rather than two implementations of one. Toggling rather than
+ * opening: the key that put the panel up is the one a reader will press to take it down, and
+ * arriving at a panel that is already open and pressing it again should not be a no-op. */
+function useRecentReviewsCommand(): void {
+  const open = useRecentReviewsStore((state) => state.open);
+  const openPanel = useRecentReviewsStore((state) => state.openPanel);
+  const close = useRecentReviewsStore((state) => state.close);
+
+  useEffect(() => {
+    const bridge = window.reviewer;
+    if (!bridge) {
+      return;
+    }
+    return bridge.onOpenRecentReviewsCommand(() => {
+      if (open) {
+        close();
+      } else {
+        openPanel();
+      }
+    });
+  }, [open, openPanel, close]);
+}
+
 export function App(): ReactElement {
-  const boot = useReviewStore((state) => state.boot);
   const activeSessionId = useReviewStore((state) => state.activeSessionId);
   // The tour doc replaces the diff pane while it is the reader's stop. The slice's
   // invariant (`overviewOpen` implies a doc exists) is re-checked here so a session
@@ -105,6 +167,8 @@ export function App(): ReactElement {
 
   useOverviewShortcut();
   useRegionShortcut();
+  useOnboardingLifecycle();
+  useRecentReviewsCommand();
 
   useEffect(() => {
     const bridge = window.reviewer;
@@ -143,6 +207,13 @@ export function App(): ReactElement {
       {/* Outside the shell, not in it: `?` has to answer from the empty state too, before
           there is any session for the shell to be about. */}
       <ShortcutsDialog />
+      {/* Same placement, same reason: the way back to a past review has to be reachable both
+          from the empty state (where it is also a button) and from inside a review, where
+          there is no card to put a button on. */}
+      <RecentReviews />
+      {/* The standing "no rvw, no reviews" notice. Above the shell too, because it is true
+          of the app rather than of whatever session happens to be open. */}
+      <CliBanner />
       <ReviewDropZone>
         <AppShell
           banner={
@@ -153,10 +224,12 @@ export function App(): ReactElement {
             </>
           }
           sidebar={
-            <Sidebar>
-              {/* Keyed per session so the selector/tree view resets on entry. */}
-              {activeSessionId !== null && <SidebarNav key={activeSessionId} />}
-            </Sidebar>
+            activeSessionId === null ? null : (
+              <Sidebar>
+                {/* Keyed per session so the selector/tree view resets on entry. */}
+                <SidebarNav key={activeSessionId} />
+              </Sidebar>
+            )
           }
         >
           {activeSessionId !== null ? (
@@ -165,11 +238,11 @@ export function App(): ReactElement {
             ) : (
               <DiffScreen />
             )
-          ) : boot === "ready" ? (
-            // Only a settled, genuinely session-less boot shows the empty state —
-            // it must never flash while sessions are still hydrating.
-            <EmptyState onOpenRepository={() => void openRepository()} failure={openFailure} />
-          ) : null}
+          ) : (
+            // Everything before the first review, including the frames before the store has
+            // answered: the start screen owns its own settling, so nothing here waits.
+            <StartScreen failure={openFailure} />
+          )}
         </AppShell>
       </ReviewDropZone>
     </DiffWorkerPool>

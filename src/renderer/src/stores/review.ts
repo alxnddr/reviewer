@@ -867,6 +867,19 @@ async function deriveSession(set: Setter, get: Getter, sessionId: SessionId): Pr
   if (!bridge || slice === undefined || !slice.needsDerive) {
     return;
   }
+  // A frozen review is not backed by a repo that has to exist: its diff comes out of the
+  // artifact, and the two things git would answer here are things it has no use for — the
+  // brush is replaced by a note (SelectionPanel) and the branch picker is not its picker.
+  // Asking anyway is how an artifact emitted somewhere else — a CI runner, whose checkout
+  // path means nothing on this machine — used to open with two failed panels beside a diff
+  // that rendered perfectly. `log`/`branches` stay null, which is the same "never asked"
+  // they hold before any derivation, rather than a `failed` that invites a retry.
+  if (slice.reviewDiff?.kind === "frozenPatch") {
+    setSlice(set, get, sessionId, { needsDerive: false, diff: { phase: "loading" } });
+    await runDiffLoad(set, get, sessionId);
+    return;
+  }
+
   setSlice(set, get, sessionId, {
     needsDerive: false,
     log: { phase: "loading" },

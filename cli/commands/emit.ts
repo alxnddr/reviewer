@@ -8,7 +8,7 @@ import { describeProblem, type ValidationProblem } from "../../src/tools/review-
 import { capturePatch } from "../git";
 import { launchReviewer } from "../launch";
 import { resolveRange } from "../range";
-import { reviewFileName, reviewsDir } from "../reviews-dir";
+import { reviewFileName, reviewsDir } from "../../src/shared/reviews-dir";
 import { EXIT_PROBLEMS, EXIT_READY, type LocalContext } from "../context";
 import { errorMessage, writeCannotRun, type CliError } from "../errors";
 
@@ -28,7 +28,8 @@ import { errorMessage, writeCannotRun, type CliError } from "../errors";
 // draft is folded in, and the pure `emitReviewArtifact` proves every anchor places against that
 // diff before a byte reaches disk. A refused draft is not a bad file, it is no file. On a clean
 // pass the artifact is refs-only (no embedded patch) and lands in rvw's managed reviews dir
-// unless `--out` says otherwise — never in the repo being reviewed.
+// unless `--out` says otherwise — never in the repo being reviewed. `--embed-patch` is the one
+// exception, for the one case refs cannot serve: a review emitted somewhere the reader is not.
 //
 // Exit 2 = the shell could not run (bad flags, unresolvable ref, git failure, unreadable or
 // empty draft, unwritable out); exit 1 = it ran and the gate refused (nothing written, each
@@ -47,6 +48,9 @@ type EmitOutcome =
       readonly base: string;
       readonly head: string;
       readonly opened: boolean;
+      /** Whether the diff rode along, so a CI job can assert it got the portable form
+       * rather than discovering on the reader's machine that it did not. */
+      readonly embedded: boolean;
     }
   | { readonly ok: false; readonly problems: readonly ValidationProblem[] };
 
@@ -57,6 +61,7 @@ type EmitFlags = {
   readonly draft?: string;
   readonly out?: string;
   readonly open: boolean;
+  readonly embedPatch?: boolean;
   readonly json?: boolean;
 };
 
@@ -81,7 +86,10 @@ export const emitCommand = buildCommand<EmitFlags, [], LocalContext>({
       "every anchor proven to place against that diff, every description link proven to resolve",
       "— before writing any bytes. On a clean pass it writes a refs-only artifact (no embedded",
       "patch, so the branch must remain available) and hands it to the installed Reviewer;",
-      "--no-open writes it and stops. The draft is read from stdin unless --draft names a file,",
+      "--no-open writes it and stops. --embed-patch carries the diff inside the artifact so it",
+      "opens on a machine without the repo (CI); the diff is then frozen, so the app cannot",
+      "expand context around a hunk or narrow to a subrange of commits.",
+      "The draft is read from stdin unless --draft names a file,",
       "and its only keys are overview, comments, and layers — at least one of which must be",
       "present. --out is optional and must end .reviewer.json; without it the artifact lands in",
       "rvw's managed reviews dir (~/.rvw/reviews, or $RVW_HOME/reviews) rather than the repo.",
@@ -93,6 +101,7 @@ export const emitCommand = buildCommand<EmitFlags, [], LocalContext>({
       "--draft draft.json",
       "--base main --draft draft.json --json",
       "--repo . --base main --head feature --draft draft.json --no-open --out change.reviewer.json",
+      "--base main --embed-patch --no-open --out review.reviewer.json",
     ],
   },
   parameters: {
@@ -132,6 +141,11 @@ export const emitCommand = buildCommand<EmitFlags, [], LocalContext>({
         kind: "boolean",
         brief: "Open the written artifact in Reviewer (--no-open to just write it)",
         default: true,
+      },
+      embedPatch: {
+        kind: "boolean",
+        brief: "Carry the diff in the artifact so it opens without the repo (CI handoff)",
+        optional: true,
       },
       json: {
         kind: "boolean",
@@ -188,6 +202,7 @@ export const emitCommand = buildCommand<EmitFlags, [], LocalContext>({
       base,
       head,
       patch: capture.patch,
+      embedPatch: flags.embedPatch === true,
       comments: draft.content.comments,
       layers: draft.content.layers,
       overview: draft.content.overview,
@@ -240,14 +255,29 @@ export const emitCommand = buildCommand<EmitFlags, [], LocalContext>({
       }
     }
 
+    // An empty range cannot carry a diff, so `--embed-patch` over one silently produces the
+    // refs-only file it was asked not to. Report what was written, never what was requested.
+    const embedded = flags.embedPatch === true && capture.patch.length > 0;
+
     if (flags.json === true) {
-      const outcome: EmitOutcome = { ok: true, out, repo: repoPath, base, head, opened };
+      const outcome: EmitOutcome = {
+        ok: true,
+        out,
+        repo: repoPath,
+        base,
+        head,
+        opened,
+        embedded,
+      };
       this.process.stdout.write(`${JSON.stringify(outcome, null, 2)}\n`);
     } else {
       // The range first: it is the one thing this command may have decided on the caller's
       // behalf, so a defaulted `--base` is never a surprise discovered later in the app.
       this.process.stdout.write(`${repoPath}: ${base}...${head}\n`);
       this.process.stdout.write(`${out}: written — every anchor places, every link resolves\n`);
+      if (embedded) {
+        this.process.stdout.write(`the diff is embedded — this artifact opens without the repo\n`);
+      }
       if (opened) {
         this.process.stdout.write(`opening ${out} in Reviewer\n`);
       }

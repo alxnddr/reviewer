@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import { run } from "@stricli/core";
+import { writeAgentHeader } from "./agent-header";
 import { app } from "./app";
 import { buildContext, normalizeExitCode, EXIT_CANNOT_RUN } from "./context";
 
@@ -21,7 +22,12 @@ import { buildContext, normalizeExitCode, EXIT_CANNOT_RUN } from "./context";
 // so it needs no import.meta.main guard.
 
 const context = buildContext(process);
+const inputs = process.argv.slice(2);
 
-run(app, process.argv.slice(2), context)
+// Above Stricli's help, never inside it: a bare `rvw` is an agent asking what this is, and
+// the answer has to be the first line it reads rather than the seventh (see agent-header.ts).
+writeAgentHeader(context, inputs);
+
+run(app, inputs, context)
   .then(() => process.exit(normalizeExitCode(context.process.exitCode)))
   .catch(() => process.exit(EXIT_CANNOT_RUN));

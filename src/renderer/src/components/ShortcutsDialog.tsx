@@ -74,6 +74,7 @@ const GROUPS: Group[] = [
     shortcuts: [
       { keys: ["⌘O"], action: "Open a repository" },
       { keys: ["⇧⌘O"], action: "Open a review" },
+      { keys: ["⇧⌘R"], action: "Recent reviews" },
       { keys: ["⌘1", "⌘9"], action: "Switch to a tab by position", range: true },
       { keys: ["⌃⇥"], action: "Cycle tabs" },
       { keys: ["⌘W"], action: "Close the tab" },

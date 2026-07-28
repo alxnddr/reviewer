@@ -1,4 +1,5 @@
 import * as z from "zod";
+import { CliInstallResult, CliStatus } from "../shared/cli";
 import { ThemeId } from "../shared/contracts";
 import { IpcChannel } from "../shared/ipc";
 import {
@@ -8,9 +9,11 @@ import {
   SessionOrderRequest,
   SessionSnapshot,
 } from "../shared/session";
+import { cliStatus, installCli } from "./cli-install";
 import { registerGitIpcHandlers } from "./git/handlers";
 import type { GitRunner } from "./git/runner";
 import { registerIpcHandler } from "./ipc-registry";
+import { hasOnboarded, markOnboarded } from "./onboarding";
 import { registerReviewIpcHandlers } from "./review/handlers";
 import { registerReviewSaveHandlers } from "./review/save";
 import type { SessionStore } from "./sessions";
@@ -24,6 +27,26 @@ export function registerIpcHandlers(gitRunner: GitRunner, sessionStore: SessionS
   registerIpcHandler(IpcChannel.themeSet, { request: ThemeId, response: z.void() }, (selection) => {
     setThemeSelection(selection);
   });
+
+  registerIpcHandler(IpcChannel.cliStatus, { request: z.void(), response: CliStatus }, () =>
+    cliStatus(),
+  );
+
+  registerIpcHandler(IpcChannel.cliInstall, { request: z.void(), response: CliInstallResult }, () =>
+    installCli(),
+  );
+
+  registerIpcHandler(IpcChannel.onboardingGet, { request: z.void(), response: z.boolean() }, () =>
+    hasOnboarded(),
+  );
+
+  registerIpcHandler(
+    IpcChannel.onboardingComplete,
+    { request: z.void(), response: z.void() },
+    () => {
+      markOnboarded();
+    },
+  );
 
   registerGitIpcHandlers(gitRunner);
   registerReviewIpcHandlers(sessionStore);

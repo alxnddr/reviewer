@@ -54,16 +54,28 @@ export function installApplicationMenu(): void {
           accelerator: "CmdOrCtrl+Shift+O",
           click: () => requestMenuCommand(IpcEvent.menuOpenReview),
         },
-        { type: "separator" },
+        // Beside Open Review… because it answers the same question by the other route: that
+        // one is "I know where the file is", this one is "I know I reviewed it". No ellipsis —
+        // it opens an in-app panel, not a system picker, and the ellipsis is what tells a
+        // macOS reader which of those to expect.
         {
-          label: "Export Review as Markdown…",
-          click: () => requestMenuCommand(IpcEvent.menuExportReviewMarkdown),
+          label: "Recent Reviews",
+          accelerator: "CmdOrCtrl+Shift+R",
+          click: () => requestMenuCommand(IpcEvent.menuOpenRecentReviews),
         },
-        {
-          label: "Export Review…",
-          accelerator: "CmdOrCtrl+Shift+E",
-          click: () => requestMenuCommand(IpcEvent.menuExportReviewJson),
-        },
+        // Both exports are parked for now — the commands, IPC and store actions behind
+        // them are all still wired, so restoring the feature is just uncommenting these
+        // two items (and the separator above them).
+        // { type: "separator" },
+        // {
+        //   label: "Export Review as Markdown…",
+        //   click: () => requestMenuCommand(IpcEvent.menuExportReviewMarkdown),
+        // },
+        // {
+        //   label: "Export Review…",
+        //   accelerator: "CmdOrCtrl+Shift+E",
+        //   click: () => requestMenuCommand(IpcEvent.menuExportReviewJson),
+        // },
         ...(process.platform === "darwin"
           ? [
               { type: "separator" } as const,

@@ -2,6 +2,7 @@ import { BrowserWindow, dialog } from "electron";
 import { randomUUID } from "node:crypto";
 import * as z from "zod";
 import { IpcChannel } from "../../shared/ipc";
+import { RecentReviewsResponse } from "../../shared/recent-reviews";
 import type { ReviewStamp } from "../../shared/review";
 import {
   ReviewOpenPathRequest,
@@ -12,6 +13,7 @@ import type { Session } from "../../shared/session";
 import { registerIpcHandler } from "../ipc-registry";
 import type { SessionStore } from "../sessions";
 import { importReviewFromPath } from "./guard";
+import { listRecentReviews } from "./recent";
 
 // The three open entries (dialog, drop, CLI/`open-file`) meet here: each hands a
 // path to the same guard, and a success becomes a session in the main-owned store.
@@ -83,6 +85,12 @@ export function registerReviewIpcHandlers(store: SessionStore): void {
     IpcChannel.reviewOpenPath,
     { request: ReviewOpenPathRequest, response: ReviewOpenResponse },
     ({ path }) => openReviewFromPath(store, path),
+  );
+
+  registerIpcHandler(
+    IpcChannel.reviewsRecent,
+    { request: z.void(), response: RecentReviewsResponse },
+    () => listRecentReviews(),
   );
 }
 

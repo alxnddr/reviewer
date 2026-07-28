@@ -33,9 +33,14 @@ function subscribeCommand(event: IpcEventName, listener: () => void): () => void
 const bridge: ReviewerBridge = {
   getThemeSelection: () => invoke(IpcChannel.themeGet, undefined),
   setThemeSelection: (selection) => invoke(IpcChannel.themeSet, selection),
+  getCliStatus: () => invoke(IpcChannel.cliStatus, undefined),
+  installCli: () => invoke(IpcChannel.cliInstall, undefined),
+  getOnboarded: () => invoke(IpcChannel.onboardingGet, undefined),
+  completeOnboarding: () => invoke(IpcChannel.onboardingComplete, undefined),
   openRepo: () => invoke(IpcChannel.repoOpen, undefined),
   openReview: () => invoke(IpcChannel.reviewOpen, undefined),
   openReviewByPath: (request) => invoke(IpcChannel.reviewOpenPath, request),
+  listRecentReviews: () => invoke(IpcChannel.reviewsRecent, undefined),
   saveReviewJson: (request) => invoke(IpcChannel.reviewSaveJson, request),
   saveReviewMarkdown: (request) => invoke(IpcChannel.reviewSaveMarkdown, request),
   // webUtils stays in the sandboxed preload, never the renderer. A File
@@ -57,6 +62,8 @@ const bridge: ReviewerBridge = {
   reorderSessions: (request) => invoke(IpcChannel.sessionsReorder, request),
   onOpenRepoCommand: (listener) => subscribeCommand(IpcEvent.menuOpenRepo, listener),
   onOpenReviewCommand: (listener) => subscribeCommand(IpcEvent.menuOpenReview, listener),
+  onOpenRecentReviewsCommand: (listener) =>
+    subscribeCommand(IpcEvent.menuOpenRecentReviews, listener),
   onExportReviewJsonCommand: (listener) =>
     subscribeCommand(IpcEvent.menuExportReviewJson, listener),
   onExportReviewMarkdownCommand: (listener) =>

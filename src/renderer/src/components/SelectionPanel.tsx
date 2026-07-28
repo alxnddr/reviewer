@@ -295,7 +295,7 @@ function ReviewCommitsSection(): ReactElement {
   return (
     <>
       {/* One source, so its bar never closes — and the way back to the whole review
-          rides that bar as an action, exactly as the walkthrough's "Show all" does. It
+          rides that bar as an action, exactly as the walkthrough's "View all" does. It
           appears only once there is something to undo. */}
       <RailSection
         expanded={null}

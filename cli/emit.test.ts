@@ -177,6 +177,36 @@ describe("rvw emit", () => {
     expect(readArtifact(out)).not.toHaveProperty("patch");
   });
 
+  it("carries the diff into the file under --embed-patch, and says it did", async () => {
+    // The CI handoff: the artifact has to be readable on a machine that has neither this
+    // checkout path nor these refs, so the diff rides inside it. Proven against the same
+    // capture the gate used, through the real `git` the fixture repo answers with.
+    const out = outPath("portable.reviewer.json");
+    const result = await runCli(explicit(VALID_DRAFT, "--out", out, "--embed-patch"));
+    expect(result.code).toBe(0);
+
+    const captured = capturePatch(repo, baseSha, headSha);
+    expect(captured.ok).toBe(true);
+    if (!captured.ok) return;
+    expect(readArtifact(out).patch).toBe(captured.patch);
+
+    // Reported, not silent: which of the two forms was written changes what the app can do
+    // with it, so a caller must never have to open the file to find out which one they got.
+    expect(result.stdout).toContain("opens without the repo");
+    const asJson = await runCli(
+      explicit(VALID_DRAFT, "--out", outPath("p.reviewer.json"), "--embed-patch", "--json"),
+    );
+    expect(JSON.parse(asJson.stdout)).toMatchObject({ ok: true, embedded: true });
+  });
+
+  it("reports embedded: false when the flag was not given, so the default is legible too", async () => {
+    const result = await runCli(
+      explicit(VALID_DRAFT, "--out", outPath("plain.reviewer.json"), "--json"),
+    );
+    expect(JSON.parse(result.stdout)).toMatchObject({ ok: true, embedded: false });
+    expect(result.stdout).not.toContain("opens without the repo");
+  });
+
   it("echoes the resolved repo and range, so a defaulted one is never silent", async () => {
     const out = outPath("echo.reviewer.json");
     const result = await runCli(explicit(VALID_DRAFT, "--out", out));
