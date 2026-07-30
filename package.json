@@ -1,6 +1,6 @@
 {
   "name": "reviewer",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "private": true,
   "description": "Local-first desktop diff viewer with high-fidelity rendering, agent-authored reviews, and semantic layers",
   "license": "MIT",
