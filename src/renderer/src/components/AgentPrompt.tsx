@@ -1,7 +1,8 @@
-import { useEffect, useState, type ReactElement, type ReactNode } from "react";
+import { type ReactElement, type ReactNode } from "react";
 import { Check, Copy } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { GLASS_MUTED } from "@/components/Glass";
+import { useCopyFeedback } from "@/lib/copy-feedback";
 import { cn } from "@/lib/utils";
 
 // The sentence that starts the whole loop, and the block it is handed over in.
@@ -22,21 +23,10 @@ import { cn } from "@/lib/utils";
 export const AGENT_PROMPT =
   "/code-review — then present the findings in Reviewer using the rvw CLI.";
 
-/** How long the copied check stands in for the copy glyph, matching the diff header's. */
-const COPY_FEEDBACK_MS = 1500;
-
 /** The prompt, and one button that puts it on the clipboard. Selectable too — this is not
  * the only way it gets copied. */
 export function AgentPromptBlock({ note }: { note?: ReactNode }): ReactElement {
-  const [copied, setCopied] = useState(false);
-
-  useEffect(() => {
-    if (!copied) {
-      return;
-    }
-    const timer = window.setTimeout(() => setCopied(false), COPY_FEEDBACK_MS);
-    return () => window.clearTimeout(timer);
-  }, [copied]);
+  const { copied, confirm } = useCopyFeedback();
 
   return (
     <div className="flex flex-col gap-2">
@@ -49,7 +39,7 @@ export function AgentPromptBlock({ note }: { note?: ReactNode }): ReactElement {
           className={cn("absolute top-2 right-2", GLASS_MUTED)}
           onClick={() => {
             navigator.clipboard.writeText(AGENT_PROMPT).then(
-              () => setCopied(true),
+              confirm,
               // A refused clipboard only costs the check glyph; the text is selectable right
               // there, and a card of instructions is no place for an error surface.
               () => {},

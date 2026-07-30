@@ -68,6 +68,10 @@ const bridge: ReviewerBridge = {
     subscribeCommand(IpcEvent.menuExportReviewJson, listener),
   onExportReviewMarkdownCommand: (listener) =>
     subscribeCommand(IpcEvent.menuExportReviewMarkdown, listener),
+  onCopyCommentPromptCommand: (listener) =>
+    subscribeCommand(IpcEvent.menuCopyCommentPrompt, listener),
+  onCopyAllCommentsPromptCommand: (listener) =>
+    subscribeCommand(IpcEvent.menuCopyAllCommentsPrompt, listener),
   onSessionsChanged: (listener) => subscribeCommand(IpcEvent.sessionsChanged, listener),
   onCloseTabCommand: (listener) => subscribeCommand(IpcEvent.menuCloseTab, listener),
   onCycleTabCommand: (listener) => {

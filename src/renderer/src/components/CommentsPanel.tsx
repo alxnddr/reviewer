@@ -4,6 +4,7 @@ import type { Comment } from "../../../shared/review";
 import type { PatchFile } from "@/lib/diff/patch";
 import type { FitToContentRefs } from "@/lib/fit-panel";
 import { orderedComments, type CommentNavEntry } from "@/lib/diff/comment-navigation";
+import { CopyAllCommentsPromptButton } from "@/components/CopyPromptButton";
 import { FileTypeIcon } from "@/components/FileTypeIcon";
 import { TooltipHint } from "@/components/ui/tooltip";
 import { commentLocation } from "@/lib/comment-location";
@@ -200,6 +201,12 @@ export function CommentsPanel({
         onSelect={onToggleExpanded}
         bordered={false}
         icon={<MessageSquare aria-hidden="true" className={RAIL_GLYPH} />}
+        // Beside the count, in both disclosure states: the count is how much is left to
+        // answer and this is the way to go answer it, so it is on screen whenever the
+        // number it acts on is. Unlike the Layers bar's action it does not hide when the
+        // list folds — the reader who has collapsed the list is the one most likely to be
+        // done reading and about to hand the review off.
+        action={<CopyAllCommentsPromptButton />}
       >
         {/* The count stays in both states. Unlike the layer count it is a number a reviewer
             acts on — how much is left to answer — so it is worth a permanent slot, and

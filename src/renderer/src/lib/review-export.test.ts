@@ -5,18 +5,25 @@ import {
   type ImportedReview,
   type ReviewArtifactDraft,
   type ReviewComment,
+  type ReviewLayer,
   type ReviewStamp,
 } from "../../../shared/review";
 import type { RepoInfo } from "../../../shared/git";
-import { RENAMES_PATCH } from "./diff/fixtures";
+import { buildHugeAdditionPatch, MULTI_STATUS_PATCH, RENAMES_PATCH } from "./diff/fixtures";
 import { parsePatch } from "./diff/patch";
 import {
+  commentsToPrompt,
+  commentToPrompt,
   exportSourceFor,
   markdownCommentsFrom,
   nestLayers,
+  PROMPT_SNIPPET_MAX_LINES,
+  promptCommentsFrom,
   reviewToMarkdown,
   serializeReview,
   type MarkdownComment,
+  type PromptComment,
+  type PromptReview,
 } from "./review-export";
 
 // A deterministic stamp: import assigns identity, so a fresh id per comment and layer makes
@@ -442,5 +449,295 @@ describe("exportSourceFor", () => {
   it("falls back to the empty-tree hash for an unborn repo's working tree", () => {
     const plan = exportSourceFor({ kind: "uncommitted" }, repo, null);
     expect(plan).toEqual({ repo, base: EMPTY_TREE, head: EMPTY_TREE, needsPatch: true });
+  });
+});
+
+// ── The prompt exports ──────────────────────────────────────────────────────────
+
+/** A fenced block inside a *file*, so the snippet lifted from it carries a run of three
+ * backticks and the block wrapping it has to outgrow them. */
+const FENCED_FILE_PATCH = `diff --git a/doc.md b/doc.md
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/doc.md
+@@ -0,0 +1,3 @@
++\`\`\`ts
++const x = 1;
++\`\`\`
+`;
+
+/** One id, since these tests never compare two comments by identity. */
+const ID = "00000000-0000-4000-8000-000000000001";
+
+function promptComment(overrides: Partial<PromptComment> = {}): PromptComment {
+  return {
+    file: "src/a.ts",
+    side: "additions",
+    startLine: 1,
+    endLine: 1,
+    body: "why",
+    outdated: false,
+    snippet: null,
+    ...overrides,
+  };
+}
+
+function promptLayer(id: string, label: string, ranges: ReviewLayer["ranges"]): ReviewLayer {
+  return { id, label, ranges };
+}
+
+const PROMPT_REPO: RepoInfo = { path: "/repos/app", name: "app" };
+
+function promptReview(overrides: Partial<PromptReview> = {}): PromptReview {
+  return {
+    repo: PROMPT_REPO,
+    refs: { base: "main", head: "feature" },
+    overview: null,
+    layers: [],
+    comments: [],
+    ...overrides,
+  };
+}
+
+describe("promptCommentsFrom", () => {
+  it("lifts the anchored code out of the diff", () => {
+    const comment: Comment = {
+      file: "greet.ts",
+      side: "additions",
+      startLine: 2,
+      endLine: 3,
+      body: "why",
+      id: ID,
+    };
+    const [projected] = promptCommentsFrom(
+      [comment],
+      parsePatch(MULTI_STATUS_PATCH, "prompt"),
+      false,
+    );
+    expect(projected?.snippet?.lines.map((line) => line.text)).toEqual([
+      "  return `hi ${name}`;",
+      "}",
+    ]);
+    expect(projected?.snippet?.hidden).toBe(0);
+  });
+
+  it("lifts the code from the file the rename resolved to, not from the authored path", () => {
+    // The trap: the drift resolution reads a pre-rename anchor through `filesByAnchorPath`
+    // and the snippet has to read through the *same* lookup, or a renamed file's comment
+    // gets its anchor from one file and its code from another.
+    const beforeRename: Comment = {
+      file: "src/old-edit.txt",
+      side: "deletions",
+      startLine: 2,
+      endLine: 2,
+      body: "why",
+      id: ID,
+    };
+    const [projected] = promptCommentsFrom(
+      [beforeRename],
+      parsePatch(RENAMES_PATCH, "prompt"),
+      false,
+    );
+    expect(projected?.outdated).toBe(false);
+    expect(projected?.file).toBe("src/old-edit.txt");
+    expect(projected?.snippet?.lines.map((line) => line.text)).toEqual(["edit line2"]);
+  });
+
+  it("gives an outdated comment no snippet to be wrong about", () => {
+    const gone: Comment = {
+      file: "gone.ts",
+      side: "additions",
+      startLine: 1,
+      endLine: 1,
+      body: "why",
+      id: ID,
+    };
+    const [projected] = promptCommentsFrom([gone], [], false);
+    expect(projected?.outdated).toBe(true);
+    expect(projected?.snippet).toBeNull();
+  });
+
+  it("caps the lifted code and reports what it withheld", () => {
+    const wide: Comment = {
+      file: "huge.ts",
+      side: "additions",
+      startLine: 1,
+      endLine: 30,
+      body: "why",
+      id: ID,
+    };
+    const [projected] = promptCommentsFrom(
+      [wide],
+      parsePatch(buildHugeAdditionPatch(30), "prompt"),
+      false,
+    );
+    expect(projected?.snippet?.lines).toHaveLength(PROMPT_SNIPPET_MAX_LINES);
+    expect(projected?.snippet?.hidden).toBe(30 - PROMPT_SNIPPET_MAX_LINES);
+  });
+});
+
+describe("commentToPrompt", () => {
+  it("leads with the instruction the body deliberately does not carry", () => {
+    // A comment body says why, never what; without a verb the payload is a diagnosis and
+    // an agent is as likely to explain it as fix it.
+    expect(commentToPrompt(promptComment())).toMatch(/^Fix this code review comment\.\n\n/u);
+  });
+
+  it("names the anchor as a place a tool can open", () => {
+    expect(commentToPrompt(promptComment({ startLine: 42, endLine: 47 }))).toContain(
+      "### `src/a.ts:42-47`",
+    );
+  });
+
+  it("names a one-line anchor without a range", () => {
+    expect(commentToPrompt(promptComment({ startLine: 42, endLine: 42 }))).toContain(
+      "### `src/a.ts:42`",
+    );
+  });
+
+  it("spells out what a deletions-side line number means", () => {
+    const prompt = commentToPrompt(promptComment({ side: "deletions" }));
+    expect(prompt).toContain("deletions side —");
+    expect(prompt).toContain("as it stood before this change");
+  });
+
+  it("tells a drifted anchor to be found by content, and carries no code to find it by", () => {
+    const prompt = commentToPrompt(promptComment({ outdated: true }));
+    expect(prompt).toContain("outdated —");
+    expect(prompt).toContain("find the code by content rather than by number");
+    expect(prompt).not.toContain("```");
+  });
+
+  it("says both when a deletion has also drifted", () => {
+    const prompt = commentToPrompt(promptComment({ side: "deletions", outdated: true }));
+    expect(prompt).toContain("(deletions side —");
+    expect(prompt).toContain("; outdated —");
+  });
+
+  it("carries the body verbatim, fences and all", () => {
+    // The body is markdown in a markdown document — nothing wraps it, so a fenced fix in a
+    // comment needs no escaping and must not get any.
+    const body = "Do this instead:\n\n```ts\nconst x = 1;\n```";
+    expect(commentToPrompt(promptComment({ body }))).toContain(body);
+  });
+
+  it("fences the code longer than the longest backtick run inside it", () => {
+    const comment: Comment = {
+      file: "doc.md",
+      side: "additions",
+      startLine: 1,
+      endLine: 3,
+      body: "why",
+      id: ID,
+    };
+    const [projected] = promptCommentsFrom(
+      [comment],
+      parsePatch(FENCED_FILE_PATCH, "prompt"),
+      false,
+    );
+    expect(projected).toBeDefined();
+    expect(commentToPrompt(projected as PromptComment)).toContain(
+      "````\n```ts\nconst x = 1;\n```\n````",
+    );
+  });
+
+  it("says how much of the range it withheld rather than trimming in silence", () => {
+    const prompt = commentToPrompt(
+      promptComment({
+        endLine: 30,
+        snippet: { lines: [{ kind: "addition", line: 1, text: "x" }], hidden: 6 },
+      }),
+    );
+    expect(prompt).toContain("… 6 more lines, through line 30.");
+  });
+
+  it("ends in exactly one newline", () => {
+    const prompt = commentToPrompt(promptComment());
+    expect(prompt.endsWith("\n")).toBe(true);
+    expect(prompt.endsWith("\n\n")).toBe(false);
+  });
+});
+
+describe("commentsToPrompt", () => {
+  const first = promptComment({ file: "src/a.ts", startLine: 10, endLine: 12, body: "first" });
+  const second = promptComment({ file: "src/b.ts", startLine: 3, endLine: 3, body: "second" });
+  const loose = promptComment({ file: "src/c.ts", startLine: 1, endLine: 1, body: "loose" });
+  const layers = [
+    promptLayer("l1", "Validation", [
+      { file: "src/a.ts", side: "additions", startLine: 10, endLine: 12 },
+    ]),
+    promptLayer("l2", "Feature", [
+      { file: "src/b.ts", side: "additions", startLine: 3, endLine: 3 },
+    ]),
+    promptLayer("l3", "Empty", [{ file: "src/z.ts", side: "additions", startLine: 1, endLine: 1 }]),
+  ];
+
+  it("sections the comments by the layers the review authored, in that order", () => {
+    const prompt = commentsToPrompt(promptReview({ layers, comments: [second, first] }));
+    expect(prompt.indexOf("## Validation")).toBeLessThan(prompt.indexOf("## Feature"));
+    expect(prompt.indexOf("first")).toBeLessThan(prompt.indexOf("second"));
+  });
+
+  it("gives a layer with no comments no section — there is nothing to do under it", () => {
+    expect(commentsToPrompt(promptReview({ layers, comments: [first, second] }))).not.toContain(
+      "## Empty",
+    );
+  });
+
+  it("trails the comments no layer covers behind a heading that says so", () => {
+    const prompt = commentsToPrompt(promptReview({ layers, comments: [first, loose] }));
+    expect(prompt).toContain("## Other comments");
+    expect(prompt.indexOf("## Validation")).toBeLessThan(prompt.indexOf("## Other comments"));
+  });
+
+  it("names no sections at all on a review with no layers", () => {
+    const prompt = commentsToPrompt(promptReview({ comments: [first, loose] }));
+    expect(prompt).not.toMatch(/^## /mu);
+    expect(prompt).not.toContain("grouped");
+  });
+
+  it("heads the payload with the change's name and the diff it reviews", () => {
+    const prompt = commentsToPrompt(
+      promptReview({
+        overview: { title: "Replace the polling loop", body: "…" },
+        comments: [first],
+      }),
+    );
+    expect(prompt).toContain("# Code review comments — Replace the polling loop");
+    expect(prompt).toContain("1 comment from a code review of `app` (`main` … `feature`).");
+  });
+
+  it("names no refs for a session with no authored origin", () => {
+    const prompt = commentsToPrompt(promptReview({ refs: null, comments: [first, second] }));
+    expect(prompt).toContain("2 comments from a code review of `app`. Address each one.");
+  });
+
+  it("numbers nothing — a comment is named by its anchor, which is what an agent can act on", () => {
+    // The payload runs in layer order and the sidebar list runs in diff order, so any
+    // number here would name a different comment than the same number there.
+    const prompt = commentsToPrompt(promptReview({ layers, comments: [first, second] }));
+    expect(prompt).not.toMatch(/^### \d/mu);
+  });
+
+  it("renders a comment's block byte-identically to the single-comment payload", () => {
+    const target = promptComment({
+      file: "src/a.ts",
+      side: "deletions",
+      startLine: 10,
+      endLine: 12,
+      body: "why\n\nand also why",
+      snippet: { lines: [{ kind: "deletion", line: 10, text: "const x = `1`;" }], hidden: 2 },
+    });
+    // Everything the single form adds is its first two lines; what is left is the block,
+    // and it has to appear in the grouped payload character for character.
+    const block = commentToPrompt(target).split("\n").slice(2).join("\n").trimEnd();
+    expect(commentsToPrompt(promptReview({ comments: [target] }))).toContain(block);
+  });
+
+  it("ends in exactly one newline", () => {
+    const prompt = commentsToPrompt(promptReview({ layers, comments: [first, loose] }));
+    expect(prompt.endsWith("\n")).toBe(true);
+    expect(prompt.endsWith("\n\n")).toBe(false);
   });
 });

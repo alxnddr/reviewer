@@ -119,6 +119,8 @@ function makeBridge(overrides: Partial<ReviewerBridge>): ReviewerBridge {
     onOpenRecentReviewsCommand: vi.fn().mockReturnValue(() => {}),
     onExportReviewJsonCommand: vi.fn().mockReturnValue(() => {}),
     onExportReviewMarkdownCommand: vi.fn().mockReturnValue(() => {}),
+    onCopyCommentPromptCommand: vi.fn().mockReturnValue(() => {}),
+    onCopyAllCommentsPromptCommand: vi.fn().mockReturnValue(() => {}),
     onSessionsChanged: vi.fn().mockReturnValue(() => {}),
     onCloseTabCommand: vi.fn().mockReturnValue(() => {}),
     onCycleTabCommand: vi.fn().mockReturnValue(() => {}),
@@ -135,6 +137,7 @@ function resetStore(): void {
     openFailure: null,
     reviewOpenFailure: null,
     reviewExportFailure: null,
+    promptCopy: null,
     diffStyle: "split",
   });
 }
@@ -2738,5 +2741,148 @@ describe("reading progress", () => {
     expect(active().collapsedFiles.has("greet.ts")).toBe(false);
     // The mark itself survives: reading a finding again is not un-reading the file.
     expect(active().readFiles.has("greet.ts")).toBe(true);
+  });
+});
+
+describe("copying comments as a prompt", () => {
+  const GREET_ANCHOR = {
+    file: "greet.ts",
+    side: "additions",
+    startLine: 5,
+    endLine: 6,
+  } as const;
+  const NOTES_ANCHOR = { file: "notes.txt", side: "additions", startLine: 2, endLine: 2 } as const;
+
+  /** The clipboard, stubbed as the renderer's — `writeClipboard` reads it off `globalThis`,
+   * and `vi.unstubAllGlobals` in the shared afterEach takes it back down. */
+  function stubClipboard(writeText = vi.fn().mockResolvedValue(undefined)): typeof writeText {
+    vi.stubGlobal("navigator", { clipboard: { writeText } });
+    return writeText;
+  }
+
+  it("copies one comment with its anchor and its anchored code, and records the copy", async () => {
+    const writeText = stubClipboard();
+    const bridge = makeBridge({});
+    await openFixtureRepo(bridge);
+    useReviewStore.getState().addComment(GREET_ANCHOR, "why not take a formatter?");
+    const target = active().comments[0];
+
+    await expect(useReviewStore.getState().copyCommentPrompt(target?.id ?? "")).resolves.toBe(true);
+
+    const payload = writeText.mock.calls[0]?.[0];
+    expect(payload).toContain("Fix this code review comment.");
+    expect(payload).toContain("### `greet.ts:5-6`");
+    expect(payload).toContain("why not take a formatter?");
+    expect(payload).toContain("  return greet(name).toUpperCase();");
+    // The record is what lets the card's glyph answer a keystroke it never saw.
+    expect(useReviewStore.getState().promptCopy).toEqual({
+      scope: "comment",
+      commentId: target?.id,
+      nonce: expect.any(Number),
+    });
+  });
+
+  it("advances the nonce on a repeat, so copying the same comment twice flashes twice", async () => {
+    stubClipboard();
+    const bridge = makeBridge({});
+    await openFixtureRepo(bridge);
+    useReviewStore.getState().addComment(GREET_ANCHOR, "again");
+    const id = active().comments[0]?.id ?? "";
+
+    await useReviewStore.getState().copyCommentPrompt(id);
+    const first = useReviewStore.getState().promptCopy;
+    await useReviewStore.getState().copyCommentPrompt(id);
+
+    expect(useReviewStore.getState().promptCopy).not.toEqual(first);
+  });
+
+  it("copyActiveCommentPrompt aims at the comment the reader is on", async () => {
+    const writeText = stubClipboard();
+    const bridge = makeBridge({});
+    await openFixtureRepo(bridge);
+    useReviewStore.getState().addComment(GREET_ANCHOR, "first comment");
+    useReviewStore.getState().addComment(NOTES_ANCHOR, "second comment");
+    const second = active().comments[1];
+    useReviewStore.getState().focusComment(second?.id ?? "");
+
+    await expect(useReviewStore.getState().copyActiveCommentPrompt()).resolves.toBe(true);
+
+    expect(writeText.mock.calls[0]?.[0]).toContain("second comment");
+  });
+
+  it("copyActiveCommentPrompt with nothing focused copies nothing and claims nothing", async () => {
+    const writeText = stubClipboard();
+    const bridge = makeBridge({});
+    await openFixtureRepo(bridge);
+    useReviewStore.getState().addComment(GREET_ANCHOR, "unfocused");
+
+    await expect(useReviewStore.getState().copyActiveCommentPrompt()).resolves.toBe(false);
+
+    expect(writeText).not.toHaveBeenCalled();
+    expect(useReviewStore.getState().promptCopy).toBeNull();
+  });
+
+  it("copies every comment in the review, including ones the soloed layer hides", async () => {
+    const writeText = stubClipboard();
+    const bridge = makeBridge({});
+    await openFixtureRepo(bridge);
+    useReviewStore.getState().addComment(GREET_ANCHOR, "in the soloed layer");
+    useReviewStore.getState().addComment(NOTES_ANCHOR, "outside it");
+    const layers: ReviewLayer[] = [
+      {
+        id: "greet",
+        label: "Greeting",
+        ranges: [{ file: "greet.ts", side: "additions", startLine: 1, endLine: 7 }],
+      },
+    ];
+    patchActive({ layers, activeLayerId: "greet" });
+
+    await expect(useReviewStore.getState().copyAllCommentsPrompt()).resolves.toBe(true);
+
+    const payload = writeText.mock.calls[0]?.[0];
+    expect(payload).toContain("2 comments from a code review of");
+    expect(payload).toContain("in the soloed layer");
+    // "All" is the review, not what happens to be on screen — the whole point of the scope.
+    expect(payload).toContain("outside it");
+    expect(payload).toContain("## Greeting");
+    expect(payload).toContain("## Other comments");
+    expect(useReviewStore.getState().promptCopy).toEqual({
+      scope: "all",
+      nonce: expect.any(Number),
+    });
+  });
+
+  it("names no refs for a plain repo session the reader commented on themselves", async () => {
+    const writeText = stubClipboard();
+    const bridge = makeBridge({});
+    await openFixtureRepo(bridge);
+    useReviewStore.getState().addComment(GREET_ANCHOR, "mine");
+
+    await useReviewStore.getState().copyAllCommentsPrompt();
+
+    expect(writeText.mock.calls[0]?.[0]).toContain("1 comment from a code review of `repo`.");
+  });
+
+  it("copies nothing from a review with no comments", async () => {
+    const writeText = stubClipboard();
+    const bridge = makeBridge({});
+    await openFixtureRepo(bridge);
+
+    await expect(useReviewStore.getState().copyAllCommentsPrompt()).resolves.toBe(false);
+
+    expect(writeText).not.toHaveBeenCalled();
+  });
+
+  it("records nothing when the clipboard refuses — no check for a copy that did not happen", async () => {
+    stubClipboard(vi.fn().mockRejectedValue(new Error("denied")));
+    const bridge = makeBridge({});
+    await openFixtureRepo(bridge);
+    useReviewStore.getState().addComment(GREET_ANCHOR, "never landed");
+
+    await expect(
+      useReviewStore.getState().copyCommentPrompt(active().comments[0]?.id ?? ""),
+    ).resolves.toBe(false);
+
+    expect(useReviewStore.getState().promptCopy).toBeNull();
   });
 });

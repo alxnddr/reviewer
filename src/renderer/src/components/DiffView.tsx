@@ -28,6 +28,7 @@ import { CommentNavIndicator } from "@/components/CommentNavIndicator";
 import { DiffSearch } from "@/components/DiffSearch";
 import { FileReadToggle } from "@/components/FileReadToggle";
 import { TooltipHint } from "@/components/ui/tooltip";
+import { useCopyFeedback } from "@/lib/copy-feedback";
 import { useDiffSearch } from "@/lib/diff/use-diff-search";
 import {
   indexOfComment,
@@ -608,22 +609,12 @@ const FileNameSuffix = memo(function FileNameSuffix({
 
 type CopyPathButtonProps = { path: string };
 
-/** How long the copied check glyph stands in for the copy glyph after a click. */
-const COPY_FEEDBACK_MS = 1500;
-
 /** Affordance sitting just after the file's name that puts its repo-relative path on
  * the clipboard. The check only shows once the clipboard write resolves — a failed
  * write keeps the copy glyph, never a false success. size-6 (icon-xs) matches the
  * gutter `+`'s micro-control scale and meets the hit-target floor. */
 function CopyPathButton({ path }: CopyPathButtonProps): ReactElement {
-  const [copied, setCopied] = useState(false);
-  useEffect(() => {
-    if (!copied) {
-      return;
-    }
-    const timer = window.setTimeout(() => setCopied(false), COPY_FEEDBACK_MS);
-    return () => window.clearTimeout(timer);
-  }, [copied]);
+  const { copied, confirm } = useCopyFeedback();
 
   return (
     // The hint doubles as the success message: the check glyph alone says *something*
@@ -636,7 +627,7 @@ function CopyPathButton({ path }: CopyPathButtonProps): ReactElement {
         className="text-text-muted"
         onClick={() => {
           navigator.clipboard.writeText(path).then(
-            () => setCopied(true),
+            confirm,
             // A denied/failed write only skips the feedback; there is no state to roll
             // back, and the header band is no place for an error surface.
             () => {},

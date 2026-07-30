@@ -203,6 +203,8 @@ export function App(): ReactElement {
   const openReview = useReviewStore((state) => state.openReview);
   const exportReviewJson = useReviewStore((state) => state.exportReviewJson);
   const exportReviewMarkdown = useReviewStore((state) => state.exportReviewMarkdown);
+  const copyActiveCommentPrompt = useReviewStore((state) => state.copyActiveCommentPrompt);
+  const copyAllCommentsPrompt = useReviewStore((state) => state.copyAllCommentsPrompt);
   const syncSessions = useReviewStore((state) => state.syncSessions);
   const closeSession = useReviewStore((state) => state.closeSession);
   const cycleActiveSession = useReviewStore((state) => state.cycleActiveSession);
@@ -228,6 +230,11 @@ export function App(): ReactElement {
       bridge.onOpenReviewCommand(() => void openReview()),
       bridge.onExportReviewJsonCommand(() => void exportReviewJson()),
       bridge.onExportReviewMarkdownCommand(() => void exportReviewMarkdown()),
+      // ⇧⌘C / ⌥⇧⌘C. The return value is dropped here on purpose: the control that speaks
+      // for what was copied flashes off the store's own record (`promptCopy`), so a
+      // keystroke and a click are acknowledged by the same glyph through the same path.
+      bridge.onCopyCommentPromptCommand(() => void copyActiveCommentPrompt()),
+      bridge.onCopyAllCommentsPromptCommand(() => void copyAllCommentsPrompt()),
       // A CLI/`open-file` import wrote a session in main; re-list to surface it.
       bridge.onSessionsChanged(() => void syncSessions()),
       bridge.onCloseTabCommand(() => closeSession()),
@@ -244,6 +251,8 @@ export function App(): ReactElement {
     openReview,
     exportReviewJson,
     exportReviewMarkdown,
+    copyActiveCommentPrompt,
+    copyAllCommentsPrompt,
     syncSessions,
     closeSession,
     cycleActiveSession,

@@ -4,6 +4,7 @@ import type { Comment } from "../../../shared/review";
 import { Button } from "@/components/ui/button";
 import { TooltipHint } from "@/components/ui/tooltip";
 import { CommentBody } from "@/components/CommentBody";
+import { CopyCommentPromptButton } from "@/components/CopyPromptButton";
 import { commentLocation } from "@/lib/comment-location";
 import { cn } from "@/lib/utils";
 
@@ -80,9 +81,16 @@ export function CommentThread({
       {/* Its own popover surface, so it reads as hovering above the diff rather than
           printed on it — the same treatment the stepper and the find bar take. */}
       <div className="absolute right-2 bottom-full mb-1 flex items-center gap-0.5 rounded-lg bg-popover p-0.5 opacity-0 shadow-md ring-1 ring-foreground/10 transition-opacity duration-(--duration-fast) group-hover/comment:opacity-100 focus-within:opacity-100">
-        {/* Two glyphs on a surface that only appears on hover: whichever one the reader is
+        {/* Three glyphs on a surface that only appears on hover: whichever one the reader is
             reaching for, they arrived without a label. `top`, so the popup opens away from
-            the card it is about rather than over the comment body. */}
+            the card it is about rather than over the comment body.
+
+            Copy leads and Discard trails, which is the order of how often they are wanted
+            and the reverse of how much they cost. It is also the only order that could take
+            a third glyph without moving the first two: the strip is right-anchored and
+            grows leftward, so an insertion at this end leaves Edit and Discard under the
+            hand that already knows where they are. */}
+        <CopyCommentPromptButton commentId={comment.id} />
         <TooltipHint content="Edit comment" side="top" align="center">
           <Button
             variant="ghost"

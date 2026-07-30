@@ -35,10 +35,14 @@ import {
 } from "../lib/read-progress";
 import { indexOfComment, navigableEntries, orderedComments } from "../lib/diff/comment-navigation";
 import {
+  commentsToPrompt,
+  commentToPrompt,
   exportSourceFor,
   markdownCommentsFrom,
+  promptCommentsFrom,
   reviewToMarkdown,
   serializeReview,
+  type PromptComment,
 } from "../lib/review-export";
 import type { ReviewExportFailure } from "../lib/review-export-failure-message";
 import {
@@ -181,6 +185,17 @@ export type SessionSlice = {
  * flash; "ready" resolves to empty or sessions by whether slices exist. */
 export type BootPhase = "pending" | "hydrating" | "ready";
 
+/** A successful prompt copy, named by what it copied. The nonce is what makes a second copy
+ * of the same target flash again — the scope and id alone would be an unchanged value, and
+ * the control would sit there having acknowledged nothing.
+ *
+ * It exists because the copy has two entry points and only one of them is a click: ⇧⌘C and
+ * ⌥⇧⌘C arrive as menu commands, with no button to hand a promise back to. Recording the
+ * copy centrally is what lets the card's glyph answer a keystroke the card never saw. */
+export type PromptCopy =
+  | { scope: "comment"; commentId: string; nonce: number }
+  | { scope: "all"; nonce: number };
+
 type ReviewState = {
   boot: BootPhase;
   /** Tab order is insertion order: hydration inserts in main's persisted order
@@ -202,6 +217,11 @@ type ReviewState = {
    * review was saved when nothing reached disk) or an unreadable diff that
    * could not be frozen into an artifact — never a silent no-op. */
   reviewExportFailure: ReviewExportFailure | null;
+  /** The last prompt copy that succeeded, so the control it was *about* can flash its
+   * check. App-level and transient: never persisted, never in a slice, and cleared by
+   * nothing — the flash is the component's timer, and a stale record is inert because the
+   * controls value-compare the nonce (`useCopiedFlash`). */
+  promptCopy: PromptCopy | null;
   diffStyle: DiffStyle;
   /** Boot hydration: pull main's persisted sessions, derive the active one only. */
   hydrate: () => Promise<void>;
@@ -323,6 +343,18 @@ type ReviewState = {
    * seam and the same origin derivation; outdated notes resolve against the loaded
    * diff. */
   exportReviewMarkdown: (sessionId?: SessionId) => Promise<void>;
+  /** Put one comment on the clipboard as a prompt an agent can act on directly. Resolves
+   * true only once the clipboard write has, which is also when `promptCopy` is recorded —
+   * a refused write leaves no trace and shows no check. */
+  copyCommentPrompt: (commentId: string, sessionId?: SessionId) => Promise<boolean>;
+  /** The ⇧⌘C entry point: the same copy, aimed at the comment the reader is on. False with
+   * none focused — the key was pressed with nothing under it, exactly as `n` is on a review
+   * with no comments. */
+  copyActiveCommentPrompt: (sessionId?: SessionId) => Promise<boolean>;
+  /** Every comment in the review as one prompt, grouped by the layers the review authored,
+   * whatever is soloed on screen. "All" has to mean the review or it means whatever the
+   * reader last clicked, which is not something a clipboard can say. */
+  copyAllCommentsPrompt: (sessionId?: SessionId) => Promise<boolean>;
   /** Fires every pending debounced write-back now — the quit/unload path, so main
    * holds the last mutation before its own disk flush. */
   flushWriteBacks: () => void;
@@ -578,6 +610,41 @@ async function resolveExportOrigin(
   // it): fall through to the source refs rather than freezing an empty artifact.
   const patch = response.value.patch;
   return { repo, base, head, patch: patch.length > 0 ? patch : null };
+}
+
+/** Comments projected for a prompt, against the diff the reader is actually looking at.
+ *
+ * `frozen` is read off the render pin (`reviewDiff`), not off an export origin, and the two
+ * differ on purpose. An export is about the artifact and can afford `resolveExportOrigin`'s
+ * git read to be sure what it is exporting; a copy fires on a keystroke and has to be
+ * instant, and — more to the point — what it copies has to agree with what is on screen. A
+ * card showing "Outdated" must copy as outdated, or the payload and the app are telling the
+ * reader two different things about the same comment. */
+function promptCommentsOf(slice: SessionSlice, comments: readonly Comment[]): PromptComment[] {
+  const files = slice.diff.phase === "loaded" ? slice.diff.files : [];
+  return promptCommentsFrom(comments, files, slice.reviewDiff?.kind === "frozenPatch");
+}
+
+/** Distinguishes one copy from the next so a control can tell a repeat from a re-render;
+ * see `PromptCopy`. Module-level rather than derived from a clock — `Date.now()` twice in a
+ * frame is the same number, and this only has to differ from the value before it. */
+let promptCopySequence = 0;
+
+/** Write to the clipboard, reporting whether it landed. Never throws: a denied or absent
+ * clipboard is a false, which the callers turn into "no check" — the one honest signal a
+ * copy affordance has, and the same thing the app's two older copy buttons do with a
+ * rejected write. */
+async function writeClipboard(text: string): Promise<boolean> {
+  try {
+    const clipboard = globalThis.navigator?.clipboard;
+    if (clipboard === undefined) {
+      return false;
+    }
+    await clipboard.writeText(text);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 /** Inputs only — log/branches/diff are re-derived on load and never cross IPC. */
@@ -991,6 +1058,7 @@ export const useReviewStore = create<ReviewState>((set, get) => ({
   openFailure: null,
   reviewOpenFailure: null,
   reviewExportFailure: null,
+  promptCopy: null,
   diffStyle: "split",
 
   hydrate: async () => {
@@ -1881,6 +1949,65 @@ export const useReviewStore = create<ReviewState>((set, get) => ({
       defaultName: `${reviewFileBase(slice.repo.name)}.md`,
     });
     set({ reviewExportFailure: response.ok ? null : { kind: "write", failure: response.failure } });
+  },
+
+  copyCommentPrompt: async (commentId, sessionId) => {
+    const id = sessionId ?? get().activeSessionId;
+    if (id === null) {
+      return false;
+    }
+    const slice = get().sessions[id];
+    const comment = slice?.comments.find((candidate) => candidate.id === commentId);
+    if (slice === undefined || comment === undefined) {
+      return false;
+    }
+    const [projected] = promptCommentsOf(slice, [comment]);
+    if (projected === undefined || !(await writeClipboard(commentToPrompt(projected)))) {
+      return false;
+    }
+    promptCopySequence += 1;
+    set({ promptCopy: { scope: "comment", commentId, nonce: promptCopySequence } });
+    return true;
+  },
+
+  copyActiveCommentPrompt: async (sessionId) => {
+    const id = sessionId ?? get().activeSessionId;
+    if (id === null) {
+      return false;
+    }
+    const activeCommentId = get().sessions[id]?.activeCommentId ?? null;
+    return activeCommentId === null ? false : await get().copyCommentPrompt(activeCommentId, id);
+  },
+
+  copyAllCommentsPrompt: async (sessionId) => {
+    const id = sessionId ?? get().activeSessionId;
+    if (id === null) {
+      return false;
+    }
+    const slice = get().sessions[id];
+    if (slice === undefined || slice.comments.length === 0) {
+      return false;
+    }
+    const text = commentsToPrompt({
+      repo: slice.repo,
+      // The authored refs, which the origin holds verbatim whatever diff is on screen. A
+      // plain repo session the reader commented on themselves has no authored origin, and
+      // the payload names no range rather than inventing one out of the current pickers.
+      refs:
+        slice.reviewOrigin === null
+          ? null
+          : { base: slice.reviewOrigin.base, head: slice.reviewOrigin.head },
+      overview: slice.overview,
+      layers: slice.layers,
+      // The session's own comments, never the soloed subset: "all" is the review.
+      comments: promptCommentsOf(slice, slice.comments),
+    });
+    if (!(await writeClipboard(text))) {
+      return false;
+    }
+    promptCopySequence += 1;
+    set({ promptCopy: { scope: "all", nonce: promptCopySequence } });
+    return true;
   },
 
   flushWriteBacks: () => {

@@ -78,6 +78,12 @@ export const IpcEvent = {
   // renderer owns the serialize→save flow the same way it owns the open flow.
   menuExportReviewJson: "menu:export-review-json",
   menuExportReviewMarkdown: "menu:export-review-markdown",
+  // The prompt copies (⇧⌘C / ⌥⇧⌘C). Menu commands rather than renderer key handlers so
+  // the chord fires whatever holds focus — including inside the diff's shadow root — and
+  // so the accelerator and the menu item cannot drift from each other. Payload-free like
+  // the rest: which comment is "the one you are on" is the renderer's own state.
+  menuCopyCommentPrompt: "menu:copy-comment-prompt",
+  menuCopyAllCommentsPrompt: "menu:copy-all-comments-prompt",
   // This main→renderer event carries no data: a CLI/`open-file` import writes the
   // session in main, then fires this so the renderer re-lists via `sessions:list`.
   // The imported path/model never crosses the bridge.
@@ -230,6 +236,10 @@ export type ReviewerBridge = {
   onExportReviewJsonCommand: (listener: () => void) => () => void;
   /** Subscribes to the File → Export Review as Markdown command; unsubscribe. */
   onExportReviewMarkdownCommand: (listener: () => void) => () => void;
+  /** Subscribes to Copy Comment as Prompt (⇧⌘C); returns unsubscribe. */
+  onCopyCommentPromptCommand: (listener: () => void) => () => void;
+  /** Subscribes to Copy All Comments as Prompt (⌥⇧⌘C); returns unsubscribe. */
+  onCopyAllCommentsPromptCommand: (listener: () => void) => () => void;
   /** Subscribes to the payload-free push fired after a CLI/`open-file` import
    * wrote a session; the listener re-lists (`sessions:list`). Returns unsubscribe. */
   onSessionsChanged: (listener: () => void) => () => void;

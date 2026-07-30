@@ -55,6 +55,10 @@ const GROUPS: Group[] = [
       { keys: ["N"], action: "Next comment" },
       { keys: ["P"], action: "Previous comment" },
       { keys: ["Esc"], action: "Stop stepping through comments" },
+      // "the one you are on" is doing real work: this key needs a focused comment, and
+      // pressing it without one is a no-op the reader would otherwise read as broken.
+      { keys: ["⇧⌘C"], action: "Copy the comment you are on as a prompt" },
+      { keys: ["⌥⇧⌘C"], action: "Copy every comment in the review as a prompt" },
     ],
   },
   {

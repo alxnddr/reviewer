@@ -13,15 +13,24 @@ import { assertNever } from "../../../shared/assert";
 import type { CommitSha, DiffSelection, RepoInfo, ReviewRef } from "../../../shared/git";
 import { resolveAnchor } from "./diff/anchor";
 import { filesByAnchorPath, type PatchFile } from "./diff/patch";
+import { snippetForAnchor, type DiffSnippet } from "./diff/snippet";
 import { layerOwning } from "./layers";
 
-// The two review exports, both pure and headless so they snapshot and round-trip in
+// The three review exports, all pure and headless so they snapshot and round-trip in
 // tests without a window. `serializeReview` re-emits the authored `.reviewer.json` —
 // the exact projection `importReview` reads, so an edited review re-serializes and
 // re-imports identically; `reviewToMarkdown` renders a portable curated review in
-// the authored layer order. Neither writes derived state: the app-assigned `id` is
-// stripped, and outdated is a Markdown-only note that never reaches the JSON. Disk
-// I/O lives only in main (src/main/review/save.ts) — these produce strings.
+// the authored layer order; `commentToPrompt`/`commentsToPrompt` render one comment or
+// all of them as a prompt for an agent to act on. None writes derived state: the
+// app-assigned `id` is stripped, and outdated is a rendered note that never reaches the
+// JSON. Disk I/O lives only in main (src/main/review/save.ts) — these produce strings.
+//
+// The prompt exports differ from the Markdown one in *who reads the output*. Markdown is
+// read by a person who has the review; a prompt is read by an agent that does not — a
+// fresh session, in the repo, with no memory of any of this. Everything the prompt says
+// that the Markdown export does not (the imperative, the anchored code, the sentence
+// explaining a deletions-side range) is there because that reader needs it, and
+// everything both leave out is left out because neither does.
 
 /** Re-emit the curated review to the artifact schema, authored fields only — the exact
  * inverse of what `importReview` derived. Comments drop their app-assigned `id` back to the
@@ -161,19 +170,25 @@ export type MarkdownReview = {
   comments: readonly MarkdownComment[];
 };
 
-/** Project the in-app comments to Markdown comments, resolving each against the
- * loaded diff for its outdated flag exactly as the line annotations do
- * (comment-annotations.ts): a frozen embedded patch places every anchor; a
- * re-derived diff flags a comment whose range no same-side hunk still covers.
- * "Exactly as" includes the rename lookup — a file answers to both its names
- * (`filesByAnchorPath`), or the export would call a comment the app shows placed
- * outdated. The exported `file` stays the *authored* path, which is the anchor the
- * artifact round-trips on; only the resolution reads through the rename. */
-export function markdownCommentsFrom(
+/** One comment resolved against the loaded diff: its Markdown projection, and the file the
+ * resolution read it through. Both exports need the same resolution, and the prompt export
+ * additionally needs the *file* — so the pass happens once and hands back both, rather than
+ * each export looking the file up its own way and the two disagreeing about which file a
+ * renamed anchor belongs to. */
+type ResolvedComment = { comment: MarkdownComment; file: PatchFile | null };
+
+/** Resolve each comment against the loaded diff exactly as the line annotations do
+ * (comment-annotations.ts): a frozen embedded patch places every anchor; a re-derived diff
+ * flags a comment whose range no same-side hunk still covers. "Exactly as" includes the
+ * rename lookup — a file answers to both its names (`filesByAnchorPath`), or an export
+ * would call a comment the app shows placed outdated. The projected `file` stays the
+ * *authored* path, which is the anchor the artifact round-trips on; only the resolution
+ * reads through the rename. */
+function resolveComments(
   comments: readonly Comment[],
   files: readonly PatchFile[],
   frozen: boolean,
-): MarkdownComment[] {
+): ResolvedComment[] {
   const byPath = filesByAnchorPath(files);
   return comments.map((comment) => {
     const file = byPath.get(comment.file) ?? null;
@@ -182,14 +197,26 @@ export function markdownCommentsFrom(
       frozen ? { kind: "frozen" } : { kind: "derived", file: file?.fileDiff ?? null },
     );
     return {
-      file: comment.file,
-      side: comment.side,
-      startLine: comment.startLine,
-      endLine: comment.endLine,
-      body: comment.body,
-      outdated: resolution.status === "outdated",
+      comment: {
+        file: comment.file,
+        side: comment.side,
+        startLine: comment.startLine,
+        endLine: comment.endLine,
+        body: comment.body,
+        outdated: resolution.status === "outdated",
+      },
+      file,
     };
   });
+}
+
+/** Project the in-app comments to Markdown comments. */
+export function markdownCommentsFrom(
+  comments: readonly Comment[],
+  files: readonly PatchFile[],
+  frozen: boolean,
+): MarkdownComment[] {
+  return resolveComments(comments, files, frozen).map((resolved) => resolved.comment);
 }
 
 /** A comment belongs to the layer that owns it — the deepest one whose own ranges cover
@@ -292,5 +319,207 @@ export function reviewToMarkdown(review: MarkdownReview): string {
     );
   }
 
+  return `${lines.join("\n")}\n`;
+}
+
+// ── The prompt exports ──────────────────────────────────────────────────────────
+
+/** How many lines of the anchored code a prompt block carries before it says what it
+ * withheld. One cap for both prompt forms — a second one per form would be a concept to
+ * explain and a number to keep in step. Generous on purpose: a comment anchors to "the
+ * smallest span that carries the point" (skills/present-review), so this only ever bites
+ * on an outlier, and when it does the block says so rather than trimming in silence. */
+export const PROMPT_SNIPPET_MAX_LINES = 24;
+
+/** A comment as a prompt needs it: the Markdown projection plus the real lines its anchor
+ * points at. Null when there are none to lift — an outdated anchor (no covering hunk), or a
+ * file the loaded diff does not carry — which is also the case the format has to stay valid
+ * without. */
+export type PromptComment = MarkdownComment & { snippet: DiffSnippet | null };
+
+/** Project the in-app comments for a prompt: the same resolution the Markdown export takes,
+ * plus the anchored code lifted from the same resolved file. An outdated anchor is not asked
+ * for a snippet at all — it has no covering hunk, so there would be nothing to lift, and
+ * the block leans on its drift sentence instead. */
+export function promptCommentsFrom(
+  comments: readonly Comment[],
+  files: readonly PatchFile[],
+  frozen: boolean,
+): PromptComment[] {
+  return resolveComments(comments, files, frozen).map(({ comment, file }) => ({
+    ...comment,
+    snippet:
+      comment.outdated || file === null
+        ? null
+        : snippetForAnchor(file.fileDiff, comment, PROMPT_SNIPPET_MAX_LINES),
+  }));
+}
+
+/** The fence a block of content can be wrapped in: one backtick longer than the longest run
+ * inside it, and never shorter than three. A comment body may legitimately carry a fenced
+ * snippet of the fix (the authoring skill says so), and code routinely carries template
+ * literals — a hard-coded ``` closes the block early on both, which is a payload that reads
+ * as valid and is not. */
+function fenceFor(content: string): string {
+  let longest = 0;
+  for (const run of content.matchAll(/`+/gu)) {
+    longest = Math.max(longest, run[0].length);
+  }
+  return "`".repeat(Math.max(3, longest + 1));
+}
+
+/** Where a comment sits, as its prompt states it: `path:line` or `path:start-end`.
+ *
+ * A colon and an ASCII hyphen, not the `L12–15` the Markdown export uses: `path:12-15` is
+ * the form an editor, a shell, and an agent all already read as a place in a file, and the
+ * en dash in the human range is a character none of them accept. */
+function promptRange(comment: PromptComment): string {
+  return comment.startLine === comment.endLine
+    ? `${comment.file}:${comment.startLine}`
+    : `${comment.file}:${comment.startLine}-${comment.endLine}`;
+}
+
+/** What a reader of the payload has to be told about the range before acting on it. The
+ * Markdown export tags the same two facts with one word each (`locationOf`); here they are
+ * spelled out as consequences, because a person reading an export knows what "deletions"
+ * means for a line number and an agent about to edit a file needs to be told. The additions
+ * side stays silent — it is the default reading, and the numbers mean exactly what they
+ * appear to. */
+function promptQualifiers(comment: PromptComment): string[] {
+  const clauses: string[] = [];
+  if (comment.side === "deletions") {
+    clauses.push(
+      "deletions side — these are lines of the file as it stood before this change, not of the file now",
+    );
+  }
+  if (comment.outdated) {
+    clauses.push(
+      "outdated — the diff no longer carries these lines, so find the code by content rather than by number",
+    );
+  }
+  return clauses;
+}
+
+/** One comment's prompt block: a heading naming its anchor, the body verbatim, and the
+ * anchored code. Byte-identical in both prompt forms — the single-comment payload is this
+ * block under one imperative line, and the whole-review payload is these blocks under a
+ * heading each layer — so an agent that can act on one can act on the other, and there is
+ * only one shape to keep right.
+ *
+ * The heading is the reason it can be shared: a `###` reads as a section in a document of
+ * twelve and as a label on a payload of one, where a bare anchor line would need the
+ * grouping form to prefix it and the two would drift apart by a character. */
+function promptBlock(comment: PromptComment): string[] {
+  const qualifiers = promptQualifiers(comment);
+  const anchor = `\`${promptRange(comment)}\``;
+  const lines = [
+    `### ${qualifiers.length === 0 ? anchor : `${anchor} (${qualifiers.join("; ")})`}`,
+    "",
+    comment.body.trim(),
+  ];
+  const snippet = comment.snippet;
+  if (snippet !== null) {
+    const code = snippet.lines.map((line) => line.text).join("\n");
+    const fence = fenceFor(code);
+    lines.push("", fence, code, fence);
+    if (snippet.hidden > 0) {
+      lines.push(
+        "",
+        `…${snippet.hidden === 1 ? " 1 more line" : ` ${snippet.hidden} more lines`}, through line ${comment.endLine}.`,
+      );
+    }
+  }
+  return lines;
+}
+
+/** The blocks of one section, a blank line between them. */
+function promptBlocks(comments: readonly PromptComment[]): string[] {
+  return comments.flatMap((comment, index) =>
+    index === 0 ? promptBlock(comment) : ["", ...promptBlock(comment)],
+  );
+}
+
+/** One comment as a prompt: the block, under the one line that makes it an instruction.
+ *
+ * That line is the whole difference between this and a record of the comment. A body says
+ * *why*, never *what* — that is the authoring rule the review was written to — so an agent
+ * handed the body alone will as readily explain it or ask about it as fix it. Naming the
+ * verb is not an opinion about the code; it is the reader of the app having pressed a
+ * button, restated for a reader who was not there. */
+export function commentToPrompt(comment: PromptComment): string {
+  return `${["Fix this code review comment.", "", ...promptBlock(comment)].join("\n")}\n`;
+}
+
+export type PromptReview = {
+  repo: RepoInfo;
+  /** The refs the review was authored against, or null for a session with no authored
+   * origin — a plain repo diff the reader commented on themselves has none to name, and
+   * the payload simply omits them rather than inventing a range. */
+  refs: { base: ReviewRef; head: ReviewRef } | null;
+  /** The tour doc, for its title alone: a fresh agent needs the name of the body of work,
+   * and the body is 100–250 words about why the change exists rather than about the fixes. */
+  overview: ReviewOverview | null;
+  layers: readonly ReviewLayer[];
+  comments: readonly PromptComment[];
+};
+
+/** Every comment of a review as one prompt: a header naming the change and the diff, then
+ * the comments grouped under the layer that owns each — the same `layerOwning` rule the
+ * overview counts by and the Markdown export sections by, so no surface sections a comment
+ * differently from another.
+ *
+ * Layer order, because it is the order the review was *authored* in, and passing it through
+ * is the one thing this export does about priority. It never re-orders and never ranks.
+ *
+ * Two differences from the Markdown export, both because this is a work order rather than a
+ * document of the review: a layer with no comments contributes no section (there is nothing
+ * to do under it), and nothing is numbered — the payload runs in layer order while the
+ * sidebar list runs in diff order, so any number here would name a different comment than
+ * the same number there. Each block is identified by its anchor, which is how every surface
+ * in the app already identifies a comment and the only identifier an agent can act on. */
+export function commentsToPrompt(review: PromptReview): string {
+  const other: PromptComment[] = [];
+  const byLayer: PromptComment[][] = review.layers.map(() => []);
+  for (const comment of review.comments) {
+    const index = layerIndexOfComment(review.layers, comment);
+    if (index === null) {
+      other.push(comment);
+    } else {
+      byLayer[index]?.push(comment);
+    }
+  }
+  const sections = review.layers.flatMap((layer, index) => {
+    const covered = byLayer[index] ?? [];
+    return covered.length === 0 ? [] : [{ label: layer.label, comments: covered }];
+  });
+  const loose = other.toSorted(compareComments);
+
+  const title = review.overview?.title;
+  const count = review.comments.length;
+  const refs = review.refs === null ? "" : ` (\`${review.refs.base}\` … \`${review.refs.head}\`)`;
+  const lines: string[] = [
+    title === undefined ? "# Code review comments" : `# Code review comments — ${title}`,
+    "",
+    `${count === 1 ? "1 comment" : `${count} comments`} from a code review of \`${review.repo.name}\`${refs}. Address each one.${
+      sections.length === 0 ? "" : " They are grouped in the review’s own reading order."
+    }`,
+  ];
+  for (const section of sections) {
+    lines.push(
+      "",
+      `## ${section.label}`,
+      "",
+      ...promptBlocks(section.comments.toSorted(compareComments)),
+    );
+  }
+  if (loose.length > 0) {
+    // Only worth a heading when there are layer sections for it to sit apart from: on a
+    // review with no layers at all these are simply the comments, and a lone "Other
+    // comments" over all of them would be naming a distinction that does not exist.
+    if (sections.length > 0) {
+      lines.push("", "## Other comments");
+    }
+    lines.push("", ...promptBlocks(loose));
+  }
   return `${lines.join("\n")}\n`;
 }
