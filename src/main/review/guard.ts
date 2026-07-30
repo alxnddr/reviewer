@@ -1,4 +1,4 @@
-import { readFile, stat } from "node:fs/promises";
+import { readFile, realpath, stat } from "node:fs/promises";
 import { resolve } from "node:path";
 import { REVIEW_EXTENSION } from "../../shared/review-file";
 import { importReview, type ImportedReview, type ReviewStamp } from "../../shared/review";
@@ -15,8 +15,11 @@ import type { ReviewOpenFailure } from "../../shared/review-open";
 export const REVIEW_MAX_BYTES = 32 * 1024 * 1024;
 
 export type ReviewImportResult =
-  | { ok: true; review: ImportedReview }
-  | { ok: false; failure: ReviewOpenFailure };
+  /** `path` is the artifact as this module resolved it — absolute, and with symlinks
+   * followed. Returned rather than left to the caller to re-derive, because it is the key
+   * the session is deduped by and the key its progress is stored under: two callers
+   * canonicalizing a path two ways would quietly become two tabs over one review. */
+  { ok: true; review: ImportedReview; path: string } | { ok: false; failure: ReviewOpenFailure };
 
 /** Node fs rejections are `Error` with an errno `code`; the cast is the boundary
  * where an untyped runtime shape becomes a checked string. */
@@ -62,7 +65,13 @@ export async function importReviewFromPath(
   if (!imported.ok) {
     return { ok: false, failure: { code: "invalidContent" } };
   }
-  return { ok: true, review: imported.review };
+  // Symlinks resolved last, once the file is known to be readable: a symlinked artifact is a
+  // real way to keep a review around (`recent.ts` stats through them for the same reason),
+  // and a link opened alongside its target must be one tab sharing one progress record, not
+  // two. A realpath that fails leaves the resolved path standing — worst case the link and
+  // its target are treated as two reviews, which is the behaviour without this line at all.
+  const real = await realpath(path).catch(() => path);
+  return { ok: true, review: imported.review, path: real };
 }
 
 /** The CLI / `open-file` argv → path step, pure so the resolution rule is tested

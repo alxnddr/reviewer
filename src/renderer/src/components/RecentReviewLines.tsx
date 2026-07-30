@@ -1,8 +1,10 @@
 import type { ReactElement } from "react";
 import { FileWarning, Layers, MessageSquare, PackageCheck } from "lucide-react";
 import type { RecentReview } from "../../../shared/recent-reviews";
+import { ReadRing } from "@/components/ReadRing";
 import { recentRange, recentTitle, showsRange } from "@/lib/recent-reviews";
 import { absoluteTime, shortAge } from "@/lib/relative-time";
+import { cn } from "@/lib/utils";
 
 // One review, two lines: what the change is, then which change it is. Line one is read, line
 // two is checked — the same division the commit rows in the rail make.
@@ -91,9 +93,52 @@ export function RecentReviewLines({
                 self-contained
               </span>
             )}
+            <Progress progress={review.progress} pushed={!summary.portable} />
           </>
         )}
       </span>
     </>
+  );
+}
+
+/** How far into this review its reader got, on the end of the metadata line — the counts and
+ * the same ring the rail and the chapter bands use, so "how far through" looks the same
+ * everywhere in the app and only the set it is counting changes.
+ *
+ * Nothing at all for a review nobody has started, which is the common case and the reason
+ * this reads as a *resume* mark rather than a status column: a row that carries one is a row
+ * with something to come back to.
+ *
+ * The counts are printed, never a lone percentage. This denominator is the file count from
+ * the last time the reader marked something, not from the diff as it stands now — main has no
+ * diff in hand while listing a directory — so "12/30" is the honest shape of a remembered
+ * answer in a way "40%" is not. */
+function Progress({
+  progress,
+  pushed,
+}: {
+  progress: RecentReview["progress"];
+  /** Whether this has to do the `ml-auto` itself, because no self-contained badge came
+   * before it to push the pair to the end of the line. */
+  pushed: boolean;
+}): ReactElement | null {
+  if (progress === null) {
+    return null;
+  }
+  const done = progress.total > 0 && progress.read >= progress.total;
+  return (
+    <span
+      title={done ? "You finished this review" : "Where you left off"}
+      className={cn(
+        "flex shrink-0 items-center gap-1.5 tabular-nums text-text-muted",
+        pushed && "ml-auto",
+      )}
+    >
+      <ReadRing tally={{ read: progress.read, total: progress.total }} />
+      {/* A total of zero means marks were made against a diff whose size was never
+          recorded — an older record, or one written before the diff finished loading. The
+          count alone is still true and still useful; a "12/0" would not be. */}
+      {progress.total === 0 ? `${progress.read} read` : `${progress.read}/${progress.total}`}
+    </span>
   );
 }

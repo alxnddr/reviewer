@@ -22,6 +22,7 @@ import { ShortcutHint } from "@/components/ui/kbd";
 import { shortRef } from "@/lib/refs";
 import { tabNames, type TabSubject } from "@/lib/tab-name";
 import { cn } from "@/lib/utils";
+import type { SessionId } from "../../../shared/session";
 import {
   activeTabStop,
   sameTabStop,
@@ -121,6 +122,46 @@ function useClipped(ref: RefObject<HTMLElement | null>, text: string): boolean {
   return clipped;
 }
 
+/** How long the reveal ring stands on a tab an open request landed on. Long enough to be
+ * seen after the eye has travelled from the start screen's list up to the strip; short
+ * enough that it is clearly a flash and not a new resting state the tab has taken on. */
+const REVEAL_MS = 1200;
+
+/** The session to ring right now, or null. Driven off the store's nonce rather than its id,
+ * so asking twice for the same already-open review flashes twice — the `useCopiedFlash`
+ * idiom, and for the same reason: the reader pressed twice and is owed two answers. The
+ * mount-seeded ref matters as much here, or a strip remounting (a window reopening, a
+ * hot reload) would replay a reveal for a click made long ago.
+ *
+ * Two effects, not one, and that split is load-bearing: under StrictMode the first is
+ * invoked twice, and a timer started inside it would be cleared by the first pass's cleanup
+ * and never restarted by the second, which the ref sends straight to the early return. So
+ * the ref-guarded effect only *records* the reveal and the timer hangs off the state it
+ * sets — the exact shape `useCopyFeedback` uses, and the reason it works. */
+function useRevealedTab(): SessionId | null {
+  const revealed = useReviewStore((state) => state.revealedSession);
+  const [shown, setShown] = useState<{ id: SessionId; nonce: number } | null>(null);
+  const seen = useRef(revealed?.nonce ?? null);
+
+  useEffect(() => {
+    if (revealed === null || revealed.nonce === seen.current) {
+      return;
+    }
+    seen.current = revealed.nonce;
+    setShown(revealed);
+  }, [revealed]);
+
+  useEffect(() => {
+    if (shown === null) {
+      return;
+    }
+    const timer = window.setTimeout(() => setShown(null), REVEAL_MS);
+    return () => window.clearTimeout(timer);
+  }, [shown]);
+
+  return shown?.id ?? null;
+}
+
 /** Everything both kinds of tab share: the box, its states, and its close affordance. The
  * two differ only in what they are about, so they differ only in what they pass here. */
 function TabShell({
@@ -132,6 +173,7 @@ function TabShell({
   closeLabel,
   dragOffset,
   dragging,
+  revealed,
   onActivate,
   onClose,
   onPointerDown,
@@ -147,6 +189,11 @@ function TabShell({
   closeLabel: string;
   /** Live horizontal offset while this tab is the one being dragged, else null. */
   dragOffset: number | null;
+  /** True for the moment after an open request landed on this tab because its review was
+   * already open. One tab per artifact means that click adds nothing to the strip, and a
+   * click with no visible result reads as a click that failed — so the tab it went to says
+   * "here, this one" itself. */
+  revealed: boolean;
   /** True while *any* tab is being dragged — suppresses tooltips strip-wide, so
    * a drag passing under a resting tab can't summon its popup. */
   dragging: boolean;
@@ -216,6 +263,11 @@ function TabShell({
                 ? "bg-selected text-foreground"
                 : "text-text-muted hover:bg-border/30 hover:text-foreground/80",
               dragOffset !== null && "cursor-grabbing",
+              // A ring rather than a colour change: the tab under it may be active or
+              // inactive, and only an outline reads the same over both fills. It rides the
+              // same `ring` token focus uses, at the same inset, so the strip has one
+              // vocabulary for "look here" instead of two.
+              revealed && "ring-2 ring-ring ring-inset",
             )}
           />
         }
@@ -297,6 +349,7 @@ export function TabBar(): ReactElement {
   const reorderTabs = useReviewStore((state) => state.reorderTabs);
   const openStartTab = useReviewStore((state) => state.openStartTab);
   const closeStartTab = useReviewStore((state) => state.closeStartTab);
+  const revealedId = useRevealedTab();
 
   // Named as a set, and only the sessions take part: `tabNames` disambiguates against the other
   // *reviews* in the strip, and every start tab is called the same thing on purpose.
@@ -528,6 +581,7 @@ export function TabBar(): ReactElement {
                 closeLabel={`Close ${name}`}
                 dragOffset={drag !== null && sameTabStop(drag.stop, stop) ? drag.offset : null}
                 dragging={drag !== null}
+                revealed={slice !== undefined && slice.id === revealedId}
                 onActivate={() => activate(stop)}
                 onClose={() => closeFromPointer(stop)}
                 onPointerDown={(event) => onTabPointerDown(event, stop)}

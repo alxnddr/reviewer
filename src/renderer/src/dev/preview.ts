@@ -325,6 +325,8 @@ function siblingSlice(ordinal: number, spec: SiblingSpec): SessionSlice {
     activeCommentId: null,
     readFiles: NO_READ_FILES,
     collapsedFiles: NO_COLLAPSED_FILES,
+    readTotal: 0,
+    reviewPath: null,
     needsDerive: true,
     requestTicket: 0,
   };
@@ -353,40 +355,52 @@ function seedSiblingTabs(before: SiblingSpec[], after: SiblingSpec[]): void {
 }
 
 /** The reviews directory as the start screen sees it: a spread of ages so every date band is
- * inhabited, an untitled review (named by its range), one that could not be read, and one
- * self-contained artifact. Seeded rather than fetched — the gates run in a plain browser,
- * where there is no bridge to answer `reviews:recent`. */
+ * inhabited, an untitled review (named by its range), one that could not be read, one
+ * self-contained artifact, and — since most rows carry none — a few at each stage of being
+ * read, so the resume marks can be seen against the untouched rows they have to stand out
+ * from. Seeded rather than fetched — the gates run in a plain browser, where there is no
+ * bridge to answer `reviews:recent`. */
 function fixtureRecents(): RecentReview[] {
-  const rows: [hoursAgo: number, repo: string, title: string | null, comments: number][] = [
-    [1, "reviewer", "Name tabs after the review, not the repository", 4],
-    [5, "reviewer", "Drop the env-var fallback from settings", 2],
-    [9, "api-server", "Split the ingest worker in two", 7],
-    [26, "api-server", null, 1],
-    [50, "dotfiles", "Move the shell config under XDG", 0],
-    [96, "reviewer", "Anchor comments against the real diff", 11],
-    [200, "web-app", "Rewrite the onboarding flow", 3],
-    [400, "notes", "Retire the legacy exporter", 5],
-    [1400, "playground", "First pass at the parser", 2],
+  const rows: [
+    hoursAgo: number,
+    repo: string,
+    title: string | null,
+    comments: number,
+    progress: RecentReview["progress"],
+  ][] = [
+    [1, "reviewer", "Name tabs after the review, not the repository", 4, { read: 3, total: 11 }],
+    [5, "reviewer", "Drop the env-var fallback from settings", 2, null],
+    [9, "api-server", "Split the ingest worker in two", 7, { read: 14, total: 16 }],
+    [26, "api-server", null, 1, null],
+    [50, "dotfiles", "Move the shell config under XDG", 0, { read: 4, total: 4 }],
+    [96, "reviewer", "Anchor comments against the real diff", 11, null],
+    [200, "web-app", "Rewrite the onboarding flow", 3, { read: 1, total: 23 }],
+    [400, "notes", "Retire the legacy exporter", 5, null],
+    [1400, "playground", "First pass at the parser", 2, null],
   ];
-  const reviews: RecentReview[] = rows.map(([hoursAgo, repo, title, comments], index) => ({
-    path: `/Users/demo/.rvw/reviews/${repo}-main-feature-${index}.reviewer.json`,
-    modified: new Date(Date.now() - hoursAgo * HOUR_MS).toISOString(),
-    summary: {
-      repoPath: `/Users/demo/work/${repo}`,
-      repoName: repo,
-      base: "main",
-      head: index % 3 === 0 ? `feature/branch-${index}` : "a".repeat(40),
-      title,
-      comments,
-      layers: (index % 4) + 1,
-      portable: index === 2,
-    },
-  }));
+  const reviews: RecentReview[] = rows.map(
+    ([hoursAgo, repo, title, comments, progress], index) => ({
+      path: `/Users/demo/.rvw/reviews/${repo}-main-feature-${index}.reviewer.json`,
+      modified: new Date(Date.now() - hoursAgo * HOUR_MS).toISOString(),
+      summary: {
+        repoPath: `/Users/demo/work/${repo}`,
+        repoName: repo,
+        base: "main",
+        head: index % 3 === 0 ? `feature/branch-${index}` : "a".repeat(40),
+        title,
+        comments,
+        layers: (index % 4) + 1,
+        portable: index === 2,
+      },
+      progress,
+    }),
+  );
   // A file named like an artifact that is not one: listed, and honest about it.
   reviews.splice(3, 0, {
     path: "/Users/demo/.rvw/reviews/half-written-emit.reviewer.json",
     modified: new Date(Date.now() - 20 * HOUR_MS).toISOString(),
     summary: null,
+    progress: null,
   });
   return reviews;
 }
@@ -410,6 +424,7 @@ function seedRecents(reviews: RecentReview[], extra = 0): void {
         layers: 1,
         portable: false,
       },
+      progress: null,
     })),
   ];
   useRecentReviewsStore.setState({
@@ -452,6 +467,8 @@ function seedSession(overrides: Partial<SessionSlice>): void {
     activeCommentId: null,
     readFiles: NO_READ_FILES,
     collapsedFiles: NO_COLLAPSED_FILES,
+    readTotal: 0,
+    reviewPath: null,
     needsDerive: false,
     requestTicket: 1,
     ...overrides,

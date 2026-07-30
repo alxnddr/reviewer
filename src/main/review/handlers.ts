@@ -15,6 +15,7 @@ import type { GitRunner } from "../git/runner";
 import { registerIpcHandler } from "../ipc-registry";
 import type { SessionStore } from "../sessions";
 import { importReviewFromPath } from "./guard";
+import type { ProgressStore } from "./progress";
 import { listRecentReviews } from "./recent";
 
 // The three open entries (dialog, drop, CLI/`open-file`) meet here: each hands a
@@ -29,8 +30,11 @@ function reviewStamp(): ReviewStamp {
 }
 
 type ImportSessionResult =
-  | { ok: true; session: Session }
-  | { ok: false; failure: ReviewOpenFailure };
+  /** `created` false means the artifact was already open and this is its existing session.
+   * The renderer needs the distinction: a session it already has a slice for must be
+   * *activated*, not added, and the tab it lands on should say so rather than appearing to
+   * ignore the click. */
+  { ok: true; session: Session; created: boolean } | { ok: false; failure: ReviewOpenFailure };
 
 /** Guard a path, and on success create the active session. The one place a
  * validated review becomes a session — shared by all three entries.
@@ -44,17 +48,34 @@ type ImportSessionResult =
 async function importSession(
   runner: GitRunner,
   store: SessionStore,
+  progress: ProgressStore,
   rawPath: string,
 ): Promise<ImportSessionResult> {
   const result = await importReviewFromPath(rawPath, reviewStamp());
   if (!result.ok) {
     return result;
   }
+  // One tab per artifact, checked on the canonical path the guard resolved. Two tabs over one
+  // review would each hold their own marks and each write the same progress record, so
+  // whichever the reader closed last would silently win — the same reason a repo can only be
+  // open once (see `openRepository` in the review store). This sits after the guard rather
+  // than before it so a path that is not a review still fails the way it always did.
+  const open = store.findByReviewPath(result.path);
+  if (open !== null) {
+    return { ok: true, session: open, created: false };
+  }
   const repo = await validateRepo(runner, result.review.repo.path);
   if (!repo.ok) {
     return { ok: false, failure: { code: "repoUnavailable", reason: repo.failure } };
   }
-  return { ok: true, session: store.createFromReview({ ...result.review, repo: repo.value }) };
+  return {
+    ok: true,
+    created: true,
+    session: store.createFromReview(
+      { ...result.review, repo: repo.value },
+      { path: result.path, progress: await progress.read(result.path) },
+    ),
+  };
 }
 
 /** The drop path, and the tail of the dialog path: guard `rawPath` → session →
@@ -62,11 +83,12 @@ async function importSession(
 export async function openReviewFromPath(
   runner: GitRunner,
   store: SessionStore,
+  progress: ProgressStore,
   rawPath: string,
 ): Promise<ReviewOpenResponse> {
-  const result = await importSession(runner, store, rawPath);
+  const result = await importSession(runner, store, progress, rawPath);
   return result.ok
-    ? { ok: true, value: { kind: "opened", sessionId: result.session.id } }
+    ? { ok: true, value: { kind: "opened", sessionId: result.session.id, created: result.created } }
     : { ok: false, failure: result.failure };
 }
 
@@ -75,6 +97,7 @@ export async function openReviewFromPath(
 async function openReviewViaDialog(
   runner: GitRunner,
   store: SessionStore,
+  progress: ProgressStore,
 ): Promise<ReviewOpenResponse> {
   const options = {
     title: "Open Review",
@@ -92,26 +115,30 @@ async function openReviewViaDialog(
   if (picked.canceled || file === undefined) {
     return { ok: true, value: { kind: "canceled" } };
   }
-  return openReviewFromPath(runner, store, file);
+  return openReviewFromPath(runner, store, progress, file);
 }
 
-export function registerReviewIpcHandlers(runner: GitRunner, store: SessionStore): void {
+export function registerReviewIpcHandlers(
+  runner: GitRunner,
+  store: SessionStore,
+  progress: ProgressStore,
+): void {
   registerIpcHandler(
     IpcChannel.reviewOpen,
     { request: z.void(), response: ReviewOpenResponse },
-    () => openReviewViaDialog(runner, store),
+    () => openReviewViaDialog(runner, store, progress),
   );
 
   registerIpcHandler(
     IpcChannel.reviewOpenPath,
     { request: ReviewOpenPathRequest, response: ReviewOpenResponse },
-    ({ path }) => openReviewFromPath(runner, store, path),
+    ({ path }) => openReviewFromPath(runner, store, progress, path),
   );
 
   registerIpcHandler(
     IpcChannel.reviewsRecent,
     { request: z.void(), response: RecentReviewsResponse },
-    () => listRecentReviews(),
+    () => listRecentReviews(progress),
   );
 }
 
@@ -121,12 +148,15 @@ export function registerReviewIpcHandlers(runner: GitRunner, store: SessionStore
 export async function importReviewSessionFromArg(
   runner: GitRunner,
   store: SessionStore,
+  progress: ProgressStore,
   rawPath: string,
 ): Promise<Session | null> {
-  const result = await importSession(runner, store, rawPath);
+  const result = await importSession(runner, store, progress, rawPath);
   if (!result.ok) {
     console.error(`Open review from launch arg failed: ${result.failure.code}`);
     return null;
   }
+  // An already-open review answers with its existing session, which the caller focuses — so
+  // `rvw open` on a review the reader already has up raises that tab instead of a duplicate.
   return result.session;
 }

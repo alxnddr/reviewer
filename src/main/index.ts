@@ -1,4 +1,5 @@
 import { app, BrowserWindow } from "electron";
+import { join } from "node:path";
 import { optimizer } from "@electron-toolkit/utils";
 import appIcon from "../../build/icon.png?asset";
 import { IpcEvent } from "../shared/ipc";
@@ -8,6 +9,7 @@ import { installApplicationMenu } from "./menu";
 import { reviewPathFromArgv } from "./review/guard";
 import { importReviewSessionFromArg } from "./review/handlers";
 import { createReviewOpenQueue } from "./review/open-queue";
+import { createProgressStore } from "./review/progress";
 import { createSessionStore } from "./sessions";
 import { flushSessionsThenTerminateGit } from "./shutdown";
 import { applyPersistedTheme } from "./theme";
@@ -24,13 +26,19 @@ app.setName("Reviewer");
 if (app.requestSingleInstanceLock()) {
   const gitRunner = createGitRunner();
   const sessionStore = createSessionStore();
+  // Beside the sessions store, in userData, for the same reason it is: this is the app's own
+  // record of its reader, not the CLI's output — `~/.rvw/reviews` belongs to `rvw emit`, and
+  // the app writing progress into it would make two programs owners of one directory.
+  // `app.getPath` is only legal after `setName` above, which is why it is read here and not
+  // at module scope.
+  const progressStore = createProgressStore(join(app.getPath("userData"), "progress"));
 
   // macOS delivers a launch-by-file through `open-file` (dock drop / Finder
   // double-click), which can fire before `ready` on a cold start; the queue owns
   // the import → reveal ordering and the pre-ready buffering.
   const openQueue = createReviewOpenQueue({
     importSession: (absolutePath) =>
-      importReviewSessionFromArg(gitRunner, sessionStore, absolutePath),
+      importReviewSessionFromArg(gitRunner, sessionStore, progressStore, absolutePath),
     hasWindow: () => BrowserWindow.getAllWindows().length > 0,
     createWindow: () => {
       createMainWindow();
@@ -103,7 +111,7 @@ if (app.requestSingleInstanceLock()) {
 
     applyPersistedTheme();
     installApplicationMenu();
-    registerIpcHandlers(gitRunner, sessionStore);
+    registerIpcHandlers(gitRunner, sessionStore, progressStore);
 
     // A first-instance launch-by-file (`reviewer x.reviewer.json` cold start)
     // arrives on argv; queue it behind any `open-file` paths that landed early.

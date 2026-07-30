@@ -1,6 +1,7 @@
 import * as z from "zod";
 import { BranchName, CommitSelection, RepoInfo } from "./git";
 import { Comment, ReviewDiff, ReviewLayer, ReviewOrigin, ReviewOverview } from "./review";
+import { ReadProgress } from "./review-progress";
 
 // The Session domain contract: main owns the persisted per-repo review
 // state; the renderer holds a hydrated copy and writes back over IPC. Persisted
@@ -73,6 +74,14 @@ export const Session = z.object({
   // re-serializes to its authored range. Null for a plain repo session.
   // `.default(null)` keeps an older session parsing strictly, like `reviewDiff`.
   reviewOrigin: ReviewOrigin.nullable().default(null),
+  // The `.reviewer.json` this session was opened from, resolved to an absolute real
+  // path. Identity, not content: it is what makes "this review is already open" and
+  // "this review's progress lives here" the same question with the same answer, so a
+  // reader who closes a tab and reopens the artifact resumes where they stopped. Null
+  // for a plain repo session and for a review opened before this field existed — both
+  // simply keep no artifact-scoped progress, which is the old behaviour.
+  reviewPath: z.string().min(1).nullable().default(null),
+  ...ReadProgress.shape,
 });
 export type Session = z.infer<typeof Session>;
 

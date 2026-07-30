@@ -1,8 +1,10 @@
 import { mkdirSync, mkdtempSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { NO_PROGRESS } from "../../shared/review-progress";
 import { reviewsDir } from "../../shared/reviews-dir";
+import { createProgressStore, type ProgressStore } from "./progress";
 import { listRecentReviews, RECENT_MAX, summarizeArtifact } from "./recent";
 
 // The picker's data source, against real directories. The interesting cases here are all the
@@ -23,6 +25,15 @@ function makeHome(): { home: string; env: NodeJS.ProcessEnv; dir: string } {
   const dir = reviewsDir(env, home);
   mkdirSync(dir, { recursive: true });
   return { home, env, dir };
+}
+
+/** A real progress store, in its own corner of the same temp home — the app keeps this
+ * directory well away from the artifacts (it is userData, not `~/.rvw/reviews`), and these
+ * tests keep the same separation so nothing here can accidentally list its own bookkeeping as
+ * a review. Real rather than a stub: the listing is the only caller that reads records in
+ * bulk, so it should be reading them the way the app does. */
+function progressIn(home: string): ProgressStore {
+  return createProgressStore(join(home, "progress"));
 }
 
 afterEach(() => {
@@ -110,7 +121,7 @@ describe("listRecentReviews", () => {
     write(dir, "old.reviewer.json", artifact({ overview: { title: "Older", body: "b" } }), 600);
     write(dir, "new.reviewer.json", artifact({ overview: { title: "Newer", body: "b" } }), 10);
 
-    const result = await listRecentReviews(env, home);
+    const result = await listRecentReviews(progressIn(home), env, home);
     expect(result.dir).toBe(dir);
     expect(result.unreadable).toBe(false);
     expect(result.truncated).toBe(0);
@@ -126,7 +137,7 @@ describe("listRecentReviews", () => {
     write(dir, "README.md", "# hello");
     mkdirSync(join(dir, "nested.reviewer.json"));
 
-    const result = await listRecentReviews(env, home);
+    const result = await listRecentReviews(progressIn(home), env, home);
     expect(result.reviews.map((review) => review.path)).toEqual([join(dir, "real.reviewer.json")]);
   });
 
@@ -136,7 +147,7 @@ describe("listRecentReviews", () => {
     const { env, home, dir } = makeHome();
     write(dir, "broken.reviewer.json", "}{ truncated mid-write");
 
-    const result = await listRecentReviews(env, home);
+    const result = await listRecentReviews(progressIn(home), env, home);
     expect(result.reviews).toHaveLength(1);
     expect(result.reviews[0]?.summary).toBeNull();
     expect(result.reviews[0]?.path).toBe(join(dir, "broken.reviewer.json"));
@@ -147,7 +158,7 @@ describe("listRecentReviews", () => {
     const target = write(dir, "target.reviewer.json", artifact(), 5);
     symlinkSync(target, join(dir, "link.reviewer.json"));
 
-    const result = await listRecentReviews(env, home);
+    const result = await listRecentReviews(progressIn(home), env, home);
     expect(result.reviews).toHaveLength(2);
     expect(result.reviews.every((review) => review.summary !== null)).toBe(true);
   });
@@ -157,7 +168,7 @@ describe("listRecentReviews", () => {
     tempDirs.push(home);
     const env = { RVW_HOME: join(home, "rvw") } as NodeJS.ProcessEnv;
 
-    const result = await listRecentReviews(env, home);
+    const result = await listRecentReviews(progressIn(home), env, home);
     expect(result.reviews).toEqual([]);
     // The distinction the empty state reads: nothing here yet, versus something is wrong.
     expect(result.unreadable).toBe(false);
@@ -171,9 +182,74 @@ describe("listRecentReviews", () => {
     rmSync(dir, { recursive: true, force: true });
     writeFileSync(dir, "not a directory");
 
-    const result = await listRecentReviews(env, home);
+    const result = await listRecentReviews(progressIn(home), env, home);
     expect(result.reviews).toEqual([]);
     expect(result.unreadable).toBe(true);
+  });
+
+  it("carries each artifact's progress, and nothing for a review nobody has started", async () => {
+    const { env, home, dir } = makeHome();
+    write(
+      dir,
+      "started.reviewer.json",
+      artifact({ overview: { title: "Started", body: "b" } }),
+      10,
+    );
+    write(dir, "fresh.reviewer.json", artifact({ overview: { title: "Fresh", body: "b" } }), 20);
+    const progress = progressIn(home);
+    await progress.write(join(dir, "started.reviewer.json"), {
+      readFiles: { "src/a.ts": "modified::aaa..bbb", "src/b.ts": "added::..ccc" },
+      collapsedFiles: [],
+      readTotal: 9,
+    });
+
+    const result = await listRecentReviews(progress, env, home);
+    const byTitle = new Map(result.reviews.map((review) => [review.summary?.title, review]));
+    expect(byTitle.get("Started")?.progress).toEqual({ read: 2, total: 9 });
+    // Null rather than a zeroed ratio: a row for a review nobody has opened draws no glyph,
+    // and saying so once here keeps both surfaces that render a row from deciding separately.
+    expect(byTitle.get("Fresh")?.progress).toBeNull();
+  });
+
+  it("sweeps progress for a review that is no longer in the directory", async () => {
+    const { env, home, dir } = makeHome();
+    write(dir, "kept.reviewer.json", artifact(), 10);
+    const progress = progressIn(home);
+    const gone = join(dir, "deleted.reviewer.json");
+    await progress.write(gone, { readFiles: { "a.ts": "s" }, collapsedFiles: [], readTotal: 1 });
+    await progress.write(join(dir, "kept.reviewer.json"), {
+      readFiles: { "a.ts": "s" },
+      collapsedFiles: [],
+      readTotal: 1,
+    });
+
+    await listRecentReviews(progress, env, home);
+
+    // The listing is the one pass that knows the whole artifact directory, so it is the one
+    // place an orphan can be recognized. Fire-and-forget, hence the poll rather than an await.
+    await vi.waitFor(async () => {
+      expect(await progress.read(gone)).toEqual(NO_PROGRESS);
+    });
+    expect((await progress.read(join(dir, "kept.reviewer.json"))).readTotal).toBe(1);
+  });
+
+  it("keeps progress for a review pushed past the cap — it is still on disk", async () => {
+    const { env, home, dir } = makeHome();
+    for (let index = 0; index < RECENT_MAX + 1; index++) {
+      write(dir, `r${index}.reviewer.json`, artifact(), index * 60);
+    }
+    const progress = progressIn(home);
+    const dropped = join(dir, `r${RECENT_MAX}.reviewer.json`);
+    await progress.write(dropped, { readFiles: { "a.ts": "s" }, collapsedFiles: [], readTotal: 3 });
+
+    const result = await listRecentReviews(progress, env, home);
+    expect(result.truncated).toBe(1);
+
+    // The sweep runs over every artifact found, not the capped page: sweeping a review's
+    // progress because the list happened to be long would be silent data loss.
+    await vi.waitFor(async () => {
+      expect((await progress.read(dropped)).readTotal).toBe(3);
+    });
   });
 
   it("caps the list at the newest RECENT_MAX and reports what it dropped", async () => {
@@ -184,7 +260,7 @@ describe("listRecentReviews", () => {
       write(dir, `r${index}.reviewer.json`, artifact(), index * 60);
     }
 
-    const result = await listRecentReviews(env, home);
+    const result = await listRecentReviews(progressIn(home), env, home);
     expect(result.reviews).toHaveLength(RECENT_MAX);
     expect(result.truncated).toBe(3);
     // Sorted over the whole directory and *then* capped: the newest is still first, which

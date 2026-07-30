@@ -13,6 +13,7 @@ import {
   reviewOriginFor,
   type ImportedReview,
 } from "../shared/review";
+import { NO_PROGRESS, ReadProgress } from "../shared/review-progress";
 import {
   Session,
   SessionStoreFile,
@@ -39,8 +40,18 @@ export type SessionStore = {
   /** An opened `.reviewer.json` as a new active session: the review's repo becomes
    * the source; its comments/layers ride along; and its authored diff is pinned so
    * the opened session reproduces the diff the anchors were written against — the
-   * embedded patch when present, else the `base..head` refs. */
-  createFromReview: (review: ImportedReview) => Session;
+   * embedded patch when present, else the `base..head` refs.
+   *
+   * `opened` carries what the artifact could not: the path it was read from, which is this
+   * session's identity for both tab dedupe and progress, and whatever progress was already
+   * recorded against that path — so a review whose tab was closed reopens where it stopped. */
+  createFromReview: (
+    review: ImportedReview,
+    opened: { path: string; progress: ReadProgress },
+  ) => Session;
+  /** The live session opened from `path`, if there is one. The dedupe lookup: one tab per
+   * artifact, so two tabs can never fight over one review's progress record. */
+  findByReviewPath: (path: string) => Session | null;
   update: (session: Session) => void;
   delete: (id: SessionId) => void;
   setActive: (id: SessionId) => void;
@@ -93,6 +104,13 @@ const SessionWithViewStateSalvage = z.object({
   reviewDiff: ReviewDiff.nullable().catch(null),
   reviewSubrange: CommitSelection.nullable().catch(null),
   reviewOrigin: ReviewOrigin.nullable().catch(null),
+  reviewPath: z.string().min(1).nullable().catch(null),
+  // Progress degrades to "unread" rather than taking the session down with it: a reader who
+  // loses their place has lost a convenience, and dropping the whole tab to protect it would
+  // cost them the review.
+  readFiles: ReadProgress.shape.readFiles.catch({}),
+  collapsedFiles: ReadProgress.shape.collapsedFiles.catch([]),
+  readTotal: ReadProgress.shape.readTotal.catch(0),
 });
 
 /** v1 sessions predate `comments`/`layers`; supplying empties lets a clean v1
@@ -116,6 +134,11 @@ type ReviewSeed = {
   overview: ReviewOverview | null;
   reviewDiff: ReviewDiff | null;
   reviewOrigin: ReviewOrigin | null;
+  /** The artifact's path, and the progress already recorded against it — read from the
+   * artifact-scoped store by the open path, so a review reopened after its tab was closed
+   * arrives already carrying where its reader stopped. */
+  reviewPath: string | null;
+  progress: ReadProgress;
 };
 
 const EMPTY_REVIEW_SEED: ReviewSeed = {
@@ -124,6 +147,8 @@ const EMPTY_REVIEW_SEED: ReviewSeed = {
   overview: null,
   reviewDiff: null,
   reviewOrigin: null,
+  reviewPath: null,
+  progress: NO_PROGRESS,
 };
 
 /** A fresh session: git-derived state starts at the creation defaults, and the seed
@@ -143,6 +168,8 @@ function buildSession(source: SessionSource, seed: ReviewSeed): Session {
     reviewDiff: seed.reviewDiff,
     reviewSubrange: null,
     reviewOrigin: seed.reviewOrigin,
+    reviewPath: seed.reviewPath,
+    ...seed.progress,
   };
 }
 
@@ -254,7 +281,7 @@ export function createSessionStore(options: SessionStoreOptions = {}): SessionSt
 
     create: (source) => addSession(buildSession(source, EMPTY_REVIEW_SEED)),
 
-    createFromReview: (review) =>
+    createFromReview: (review, opened) =>
       addSession(
         buildSession(
           { kind: "local", repo: review.repo },
@@ -264,9 +291,14 @@ export function createSessionStore(options: SessionStoreOptions = {}): SessionSt
             overview: review.overview,
             reviewDiff: reviewDiffFor(review),
             reviewOrigin: reviewOriginFor(review),
+            reviewPath: opened.path,
+            progress: opened.progress,
           },
         ),
       ),
+
+    findByReviewPath: (path) =>
+      state.sessions.find((session) => session.reviewPath === path) ?? null,
 
     update: (session) => {
       const index = state.sessions.findIndex((existing) => existing.id === session.id);

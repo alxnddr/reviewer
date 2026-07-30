@@ -27,9 +27,15 @@ export type ReviewOpenFailure = z.infer<typeof ReviewOpenFailure>;
 
 /** The success shape a dialog/drop invoke answers with: an opened review names
  * the session main created for it; `canceled` is the dialog's dismiss (drop and
- * CLI never cancel — they either open or fail). */
+ * CLI never cancel — they either open or fail).
+ *
+ * `created` false is the one-tab-per-artifact case: the review was already open, and this
+ * names the session it is open in. A flag on the same arm rather than an arm of its own,
+ * because every caller does the same thing with the id either way (go to that tab) and only
+ * the feedback differs — a new tab announces itself by appearing, an existing one has to be
+ * pointed at. */
 export const ReviewOpenOutcome = z.discriminatedUnion("kind", [
-  z.object({ kind: z.literal("opened"), sessionId: SessionId }),
+  z.object({ kind: z.literal("opened"), sessionId: SessionId, created: z.boolean().default(true) }),
   z.object({ kind: z.literal("canceled") }),
 ]);
 export type ReviewOpenOutcome = z.infer<typeof ReviewOpenOutcome>;

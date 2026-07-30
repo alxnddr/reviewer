@@ -1,5 +1,6 @@
 import * as z from "zod";
 import { ReviewRef } from "./git";
+import { ReviewProgressSummary } from "./review-progress";
 
 // What the app can say about the reviews sitting in rvw's managed directory without opening
 // any of them. The renderer never touches the filesystem, so main reads the directory, peeks
@@ -44,6 +45,18 @@ export const RecentReview = z.object({
    * reading an implementation detail of `reviewFileName` back out of a string. */
   modified: z.iso.datetime(),
   summary: RecentReviewSummary.nullable(),
+  /** How far through this review its reader got, from the app's own progress store — the
+   * only thing on a row that is not derived from the artifact, because it is the only thing
+   * the artifact does not know. Null for a review nobody has started, which is most of them
+   * and draws nothing.
+   *
+   * A *cached* ratio: the denominator was the file count of the diff the last time marks were
+   * made, and a refs-only review whose branch moved since will have a different one. Listing
+   * the directory cannot afford to re-derive a diff per row to find out, so the row shows the
+   * last honest answer and opening the review recomputes. That is also why a row renders the
+   * counts and never a bare percentage — "12/30" invites the reading "as of when I last read
+   * it" in a way "40%" does not. */
+  progress: ReviewProgressSummary.nullable().default(null),
 });
 export type RecentReview = z.infer<typeof RecentReview>;
 

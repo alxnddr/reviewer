@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { NO_PROGRESS } from "../../shared/review-progress";
 import type { Session } from "../../shared/session";
 import { createReviewOpenQueue, type ReviewOpenQueueDeps } from "./open-queue";
 
@@ -22,6 +23,8 @@ function fakeSession(id: string): Session {
     reviewDiff: null,
     reviewSubrange: null,
     reviewOrigin: null,
+    reviewPath: null,
+    ...NO_PROGRESS,
   };
 }
 

@@ -9,7 +9,9 @@ import type {
   RecentReviewSummary,
   RecentReviewsResponse,
 } from "../../shared/recent-reviews";
+import { hasProgress, type ReviewProgressSummary } from "../../shared/review-progress";
 import { REVIEW_MAX_BYTES } from "./guard";
+import { progressFileName, type ProgressStore } from "./progress";
 
 // Reading rvw's managed reviews directory, for the picker that lists what has been reviewed
 // before. The directory is the CLI's output and this is the app's only look inside it —
@@ -115,6 +117,7 @@ async function summarize(path: string): Promise<RecentReviewSummary | null> {
  * looks like, and it answers with an empty list. Only a directory that exists and refuses to be
  * listed sets `unreadable`. */
 export async function listRecentReviews(
+  progress: ProgressStore,
   env: NodeJS.ProcessEnv = process.env,
   home: string = homedir(),
 ): Promise<RecentReviewsResponse> {
@@ -140,14 +143,43 @@ export async function listRecentReviews(
   );
 
   const kept = found.slice(0, RECENT_MAX);
-  const reviews = await Promise.all(
-    kept.map(
-      async (candidate): Promise<RecentReview> => ({
-        path: candidate.path,
-        modified: candidate.modified.toISOString(),
-        summary: await summarize(candidate.path),
-      }),
-    ),
+  // Progress rides alongside the summaries rather than being fetched per row by the renderer:
+  // this pass already opens every artifact, and one more small read per candidate — all of
+  // them in flight together, like the summaries — is far cheaper than a round trip per row.
+  const [summaries, tallies] = await Promise.all([
+    Promise.all(kept.map((candidate) => summarize(candidate.path))),
+    progress.summaries(kept.map((candidate) => candidate.path)),
+  ]);
+  const reviews = kept.map(
+    (candidate, index): RecentReview => ({
+      path: candidate.path,
+      modified: candidate.modified.toISOString(),
+      summary: summaries[index] ?? null,
+      // Only a *started* review carries one. A row for something nobody has opened should
+      // show no glyph at all, and null says that once here rather than at each of the two
+      // surfaces that render a row.
+      progress: tallyFor(tallies, candidate.path),
+    }),
   );
+
+  // The one place the whole artifact directory is known, so the one place an orphaned
+  // progress record can be recognized as orphaned: anything keyed to a review that is no
+  // longer here. Deliberately over the *found* set, not the capped one — a review pushed
+  // past RECENT_MAX is still on disk, and sweeping its progress because the list was long
+  // would be a silent data loss. Fire-and-forget: the list must not wait on housekeeping.
+  void progress
+    .prune(new Set(found.map((candidate) => progressFileName(candidate.path))))
+    .catch(() => {});
+
   return { dir, reviews, truncated: found.length - kept.length, unreadable: false };
+}
+
+/** A candidate's tally, or null when there is nothing to show — no record, or one whose
+ * reader never marked a file. Both mean "not started", which is a row with no ring. */
+function tallyFor(
+  tallies: ReadonlyMap<string, ReviewProgressSummary>,
+  path: string,
+): ReviewProgressSummary | null {
+  const tally = tallies.get(path);
+  return tally !== undefined && hasProgress(tally) ? tally : null;
 }

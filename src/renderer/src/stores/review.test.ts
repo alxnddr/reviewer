@@ -17,6 +17,7 @@ import {
 import { buildCommentItems, type CommentSlot } from "../lib/diff/comment-annotations";
 import { MULTI_STATUS_PATCH } from "../lib/diff/fixtures";
 import { parsePatch } from "../lib/diff/patch";
+import { NO_PROGRESS } from "../../../shared/review-progress";
 import { NO_COLLAPSED_FILES, NO_READ_FILES } from "../lib/read-progress";
 import { resolveLayerScroll, stepLayer } from "../lib/layers";
 import { UNCOVERED_LAYER_ID } from "../lib/coverage";
@@ -108,6 +109,8 @@ function makeBridge(overrides: Partial<ReviewerBridge>): ReviewerBridge {
         reviewDiff: null,
         reviewSubrange: null,
         reviewOrigin: null,
+        reviewPath: null,
+        ...NO_PROGRESS,
       } satisfies Session),
     ),
     updateSession: vi.fn().mockResolvedValue(undefined),
@@ -193,6 +196,8 @@ function storedSession(id: string, repoPath: string, overrides: Partial<Session>
     reviewDiff: null,
     reviewSubrange: null,
     reviewOrigin: null,
+    reviewPath: null,
+    ...NO_PROGRESS,
     ...overrides,
   };
 }
@@ -807,6 +812,8 @@ describe("useReviewStore.selectAdjacentFile", () => {
       activeCommentId: null,
       readFiles: NO_READ_FILES,
       collapsedFiles: NO_COLLAPSED_FILES,
+      readTotal: 0,
+      reviewPath: null,
       needsDerive: false,
       requestTicket: 1,
     };
@@ -1250,17 +1257,28 @@ describe("session lifecycle", () => {
     expect(bridge.setActiveSession).not.toHaveBeenCalled();
   });
 
-  it("a write-back pending for a closed session is canceled, not sent stale", async () => {
+  it("a write-back pending for a closed session is flushed before the delete, not dropped", async () => {
     vi.useFakeTimers();
     const bridge = makeBridge({});
     await openFixtureRepo(bridge);
 
     useReviewStore.getState().setScrollTop(300);
     useReviewStore.getState().closeSession();
-    await vi.advanceTimersByTimeAsync(WRITE_BACK_DEBOUNCE_MS);
 
-    expect(bridge.updateSession).not.toHaveBeenCalled();
+    // Sent synchronously, inside the close, rather than left to a debounce that would land on
+    // a session main has already dropped. Everything on this session dies with the tab except
+    // its read progress, which main mirrors to the review's own record on the way past — so
+    // the last half-second of reading is exactly what must not be thrown away here.
+    expect(bridge.updateSession).toHaveBeenCalledTimes(1);
+    expect(bridge.updateSession).toHaveBeenCalledWith(
+      expect.objectContaining({ id: SESSION_ID, scrollTop: 300 }),
+    );
     expect(bridge.deleteSession).toHaveBeenCalledWith({ id: SESSION_ID });
+
+    // And nothing more once the window it was scheduled in elapses: the pending timer was
+    // consumed by the flush, not left to fire a second, now-stale update.
+    await vi.advanceTimersByTimeAsync(WRITE_BACK_DEBOUNCE_MS);
+    expect(bridge.updateSession).toHaveBeenCalledTimes(1);
   });
 
   it("opening a repo already open as a tab re-activates that tab instead of duplicating it", async () => {
@@ -1699,6 +1717,14 @@ describe("debounced write-back", () => {
       reviewDiff: null,
       reviewSubrange: null,
       reviewOrigin: null,
+      reviewPath: null,
+      // Progress travels as a record and an array, not the Map and Set the app reads it as —
+      // `persistedSession` is the one seam that converts, and this is what comes out of it.
+      readFiles: {},
+      collapsedFiles: [],
+      // The live count off the loaded diff, not the zero this session was created with: a
+      // persisted denominator is only useful if it tracks the review it is counting.
+      readTotal: 6,
     });
   });
 
@@ -2030,6 +2056,8 @@ describe("useReviewStore layer navigation", () => {
       activeCommentId: null,
       readFiles: NO_READ_FILES,
       collapsedFiles: NO_COLLAPSED_FILES,
+      readTotal: 0,
+      reviewPath: null,
       needsDerive: false,
       requestTicket: 1,
     };
@@ -2148,6 +2176,8 @@ describe("useReviewStore tour doc navigation", () => {
       activeCommentId: null,
       readFiles: NO_READ_FILES,
       collapsedFiles: NO_COLLAPSED_FILES,
+      readTotal: 0,
+      reviewPath: null,
       needsDerive: false,
       requestTicket: 1,
       ...overrides,
@@ -2175,6 +2205,8 @@ describe("useReviewStore tour doc navigation", () => {
       reviewDiff: null,
       reviewSubrange: null,
       reviewOrigin: null,
+      reviewPath: null,
+      ...NO_PROGRESS,
     };
     const bridge = makeBridge({
       listSessions: vi.fn().mockResolvedValue({ sessions: [withDoc], activeSessionId: SESSION_ID }),
@@ -2330,6 +2362,8 @@ describe("useReviewStore comment navigation", () => {
       activeCommentId: null,
       readFiles: NO_READ_FILES,
       collapsedFiles: NO_COLLAPSED_FILES,
+      readTotal: 0,
+      reviewPath: null,
       needsDerive: false,
       requestTicket: 1,
     };
@@ -2493,6 +2527,8 @@ describe("review export actions", () => {
       activeCommentId: null,
       readFiles: NO_READ_FILES,
       collapsedFiles: NO_COLLAPSED_FILES,
+      readTotal: 0,
+      reviewPath: null,
       needsDerive: false,
       requestTicket: 1,
     };
@@ -2746,6 +2782,8 @@ describe("exit gate", () => {
       activeCommentId: null,
       readFiles: NO_READ_FILES,
       collapsedFiles: NO_COLLAPSED_FILES,
+      readTotal: 0,
+      reviewPath: null,
       needsDerive: false,
       requestTicket: 1,
     };
@@ -3001,6 +3039,8 @@ describe("reading progress", () => {
       activeCommentId: null,
       readFiles: NO_READ_FILES,
       collapsedFiles: NO_COLLAPSED_FILES,
+      readTotal: 0,
+      reviewPath: null,
       needsDerive: false,
       requestTicket: 1,
     };
@@ -3052,11 +3092,33 @@ describe("reading progress", () => {
     expect([...active().readFiles.keys()].toSorted()).toEqual(["added.txt", "notes.txt"]);
   });
 
-  it("never schedules a write-back: progress is view state, not session input", () => {
+  it("persists: a reader who quits mid-review comes back to the review mid-read", () => {
     const bridge = makeBridge({});
     vi.stubGlobal("window", { reviewer: bridge });
     useReviewStore.getState().setFileRead("greet.ts", true);
     useReviewStore.getState().setLayerRead("greeting", true);
+    useReviewStore.getState().flushWriteBacks();
+
+    // The marks cross as the wire shape, keyed by path against the signature of what was
+    // read, and the fold that came with each mark rides along — restoring the marks without
+    // the folds would reopen every file the reader had already put away.
+    expect(bridge.updateSession).toHaveBeenCalledTimes(1);
+    const persisted = vi.mocked(bridge.updateSession).mock.calls[0]?.[0];
+    expect(Object.keys(persisted?.readFiles ?? {})).toContain("greet.ts");
+    expect(persisted?.collapsedFiles).toContain("greet.ts");
+  });
+
+  it("a gesture that changes nothing costs no write-back, and so no disk write", () => {
+    const bridge = makeBridge({});
+    vi.stubGlobal("window", { reviewer: bridge });
+    useReviewStore.getState().setFileRead("greet.ts", true);
+    useReviewStore.getState().flushWriteBacks();
+    vi.mocked(bridge.updateSession).mockClear();
+
+    // Already read, marked read again: `markFilesRead` hands back the same map, so the store
+    // never changes and nothing is scheduled. The no-op contract is what keeps a redundant
+    // click from rewriting the review's progress record.
+    useReviewStore.getState().setFileRead("greet.ts", true);
     useReviewStore.getState().flushWriteBacks();
     expect(bridge.updateSession).not.toHaveBeenCalled();
   });

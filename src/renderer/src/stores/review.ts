@@ -156,19 +156,34 @@ export type SessionSlice = {
    * scroll-to-comment all read. */
   activeCommentId: string | null;
   /** How much of the diff the reader has been through: each read file's path against the
-   * signature of the content they read (see `lib/read-progress.ts`). Derived view state
-   * exactly like `activeLayerId` and `activeCommentId` — absent from `persistedSession`,
-   * no write-back on its setters, and never part of the exported artifact: progress is one
-   * person's place in one sitting, not something the review claims about itself. It
-   * survives every tab switch (it lives in the slice, which is keyed by session id) and
-   * nothing else. */
+   * signature of the content they read (see `lib/read-progress.ts`).
+   *
+   * Persisted, unlike the derived view state above it, and it is the one piece of session
+   * state that persists *twice*: into the session, so a reload or a relaunch restores every
+   * open tab, and — for a review session — into the artifact's own progress record, so
+   * closing the tab and reopening the review later resumes rather than restarts. Main owns
+   * the mirroring; from here it is one write-back like any other. Never part of the exported
+   * artifact, though: progress is one person's place in the reading, not something the
+   * review claims about itself. */
   readFiles: ReadFiles;
-  /** Files the code view is showing as a header band only, body folded away. Ephemeral and
-   * unpersisted like `readFiles`, and deliberately *not* derived from it: marking a file
-   * read folds it, so what is still owed rises up the pane, but the header stays a
-   * disclosure — a finished file opens back up in one click and stays open. Only a
-   * gesture ever folds or unfolds a file; nothing springs shut on its own. */
+  /** Files the code view is showing as a header band only, body folded away. Persisted
+   * alongside `readFiles`, and deliberately *not* derived from it: marking a file read folds
+   * it, so what is still owed rises up the pane, but the header stays a disclosure — a
+   * finished file opens back up in one click and stays open. Only a gesture ever folds or
+   * unfolds a file; nothing springs shut on its own. Restoring the marks without the folds
+   * would reopen every file the reader had already put away, which is why it travels with
+   * them rather than starting empty. */
   collapsedFiles: ReadonlySet<string>;
+  /** The `.reviewer.json` this session was opened from, or null for a plain repo session.
+   * Identity only — never rendered, never exported. It is what makes "this review is already
+   * open" and "this review's progress lives here" one question with one answer. */
+  reviewPath: string | null;
+  /** The denominator of the marks as last persisted — how many files the diff held. Carried
+   * rather than derived because it is only ever *read* by surfaces with no diff in hand (the
+   * recents rows, the start screen), and only ever *written* from a loaded one: whenever this
+   * session persists with its diff loaded, the live count replaces it. Between those, it
+   * holds the last honest answer rather than decaying to zero. */
+  readTotal: number;
   /** True from hydration until first activation derives log/branches/diff; a
    * derived slice is never re-derived, so switching back costs zero bridge calls. */
   needsDerive: boolean;
@@ -240,6 +255,13 @@ type ReviewState = {
    * nothing — the flash is the component's timer, and a stale record is inert because the
    * controls value-compare the nonce (`useCopiedFlash`). */
   promptCopy: PromptCopy | null;
+  /** The tab an open request landed on when it turned out to already be open, and a nonce so
+   * asking twice flashes twice. One tab per artifact means a reader who clicks a review they
+   * already have up gets no new tab — and a click that produces no visible change is a click
+   * that reads as broken, however correct it was. The strip pulses the tab instead, which is
+   * the same "here, this one" the browser gives you. Null until it happens; app-level and
+   * transient, like `promptCopy`, never persisted. */
+  revealedSession: { id: SessionId; nonce: number } | null;
   diffStyle: DiffStyle;
   /** Boot hydration: pull main's persisted sessions, derive the active one only. */
   hydrate: () => Promise<void>;
@@ -655,9 +677,10 @@ function setSlice(
  * a disclosure either way, so a finished file is always one click from being read again.
  *
  * Two more jobs beyond `setSlice`: a gesture that changed nothing (both helpers return
- * their input on a no-op) never reaches the store, so a redundant click costs no render;
- * and no write-back is ever scheduled, because progress and folding are derived view
- * state and must not touch the session main persists. */
+ * their input on a no-op) never reaches the store, so a redundant click costs no render and
+ * — since the write-back rides on the change — no disk write either; and what did change is
+ * persisted, through the same debounced write-back as every other session input, so a reader
+ * who quits mid-review comes back to the review mid-read. */
 function applyRead(
   set: Setter,
   get: Getter,
@@ -679,6 +702,7 @@ function applyRead(
     return;
   }
   setSlice(set, get, sessionId, { readFiles, collapsedFiles });
+  scheduleSessionWriteBack(get, sessionId);
 }
 
 /** Matches main's debounce shape (sessions.ts): the first mutation in a window
@@ -809,6 +833,17 @@ function persistedSession(slice: SessionSlice): Session {
     reviewDiff: slice.reviewDiff,
     reviewSubrange: slice.reviewSubrange,
     reviewOrigin: slice.reviewOrigin,
+    reviewPath: slice.reviewPath,
+    // Map and Set are what the app reads progress as; a record and an array are what JSON
+    // and the schema can carry. The conversion lives here, at the one seam, so nothing
+    // downstream has to know the wire shape.
+    readFiles: Object.fromEntries(slice.readFiles),
+    collapsedFiles: [...slice.collapsedFiles],
+    // Refreshed from the diff on screen whenever there is one, so the cached denominator
+    // tracks the review as it is now; a session persisting before its diff has loaded keeps
+    // the count it was restored with rather than publishing a zero the start screen would
+    // render as "0 files".
+    readTotal: slice.diff.phase === "loaded" ? slice.diff.files.length : slice.readTotal,
   };
 }
 
@@ -988,12 +1023,27 @@ function restoredSlice(session: Session): SessionSlice {
     activeLayerId: null,
     lastChapterId: null,
     activeCommentId: null,
-    // Progress starts empty on every launch, like the soloed layer and the focused
-    // comment beside it: a relaunch reopens the review at its overview, unread.
-    readFiles: NO_READ_FILES,
-    collapsedFiles: NO_COLLAPSED_FILES,
+    // Progress comes back with the session, unlike the soloed layer and the focused comment
+    // beside it. Those are where the reader's attention was, which a relaunch is entitled to
+    // reset; this is what they have already done, which it is not. A restored review still
+    // opens on its overview — but the overview now shows how far in they are.
+    ...restoredProgress(session),
+    reviewPath: session.reviewPath,
     needsDerive: true,
     requestTicket: 0,
+  };
+}
+
+/** The persisted wire shape back into what the app reads it as. The mirror of
+ * `persistedSession`'s conversion, and kept next to the only two places that build a slice
+ * so neither can drift from the other. */
+function restoredProgress(
+  session: Session,
+): Pick<SessionSlice, "readFiles" | "collapsedFiles" | "readTotal"> {
+  return {
+    readFiles: new Map(Object.entries(session.readFiles)),
+    collapsedFiles: new Set(session.collapsedFiles),
+    readTotal: session.readTotal,
   };
 }
 
@@ -1176,9 +1226,31 @@ async function applyReviewOpen(
     return;
   }
   set({ reviewOpenFailure: null });
+  const { sessionId, created } = response.value;
+  // Captured before the await, for the same reason `openRepository` captures it: the reader
+  // may have switched tabs while the picker was up, and this is a fact about where the errand
+  // started.
+  const from = get().activeStartTabId;
+  // `syncSessions` is what adds the new slice — and what hands the start tab its slot when a
+  // review *arrives*. An already-open review arrives nowhere, so it takes neither, and the
+  // start tab has to be dismissed here instead.
   await get().syncSessions();
-  get().activateSession(response.value.sessionId);
+  get().activateSession(sessionId);
+  if (created) {
+    return;
+  }
+  revealSequence += 1;
+  set({ revealedSession: { id: sessionId, nonce: revealSequence } });
+  // Spent all the same: it did its job, the tab it would have become was already open. The
+  // same closing rule `openRepository` applies when a repo turns out to be open already.
+  if (from !== null) {
+    get().closeStartTab(from);
+  }
 }
+
+/** Monotonic, module-scoped, and never rendered — like `promptCopySequence`, it only has to
+ * differ from the value before it so a second reveal of the same tab is seen as a new one. */
+let revealSequence = 0;
 
 /** A review session's brush over its `base..head` ranged log, and the subrange to
  * keep: the whole review by default; the saved subrange when it still fits; else the
@@ -1207,6 +1279,7 @@ export const useReviewStore = create<ReviewState>((set, get) => ({
   reviewOpenFailure: null,
   reviewExportFailure: null,
   promptCopy: null,
+  revealedSession: null,
   diffStyle: "split",
 
   hydrate: async () => {
@@ -1331,12 +1404,16 @@ export const useReviewStore = create<ReviewState>((set, get) => ({
     if (id === null || get().sessions[id] === undefined) {
       return;
     }
-    // A write-back still in its debounce window would target a session main is
-    // about to delete; cancel it rather than send a knowingly stale update.
+    // A write-back still in its debounce window is *sent*, not dropped. Everything else on a
+    // closing session dies with it, but progress outlives the tab — it is mirrored to the
+    // artifact's own record — and the last half-second of it is exactly the part a reader
+    // just did. Send then delete: main applies the update to a session it still has, mirrors
+    // the marks, and drops the session on the next message.
     const pending = pendingSessionWrites.get(id);
     if (pending !== undefined) {
       clearTimeout(pending);
       pendingSessionWrites.delete(id);
+      sendSessionWriteBack(get, id);
     }
     const tabs = get().tabs;
     const index = tabs.findIndex((stop) => stop.kind === "session" && stop.id === id);
@@ -1476,8 +1553,11 @@ export const useReviewStore = create<ReviewState>((set, get) => ({
       activeLayerId: null,
       lastChapterId: null,
       activeCommentId: null,
+      // A fresh repo session has read nothing, and has no artifact to have read it against.
       readFiles: NO_READ_FILES,
       collapsedFiles: NO_COLLAPSED_FILES,
+      readTotal: 0,
+      reviewPath: null,
       needsDerive: false,
       requestTicket: 0,
     };
@@ -2114,6 +2194,7 @@ export const useReviewStore = create<ReviewState>((set, get) => ({
     const collapsedFiles = withCollapsed(slice.collapsedFiles, [path], collapsed);
     if (collapsedFiles !== slice.collapsedFiles) {
       setSlice(set, get, id, { collapsedFiles });
+      scheduleSessionWriteBack(get, id);
     }
   },
 

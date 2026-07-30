@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import type { ImportedReview } from "../shared/review";
+import { NO_PROGRESS } from "../shared/review-progress";
 import { SessionStoreFile, type Session, type SessionSource } from "../shared/session";
 import { createSessionStore } from "./sessions";
 import { flushSessionsThenTerminateGit } from "./shutdown";
@@ -35,6 +36,10 @@ function localSource(path: string): SessionSource {
   return { kind: "local", repo: { path, name: "repo" } };
 }
 
+/** The artifact an opened review was read from — identity the store only stores, so any
+ * stable path serves. */
+const REVIEW_PATH = "/reviews/app-main-abc.reviewer.json";
+
 function persistedSession(overrides: Partial<Session> = {}): Session {
   return {
     id: randomUUID(),
@@ -50,6 +55,8 @@ function persistedSession(overrides: Partial<Session> = {}): Session {
     reviewDiff: null,
     reviewSubrange: null,
     reviewOrigin: null,
+    reviewPath: null,
+    ...NO_PROGRESS,
     ...overrides,
   };
 }
@@ -103,7 +110,7 @@ describe("createSessionStore", () => {
       layers: [{ id: "l1", label: "Layer", summary: "s", ranges: [] }],
     };
 
-    const created = store.createFromReview(review);
+    const created = store.createFromReview(review, { path: REVIEW_PATH, progress: NO_PROGRESS });
     store.flush();
 
     // The review's repo becomes the session source; comments and layers ride along.
@@ -133,7 +140,7 @@ describe("createSessionStore", () => {
       layers: [],
     };
 
-    const created = store.createFromReview(review);
+    const created = store.createFromReview(review, { path: REVIEW_PATH, progress: NO_PROGRESS });
     store.flush();
 
     // The embedded patch freezes the diff: it is pinned verbatim so every
@@ -283,6 +290,8 @@ describe("createSessionStore", () => {
       reviewDiff: null,
       reviewSubrange: null,
       reviewOrigin: null,
+      reviewPath: null,
+      ...NO_PROGRESS,
     };
     expect(store.list()).toEqual({ sessions: [migrated], activeSessionId: id });
 

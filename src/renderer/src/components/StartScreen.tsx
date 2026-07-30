@@ -5,10 +5,7 @@ import { DiffField } from "@/components/DiffField";
 import { GitFailureText } from "@/components/GitFailureText";
 import { OnboardingCard } from "@/components/Onboarding";
 import { ReviewHistory } from "@/components/ReviewHistory";
-import { START_INSET, StartHeading, StartRule } from "@/components/StartChrome";
-import { Button } from "@/components/ui/button";
-import { ShortcutHint } from "@/components/ui/kbd";
-import { TooltipHint } from "@/components/ui/tooltip";
+import { START_INSET, StartHeading } from "@/components/StartChrome";
 import { cn } from "@/lib/utils";
 import { useOnboardingStore } from "@/stores/onboarding";
 import { useRecentReviewsStore } from "@/stores/recent-reviews";
@@ -24,12 +21,11 @@ import { useReviewStore } from "@/stores/review";
 // then never saw anything resembling it again. The guide can afford to be a card — it is shown
 // once, and it is *about* the app rather than part of it. This screen is part of the app.
 //
-// The shape is a pane, not a document: a header that stays put, one scrolling list, a footer
-// that stays put. The instructions at the top are two lines a reader reads once and scrolls
-// past forever, so they do not scroll — and the list, which is the part with more of it than
-// fits, is the part that moves. It is also the order of the two errands: asking for a review is
-// the only thing that works on a fresh install, and coming back to one is the errand every day
-// after that.
+// The shape is a pane, not a document: a header that stays put and one scrolling list under it.
+// The instructions at the top are two lines a reader reads once and scrolls past forever, so
+// they do not scroll — and the list, which is the part with more of it than fits, is the part
+// that moves. It is also the order of the two errands: asking for a review is the only thing
+// that works on a fresh install, and coming back to one is the errand every day after that.
 //
 // The screen has two things on it and it names them — "Ask your agent for a review", "Recent
 // reviews", one heading each, in one register (see StartChrome). That is what divides the page:
@@ -38,15 +34,13 @@ import { useReviewStore } from "@/stores/review";
 // remain are held to the reading column for the same reason — a full-bleed rule across a window
 // this wide is louder than the boundary it marks.
 //
-// The two quiet doors at the foot — open a review file, read the guide again — are real, and
-// neither is the answer to "what now".
+// Nothing sits at the foot. A pair of quiet doors used to — open a review file, read the guide
+// again — and both were answers to questions this screen does not raise: the list *is* how a
+// reader comes back to a review, and a file picker beside it only matters for the review that is
+// not in the list. Both still exist where a reader looks for them by habit rather than by
+// reading: ⇧⌘O and File ▸ Open Review… for the picker.
 //
 // While the guide is up it owns the whole surface, and none of this shows behind it.
-
-/** What a door at the foot of this screen wears: the ghost variant's fill replaced by the wash
- * every other quiet control on a content surface uses (`bg-border/50`), so the pair reads as a
- * footer rather than as two buttons. */
-const DOOR = "text-text-muted hover:bg-border/50 hover:text-foreground dark:hover:bg-border/50";
 
 type StartScreenProps = {
   /** A failed open has no session pane to report in; this screen carries it. */
@@ -91,7 +85,7 @@ export function StartScreen({ failure }: StartScreenProps): ReactElement {
           that has nothing to do with their content. */}
       <header className="shrink-0 px-6 pt-4">
         {/* Inset to the rows' own text edge (see START_INSET) so every line on the screen —
-            headings, prompt, search glyph, rows, footer — starts at one x. */}
+            headings, prompt, search glyph, rows — starts at one x. */}
         <div className={cn("mx-auto max-w-3xl", START_INSET)}>
           <StartHeading>Ask your agent for a review</StartHeading>
           <div className="mt-2">
@@ -107,55 +101,6 @@ export function StartScreen({ failure }: StartScreenProps): ReactElement {
       </header>
 
       <ReviewHistory />
-
-      <footer className="shrink-0 px-6 pb-1.5">
-        {/* No inset on the row itself: these are buttons, and a button's own padding is already
-            the same 10px, so its label lands on the shared edge while its hover fill spills into
-            the gutter exactly as a row's does. */}
-        <div className="mx-auto w-full max-w-3xl">
-          <StartRule />
-          <div className="flex flex-wrap items-center justify-between gap-x-2 pt-1.5">
-            <OpenReviewDoor />
-            <GuideDoor />
-          </div>
-        </div>
-      </footer>
     </div>
-  );
-}
-
-/** The one picker offered here: a review someone sent, or one this app wrote and the reader has
- * moved out of `~/.rvw/reviews`.
- *
- * "Open a repository…" is deliberately *not* beside it. Browsing a repository's own diff with no
- * review in it is real and still here — ⌘O, and File ▸ Open Repository — but a button for it on
- * this screen teaches every new reader that Reviewer is a diff viewer you drive by picking
- * folders, which is the one wrong idea this app can leave someone with. Picking a folder is a
- * thing you already know how to do; asking an agent for a review is not, yet. So the menu keeps
- * it and this screen does not repeat it. */
-function OpenReviewDoor(): ReactElement {
-  const openReview = useReviewStore((state) => state.openReview);
-
-  return (
-    <TooltipHint
-      side="top"
-      align="start"
-      content={<ShortcutHint action="Open a review file" keys="⇧⌘O" />}
-    >
-      <Button variant="ghost" size="sm" className={DOOR} onClick={() => void openReview()}>
-        Open a review file…
-      </Button>
-    </TooltipHint>
-  );
-}
-
-/** The way back into the first-run guide, for a reader who skipped it — and the only place in
- * the app that offers it. */
-function GuideDoor(): ReactElement {
-  const showGuide = useOnboardingStore((state) => state.show);
-  return (
-    <Button variant="ghost" size="sm" className={DOOR} onClick={showGuide}>
-      How this works
-    </Button>
   );
 }
