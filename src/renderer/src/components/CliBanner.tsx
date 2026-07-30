@@ -1,11 +1,10 @@
 import { useEffect, type ReactElement } from "react";
-import { LoaderCircle, XIcon } from "lucide-react";
+import { LoaderCircle } from "lucide-react";
 import type { CliInstallProblem } from "../../../shared/cli";
 import { Button } from "@/components/ui/button";
-import { GLASS_DIVIDER, GLASS_MUTED, GLASS_PRIMARY } from "@/components/Glass";
-import { TooltipHint } from "@/components/ui/tooltip";
+import { GLASS_DIVIDER, GLASS_PRIMARY } from "@/components/Glass";
 import { cn } from "@/lib/utils";
-import { useOnboardingStore } from "@/stores/onboarding";
+import { cliNoticeShowing, useOnboardingStore } from "@/stores/onboarding";
 
 // The standing notice that the app has no way in.
 //
@@ -21,17 +20,19 @@ import { useOnboardingStore } from "@/stores/onboarding";
 // permanent horizontal rule across the top of someone's diff. A pill laid over the content
 // belongs to the app, not to the page under it.
 //
-// Dismissing it lasts the session, never longer: see `cliBannerDismissed`.
+// It cannot be dismissed, and it used to have a close button that made no sense: waving off
+// "this app cannot receive anything" leaves a reader with a window that quietly does nothing,
+// and the one control that would make the notice untrue is already on it. So there is no X —
+// the notice goes when the launcher is reachable, which is the only thing that should take it
+// away. `cliNoticeShowing` in the onboarding store owns that condition.
 
 export function CliBanner(): ReactElement | null {
   const cli = useOnboardingStore((state) => state.cli);
   const installing = useOnboardingStore((state) => state.installing);
   const problem = useOnboardingStore((state) => state.problem);
-  const dismissed = useOnboardingStore((state) => state.cliBannerDismissed);
   const guideOpen = useOnboardingStore((state) => state.open);
   const refreshCli = useOnboardingStore((state) => state.refreshCli);
   const installCli = useOnboardingStore((state) => state.installCli);
-  const dismiss = useOnboardingStore((state) => state.dismissCliBanner);
 
   // Every launch, and every return to the window: `rvw` is installed from a terminal at
   // least as often as from this app (`bun run build:cli`, a fresh clone, a reinstall), and
@@ -46,8 +47,12 @@ export function CliBanner(): ReactElement | null {
   // Two ways to be unreachable — nothing installed, or something else answering to `rvw` —
   // and one button for both: installing writes our launcher over every rival it finds, so
   // there is never a state this notice describes and cannot resolve.
+  //
+  // The condition itself lives in the store (`cliNoticeShowing`) because the start screen has
+  // to know the answer too — this pill floats over the top of it. The null check stays here:
+  // it is what narrows `cli` for everything below.
   const shadowed = cli !== null && cli.shadowedBy !== null;
-  if (cli === null || !cli.supported || dismissed || guideOpen || (cli.installed && !shadowed)) {
+  if (cli === null || !cliNoticeShowing({ cli, open: guideOpen })) {
     return null;
   }
 
@@ -79,17 +84,6 @@ export function CliBanner(): ReactElement | null {
           {installing && <LoaderCircle aria-hidden="true" className="animate-spin" />}
           {problem === null ? (shadowed ? "Fix" : "Install") : "Try again"}
         </Button>
-        <TooltipHint content="Not now" side="bottom" align="end">
-          <Button
-            variant="ghost"
-            size="icon-sm"
-            aria-label="Dismiss"
-            className={cn("rounded-full", GLASS_MUTED)}
-            onClick={dismiss}
-          >
-            <XIcon className="size-3.5" />
-          </Button>
-        </TooltipHint>
       </div>
     </div>
   );

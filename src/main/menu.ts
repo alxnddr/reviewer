@@ -44,6 +44,16 @@ export function installApplicationMenu(): void {
     {
       label: "File",
       submenu: [
+        // First, and above the two pickers, because it is the ordinary way in: a tab showing
+        // the start screen, where a review is asked for and past ones are listed. Through
+        // `requestMenuCommand` rather than the tab command — with no window open, ⌘T means
+        // "give me one", and the window it creates opens on this very screen.
+        {
+          label: "New Tab",
+          accelerator: "CmdOrCtrl+T",
+          click: () => requestMenuCommand(IpcEvent.menuNewTab),
+        },
+        { type: "separator" },
         {
           label: "Open Repository…",
           accelerator: "CmdOrCtrl+O",

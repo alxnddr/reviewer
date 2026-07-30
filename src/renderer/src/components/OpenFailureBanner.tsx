@@ -8,7 +8,7 @@ import { useReviewStore } from "@/stores/review";
 
 /** A failed open while a session is active: app-level state with no session
  * pane to report in, surfaced as a dismissible bar under the title bar.
- * Session-less failures render on the empty state instead. */
+ * Session-less failures render on the start screen instead. */
 export function OpenFailureBanner(): ReactElement | null {
   const failure = useReviewStore((state) =>
     state.activeSessionId === null ? null : state.openFailure,

@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { CliInstallResult, CliStatus } from "../../../shared/cli";
 import type { ReviewerBridge } from "../../../shared/ipc";
-import { ONBOARDING_STEPS, useOnboardingStore } from "./onboarding";
+import { cliNoticeShowing, ONBOARDING_STEPS, useOnboardingStore } from "./onboarding";
 
 const MISSING: CliStatus = {
   supported: true,
@@ -123,5 +123,42 @@ describe("the first-run guide's state", () => {
     await expect(useOnboardingStore.getState().hydrate()).resolves.toBeUndefined();
     await expect(useOnboardingStore.getState().refreshCli()).resolves.toBeUndefined();
     expect(useOnboardingStore.getState().open).toBe(false);
+  });
+});
+
+describe("cliNoticeShowing", () => {
+  // The standing notice's own condition, asserted here because two surfaces depend on it: the
+  // pill that renders it, and the start screen that has to hold room for it (it floats over
+  // that screen's first line).
+  const base = { cli: MISSING, open: false };
+
+  it("is up while nothing is installed", () => {
+    expect(cliNoticeShowing(base)).toBe(true);
+  });
+
+  it("is up while another launcher answers first, installed or not", () => {
+    expect(cliNoticeShowing({ ...base, cli: { ...PRESENT, shadowedBy: "~/.local/bin/rvw" } })).toBe(
+      true,
+    );
+  });
+
+  it("is down once the launcher is reachable", () => {
+    expect(cliNoticeShowing({ ...base, cli: PRESENT })).toBe(false);
+  });
+
+  it("is down before main has answered, and off macOS, where there is nothing to install", () => {
+    expect(cliNoticeShowing({ ...base, cli: null })).toBe(false);
+    expect(cliNoticeShowing({ ...base, cli: { ...MISSING, supported: false } })).toBe(false);
+  });
+
+  it("is down while the guide is up, which says it better", () => {
+    expect(cliNoticeShowing({ ...base, open: true })).toBe(false);
+  });
+
+  it("has no way to be waved off — it stands until the launcher is reachable", () => {
+    // The store carries no dismissal to pass in: an app that cannot receive a review is not a
+    // preference the reader gets to switch off (see CliBanner).
+    expect(cliNoticeShowing(base)).toBe(true);
+    expect(cliNoticeShowing({ ...base, cli: { ...PRESENT, shadowedBy: null } })).toBe(false);
   });
 });

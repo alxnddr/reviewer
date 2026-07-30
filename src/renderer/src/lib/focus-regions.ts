@@ -40,6 +40,10 @@ const REGION_SELECTORS = [
   // document, whichever is the current stop — never both, so one selector each is enough.
   '[role="region"][aria-label="Diff"]',
   "[data-overview-doc]",
+  // The start screen's review list, which is the only region that screen has: the rest of it
+  // is a two-line header and a footer of buttons, both of them ordinary Tab stops. Landing
+  // here is what gives PgDn and the arrows the list to move.
+  "[data-review-history]",
 ] as const;
 
 /** Where in `regions` the focus currently sits — the region that *contains* the focused

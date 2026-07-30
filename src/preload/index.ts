@@ -73,6 +73,7 @@ const bridge: ReviewerBridge = {
   onCopyAllCommentsPromptCommand: (listener) =>
     subscribeCommand(IpcEvent.menuCopyAllCommentsPrompt, listener),
   onSessionsChanged: (listener) => subscribeCommand(IpcEvent.sessionsChanged, listener),
+  onNewTabCommand: (listener) => subscribeCommand(IpcEvent.menuNewTab, listener),
   onCloseTabCommand: (listener) => subscribeCommand(IpcEvent.menuCloseTab, listener),
   onCycleTabCommand: (listener) => {
     const unsubscribes = [

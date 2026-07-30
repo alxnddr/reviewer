@@ -86,6 +86,7 @@ const GROUPS: Group[] = [
       { keys: ["⌘O"], action: "Open a repository" },
       { keys: ["⇧⌘O"], action: "Open a review" },
       { keys: ["⇧⌘R"], action: "Recent reviews" },
+      { keys: ["⌘T"], action: "New tab" },
       { keys: ["⌘1", "⌘9"], action: "Switch to a tab by position", range: true },
       { keys: ["⌃⇥"], action: "Cycle tabs" },
       { keys: ["⌘W"], action: "Close the tab" },
@@ -118,7 +119,7 @@ function useShortcutsShortcut(toggle: () => void): void {
 }
 
 /** The keyboard reference, on `?`. Mounted at the app level so it opens over whichever
- * surface the reader is on — the diff, the doc, or the empty state before any of them. */
+ * surface the reader is on — the diff, the doc, or the start screen before any of them. */
 export function ShortcutsDialog(): ReactElement {
   const [open, setOpen] = useState(false);
   useShortcutsShortcut(() => setOpen((value) => !value));

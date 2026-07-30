@@ -26,24 +26,27 @@ wrong code. Reviews are files on your disk — no account, no server.
 ## Use it
 
 Prompt for the review the way you already prompt for it — your skill, your rules, your wording — and
-add one clause saying where the findings go: *…then present the findings using the rvw CLI.*
+add one clause saying where the findings go: *…then present the findings using the rvw CLI.* The
+app's own start screen shows this line with that clause marked, and a button that copies just the
+clause.
 
 Below, `/code-review` is Claude Code's built-in review skill — it stands in for whatever you already
 use, and only that first half changes from setup to setup:
 
 ```
-/code-review — then present the findings using the rvw CLI.
+/code-review this branch against main — then present the findings using the rvw CLI.
 ```
 
 `rvw` tells your agent the rest — the draft format and the guidance for building the tour ship with
 the CLI as a skill, so none of it has to live in your prompt. The commit range is worked out for
 you, and the app opens as soon as the review is written.
 
-Reviews land in `~/.rvw/reviews/`; the app lists them newest-first under **File ▸ Recent Reviews**
-(⇧⌘R). They keep git refs rather than a copy of the diff, so the app rebuilds the change from your
-branch every time you open it — which also means a review opens only where the repo is. To send one
-to a machine without the checkout, `rvw emit --embed-patch` packs the diff into the file itself.
-`rvw --help` has the rest.
+Reviews land in `~/.rvw/reviews/`. The start screen — the window with no review open, and ⌘T for a
+tab of it beside one — lists the recent ones newest-first; **File ▸ Recent Reviews** (⇧⌘R) searches
+all of them. Reviews keep git refs rather than a copy of the diff, so the app rebuilds the change
+from your branch every time you open it — which also means a review opens only where the repo is. To
+send one to a machine without the checkout, `rvw emit --embed-patch` packs the diff into the file
+itself. `rvw --help` has the rest.
 
 ## Install
 

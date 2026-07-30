@@ -6,7 +6,7 @@ import { filterRecents, stepIndex } from "../lib/recent-reviews";
 
 // The recents picker's state, kept out of the review store for the same reason the onboarding
 // guide's is: nothing here belongs to a session, and the picker has to work before there is
-// one — the empty state is exactly where it matters most.
+// one — the start screen, which lists reviews itself, is exactly where it matters most.
 //
 // The list is never cached across openings. `rvw emit` writes into that directory while this
 // window is running — that is the entire loop the app is built around — so a list held from
@@ -24,7 +24,7 @@ type RecentReviewsState = {
   /** `idle` before the first read of a given opening — distinct from `loaded` with no rows,
    * which is the real "you have no reviews" answer and says something quite different. */
   phase: "idle" | "loading" | "loaded";
-  /** Where main looked. Shown in the empty state, so "nothing here" names a real place. */
+  /** Where main looked. Shown under both lists, so "nothing here" names a real place. */
   dir: string | null;
   reviews: RecentReview[];
   /** Artifacts past the cap, left off the end of the list. Reported, never swallowed. */

@@ -1,4 +1,5 @@
 import type { BranchList, LogEntry } from "../../../shared/git";
+import type { RecentReview } from "../../../shared/recent-reviews";
 import type { Comment, ReviewLayer, ReviewOverview } from "../../../shared/review";
 import {
   buildHugeAdditionPatch,
@@ -14,6 +15,7 @@ import {
   withCollapsed,
 } from "../lib/read-progress";
 import { useOnboardingStore } from "../stores/onboarding";
+import { useRecentReviewsStore } from "../stores/recent-reviews";
 import { useReviewStore, type SessionSlice } from "../stores/review";
 
 const HOUR_MS = 3600 * 1000;
@@ -285,12 +287,21 @@ function readFixture(
   };
 }
 
+/** One inactive tab to seed beside the active one. A `title` makes it a *review* session,
+ * which is what the strip is mostly full of in practice and what the naming rule is really
+ * about; without one it is a plain repository session, named after its folder. */
+type SiblingSpec = { name: string; title?: string; head?: string };
+
 /** A derived sibling slice for the tab-strip states; id must be a unique uuid. */
-function siblingSlice(ordinal: number, name: string): SessionSlice {
+function siblingSlice(ordinal: number, spec: SiblingSpec): SessionSlice {
   const digit = (ordinal % 10).toString();
+  const { name, title } = spec;
+  const repo = { path: `/preview/${name}`, name };
+  const head = spec.head ?? `feature/${name}`;
+  const review = title === undefined ? null : { ...repo, base: "main", head };
   return {
     id: `${digit.repeat(8)}-${digit.repeat(4)}-4000-8000-${digit.repeat(12)}`,
-    repo: { path: `/preview/${name}`, name },
+    repo,
     log: null,
     branches: null,
     brush: null,
@@ -303,10 +314,11 @@ function siblingSlice(ordinal: number, name: string): SessionSlice {
     commitSelection: null,
     comments: [],
     layers: [],
-    reviewDiff: null,
+    reviewDiff: review === null ? null : { kind: "refs", base: review.base, head: review.head },
     reviewSubrange: null,
-    reviewOrigin: null,
-    overview: null,
+    reviewOrigin:
+      review === null ? null : { repo, base: review.base, head: review.head, patch: null },
+    overview: title === undefined ? null : { title, body: "" },
     overviewOpen: false,
     lastChapterId: null,
     activeLayerId: null,
@@ -320,19 +332,95 @@ function siblingSlice(ordinal: number, name: string): SessionSlice {
 
 /** Adds inactive sibling tabs around whatever state already seeded the active
  * session — key insertion order is tab order, so `before`/`after` place them. */
-function seedSiblingTabs(before: string[], after: string[]): void {
+function seedSiblingTabs(before: SiblingSpec[], after: SiblingSpec[]): void {
   const state = useReviewStore.getState();
   const sessions: Record<string, SessionSlice> = {};
-  for (const [index, name] of before.entries()) {
-    const sibling = siblingSlice(index + 1, name);
+  for (const [index, spec] of before.entries()) {
+    const sibling = siblingSlice(index + 1, spec);
     sessions[sibling.id] = sibling;
   }
   Object.assign(sessions, state.sessions);
-  for (const [index, name] of after.entries()) {
-    const sibling = siblingSlice(before.length + index + 1, name);
+  for (const [index, spec] of after.entries()) {
+    const sibling = siblingSlice(before.length + index + 1, spec);
     sessions[sibling.id] = sibling;
   }
-  useReviewStore.setState({ sessions });
+  // The strip is explicit state (see `tabs`), so a seeded store has to seed it too — one stop
+  // per session, in this order, plus whatever start tabs the state opened afterwards.
+  useReviewStore.setState({
+    sessions,
+    tabs: Object.keys(sessions).map((id) => ({ kind: "session", id })),
+  });
+}
+
+/** The reviews directory as the start screen sees it: a spread of ages so every date band is
+ * inhabited, an untitled review (named by its range), one that could not be read, and one
+ * self-contained artifact. Seeded rather than fetched — the gates run in a plain browser,
+ * where there is no bridge to answer `reviews:recent`. */
+function fixtureRecents(): RecentReview[] {
+  const rows: [hoursAgo: number, repo: string, title: string | null, comments: number][] = [
+    [1, "reviewer", "Name tabs after the review, not the repository", 4],
+    [5, "reviewer", "Drop the env-var fallback from settings", 2],
+    [9, "api-server", "Split the ingest worker in two", 7],
+    [26, "api-server", null, 1],
+    [50, "dotfiles", "Move the shell config under XDG", 0],
+    [96, "reviewer", "Anchor comments against the real diff", 11],
+    [200, "web-app", "Rewrite the onboarding flow", 3],
+    [400, "notes", "Retire the legacy exporter", 5],
+    [1400, "playground", "First pass at the parser", 2],
+  ];
+  const reviews: RecentReview[] = rows.map(([hoursAgo, repo, title, comments], index) => ({
+    path: `/Users/demo/.rvw/reviews/${repo}-main-feature-${index}.reviewer.json`,
+    modified: new Date(Date.now() - hoursAgo * HOUR_MS).toISOString(),
+    summary: {
+      repoPath: `/Users/demo/work/${repo}`,
+      repoName: repo,
+      base: "main",
+      head: index % 3 === 0 ? `feature/branch-${index}` : "a".repeat(40),
+      title,
+      comments,
+      layers: (index % 4) + 1,
+      portable: index === 2,
+    },
+  }));
+  // A file named like an artifact that is not one: listed, and honest about it.
+  reviews.splice(3, 0, {
+    path: "/Users/demo/.rvw/reviews/half-written-emit.reviewer.json",
+    modified: new Date(Date.now() - 20 * HOUR_MS).toISOString(),
+    summary: null,
+  });
+  return reviews;
+}
+
+/** Puts the recents store where a real one lands after a read, so the start screen's list is
+ * populated in the browser. `extra` pads the count past what the screen shows, which is what
+ * makes the "search all N" door and the "most recent of N" footnote appear. */
+function seedRecents(reviews: RecentReview[], extra = 0): void {
+  const padded = [
+    ...reviews,
+    ...Array.from({ length: extra }, (_, index) => ({
+      path: `/Users/demo/.rvw/reviews/older-${index}.reviewer.json`,
+      modified: new Date(Date.now() - (2000 + index * 24) * HOUR_MS).toISOString(),
+      summary: {
+        repoPath: "/Users/demo/work/reviewer",
+        repoName: "reviewer",
+        base: "main",
+        head: `feature/old-${index}`,
+        title: `An older review (${index})`,
+        comments: index % 5,
+        layers: 1,
+        portable: false,
+      },
+    })),
+  ];
+  useRecentReviewsStore.setState({
+    phase: "loaded",
+    dir: "/Users/demo/.rvw/reviews",
+    reviews: padded,
+    truncated: 0,
+    unreadable: false,
+    query: "",
+    activeIndex: padded.length > 0 ? 0 : -1,
+  });
 }
 
 /** Boots the store as if one hydrated, derived session were active. */
@@ -371,6 +459,7 @@ function seedSession(overrides: Partial<SessionSlice>): void {
   useReviewStore.setState({
     boot: "ready",
     sessions: { [slice.id]: slice },
+    tabs: [{ kind: "session", id: slice.id }],
     activeSessionId: slice.id,
   });
 }
@@ -705,8 +794,20 @@ export function applyPreviewState(): void {
       seedSession({
         diff: { phase: "loaded", loadId: 1, files },
         selectedFilePath: files[0]?.path ?? null,
+        // A review session, so the active tab is named by its title like the strip's others.
+        overview: fixtureOverview(),
+        reviewOrigin: {
+          repo: { path: "/preview/fixture", name: "fixture" },
+          base: "main",
+          head: "feature/brush-selection",
+          patch: null,
+        },
+        reviewDiff: { kind: "refs", base: "main", head: "feature/brush-selection" },
       });
-      seedSiblingTabs(["reviewer"], ["web-app"]);
+      seedSiblingTabs(
+        [{ name: "reviewer", title: "Name tabs after the review, not the repository" }],
+        [{ name: "web-app" }],
+      );
       break;
     }
     case "tabs-overflow": {
@@ -716,8 +817,21 @@ export function applyPreviewState(): void {
         selectedFilePath: files[0]?.path ?? null,
       });
       seedSiblingTabs(
-        ["reviewer", "api-server", "very-long-repository-name", "dotfiles"],
-        ["notes", "pierre-diffs", "electron-vite", "playground"],
+        [
+          { name: "reviewer", title: "Drop the env-var fallback from settings" },
+          { name: "api-server", title: "Split the ingest worker in two" },
+          { name: "very-long-repository-name" },
+          // Two tabs whose reviews were given the same title, in the same project: the
+          // qualifier has to fall through to the branch to tell them apart.
+          { name: "dotfiles", title: "Move the shell config under XDG", head: "xdg" },
+          { name: "dotfiles", title: "Move the shell config under XDG", head: "xdg-2" },
+        ],
+        [
+          { name: "notes", title: "Retire the legacy exporter" },
+          { name: "pierre-diffs" },
+          { name: "electron-vite" },
+          { name: "playground", title: "First pass at the parser" },
+        ],
       );
       break;
     }
@@ -727,7 +841,7 @@ export function applyPreviewState(): void {
         diff: { phase: "loaded", loadId: 1, files },
         selectedFilePath: files[0]?.path ?? null,
       });
-      seedSiblingTabs(["reviewer"], []);
+      seedSiblingTabs([{ name: "reviewer" }], []);
       useReviewStore.setState({
         openFailure: { code: "notARepo", path: "/Users/demo/Downloads/not-a-repo" },
       });
@@ -741,7 +855,7 @@ export function applyPreviewState(): void {
     case "onboarding-cli":
     case "onboarding-cli-installed":
     case "onboarding-prompt": {
-      useReviewStore.setState({ boot: "ready", sessions: {}, activeSessionId: null });
+      useReviewStore.setState({ boot: "ready", sessions: {}, tabs: [], activeSessionId: null });
       const installed = state === "onboarding-cli-installed";
       useOnboardingStore.setState({
         open: true,
@@ -751,13 +865,68 @@ export function applyPreviewState(): void {
       break;
     }
     case "no-sessions": {
-      // The empty state proper: the guide already run, nothing open. Same card, same
-      // backdrop, inside the content pane rather than over the whole window.
-      useReviewStore.setState({ boot: "ready", sessions: {}, activeSessionId: null });
+      // The start screen proper: the guide already run, nothing open, a machine with a
+      // history of reviews behind it. The prompt at the top, the banded list under it, and
+      // more reviews than the page shows — so the handoff to the picker is visible too.
+      useReviewStore.setState({ boot: "ready", sessions: {}, tabs: [], activeSessionId: null });
       useOnboardingStore.setState({
         open: false,
         cli: { supported: true, installed: true, path: "/usr/local/bin/rvw", shadowedBy: null },
       });
+      seedRecents(fixtureRecents(), 14);
+      break;
+    }
+    case "start-first-run": {
+      // The same screen on a machine that has never had a review on it: nothing to come
+      // back to, so the list is the sentence that says so and the two other ways in.
+      useReviewStore.setState({ boot: "ready", sessions: {}, tabs: [], activeSessionId: null });
+      useOnboardingStore.setState({
+        open: false,
+        cli: { supported: true, installed: true, path: "/usr/local/bin/rvw", shadowedBy: null },
+      });
+      seedRecents([]);
+      break;
+    }
+    case "start-tab": {
+      // The start screen as a *tab*, opened over a review that stays open behind it: the
+      // strip carries both kinds of tab, and the start tab is the selected one.
+      const files = parsePatch(MULTI_STATUS_PATCH, "preview:start-tab");
+      seedSession({
+        diff: { phase: "loaded", loadId: 1, files },
+        selectedFilePath: files[0]?.path ?? null,
+        comments: fixtureComments(),
+        layers: fixtureLayers(),
+        overview: fixtureOverview(),
+        reviewOrigin: {
+          repo: { path: "/preview/fixture", name: "fixture" },
+          base: "main",
+          head: "feature/brush-selection",
+          patch: null,
+        },
+        reviewDiff: { kind: "refs", base: "main", head: "feature/brush-selection" },
+      });
+      seedSiblingTabs(
+        [{ name: "reviewer", title: "Drop the env-var fallback from settings" }],
+        [{ name: "web-app" }],
+      );
+      useReviewStore.getState().openStartTab();
+      useOnboardingStore.setState({
+        open: false,
+        cli: { supported: true, installed: true, path: "/usr/local/bin/rvw", shadowedBy: null },
+      });
+      seedRecents(fixtureRecents(), 14);
+      break;
+    }
+    case "start-cli-missing": {
+      // The standing "rvw is not installed" notice over the start screen. The one overlap the
+      // document's top inset is sized for: the pill floats at `top-13`, and the screen's own
+      // first line is the same conversation it is having.
+      useReviewStore.setState({ boot: "ready", sessions: {}, tabs: [], activeSessionId: null });
+      useOnboardingStore.setState({
+        open: false,
+        cli: { supported: true, installed: false, path: "/usr/local/bin/rvw", shadowedBy: null },
+      });
+      seedRecents(fixtureRecents(), 14);
       break;
     }
     case "cli-shadowed": {

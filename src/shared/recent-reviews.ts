@@ -47,7 +47,7 @@ export const RecentReview = z.object({
 });
 export type RecentReview = z.infer<typeof RecentReview>;
 
-/** The whole answer. `dir` rides along so the empty state can name the place it looked —
+/** The whole answer. `dir` rides along so the lists can name the place it looked —
  * "nothing here" is a much better sentence when it says where "here" is, and the directory is
  * a thing a reader can go and look at.
  *

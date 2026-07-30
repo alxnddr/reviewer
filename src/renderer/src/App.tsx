@@ -190,6 +190,10 @@ function useRecentReviewsCommand(): void {
 
 export function App(): ReactElement {
   const activeSessionId = useReviewStore((state) => state.activeSessionId);
+  // The start screen is the shell's content either because there is no review to show, or
+  // because the reader has a start tab focused over the one they have open (⌘T / the strip's
+  // `+`).
+  const activeStartTabId = useReviewStore((state) => state.activeStartTabId);
   // The tour doc replaces the diff pane while it is the reader's stop. The slice's
   // invariant (`overviewOpen` implies a doc exists) is re-checked here so a session
   // without one can never resolve to an empty screen.
@@ -209,6 +213,8 @@ export function App(): ReactElement {
   const closeSession = useReviewStore((state) => state.closeSession);
   const cycleActiveSession = useReviewStore((state) => state.cycleActiveSession);
   const activateTabByOrdinal = useReviewStore((state) => state.activateTabByOrdinal);
+  const openStartTab = useReviewStore((state) => state.openStartTab);
+  const showStart = activeSessionId === null || activeStartTabId !== null;
 
   useEffect(() => {
     void hydrate();
@@ -237,6 +243,7 @@ export function App(): ReactElement {
       bridge.onCopyAllCommentsPromptCommand(() => void copyAllCommentsPrompt()),
       // A CLI/`open-file` import wrote a session in main; re-list to surface it.
       bridge.onSessionsChanged(() => void syncSessions()),
+      bridge.onNewTabCommand(openStartTab),
       bridge.onCloseTabCommand(() => closeSession()),
       bridge.onCycleTabCommand(cycleActiveSession),
       bridge.onActivateTabCommand(activateTabByOrdinal),
@@ -257,16 +264,17 @@ export function App(): ReactElement {
     closeSession,
     cycleActiveSession,
     activateTabByOrdinal,
+    openStartTab,
   ]);
 
   return (
     <DiffWorkerPool>
-      {/* Outside the shell, not in it: `?` has to answer from the empty state too, before
+      {/* Outside the shell, not in it: `?` has to answer from the start screen too, before
           there is any session for the shell to be about. */}
       <ShortcutsDialog />
-      {/* Same placement, same reason: the way back to a past review has to be reachable both
-          from the empty state (where it is also a button) and from inside a review, where
-          there is no card to put a button on. */}
+      {/* Same placement, same reason: the searchable list of past reviews has to be reachable
+          from inside a review, where there is no page listing them — the start screen lists
+          the recent ones itself and opens this for the rest. */}
       <RecentReviews />
       {/* The standing "no rvw, no reviews" notice. Above the shell too, because it is true
           of the app rather than of whatever session happens to be open. */}
@@ -281,7 +289,7 @@ export function App(): ReactElement {
             </>
           }
           sidebar={
-            activeSessionId === null ? null : (
+            showStart ? null : (
               <Sidebar>
                 {/* Keyed per session so the selector/tree view resets on entry. */}
                 <SidebarNav key={activeSessionId} />
@@ -289,10 +297,15 @@ export function App(): ReactElement {
             )
           }
         >
-          {activeSessionId === null ? (
-            // Everything before the first review, including the frames before the store has
-            // answered: the start screen owns its own settling, so nothing here waits.
-            <StartScreen failure={openFailure} />
+          {showStart ? (
+            // Everything before the first review, the moment after the last tab closes, and
+            // any time the reader focuses a start tab over a review they are keeping. It owns
+            // its own settling, so nothing here waits on the store.
+            //
+            // Keyed per start tab so each one keeps its own screen state — a half-typed search
+            // on one is not a half-typed search on the next, which is what having two of them
+            // is for.
+            <StartScreen key={activeStartTabId ?? "start"} failure={openFailure} />
           ) : showOverview ? (
             <OverviewScreen />
           ) : (

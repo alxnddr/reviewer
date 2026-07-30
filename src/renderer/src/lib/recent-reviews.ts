@@ -83,6 +83,61 @@ export function filterRecents(
   });
 }
 
+/** One heading and the rows under it, on the start screen's chronological list. */
+export type RecentGroup = { label: string; reviews: RecentReview[] };
+
+/** The bands the list is broken into, coarsest last. Calendar-relative rather than elapsed
+ * hours: "yesterday" means the day before this one, not 24 hours ago, which is what the
+ * reader means by it at nine in the morning. `days` is how far back from the start of today
+ * the band reaches. */
+const AGE_BANDS: readonly { label: string; days: number }[] = [
+  { label: "Today", days: 0 },
+  { label: "Yesterday", days: 1 },
+  { label: "Previous 7 days", days: 7 },
+  { label: "Previous 30 days", days: 30 },
+];
+
+/** The last band, which has no boundary — everything older falls into it. */
+const OLDER = "Older";
+
+const DAY_MS = 24 * 3600 * 1000;
+
+function startOfDay(date: Date): number {
+  return new Date(date.getFullYear(), date.getMonth(), date.getDate()).getTime();
+}
+
+/** The list broken into date bands, newest band first and rows inside each band in the order
+ * they arrived — which is newest-first, and stays that way for the same reason the filter does
+ * not re-rank.
+ *
+ * The start screen shows this list rather than a flat run of rows because it is read as a
+ * history: the question a reader brings to it is "the one from this morning" or "the one from
+ * last week", and a date column on every row makes them do the arithmetic themselves. Empty
+ * bands are dropped, so a machine that has been reviewed on twice today shows one heading
+ * rather than five.
+ *
+ * `now` is a parameter, like `shortAge`'s, so the banding is pure and testable. A row with an
+ * unreadable mtime (never seen in practice — main reads it off the filesystem) sorts into
+ * `Older` rather than throwing the whole list.
+ *
+ * The bands are deliberately *not* the picker's problem: it is a search field, where the
+ * answer to "which one" is typed rather than scanned. */
+export function groupRecents(reviews: readonly RecentReview[], now: Date): RecentGroup[] {
+  const today = startOfDay(now);
+  const groups = new Map<string, RecentReview[]>();
+  for (const review of reviews) {
+    const modified = new Date(review.modified).getTime();
+    const band = Number.isNaN(modified)
+      ? undefined
+      : AGE_BANDS.find(({ days }) => modified >= today - days * DAY_MS);
+    const label = band?.label ?? OLDER;
+    groups.set(label, [...(groups.get(label) ?? []), review]);
+  }
+  return [...AGE_BANDS.map(({ label }) => label), OLDER]
+    .map((label) => ({ label, reviews: groups.get(label) ?? [] }))
+    .filter((group) => group.reviews.length > 0);
+}
+
 /** Where a keyboard step lands. Clamped rather than wrapped: this is a long list with a
  * scrollbar, not a three-item menu, and a ↓ at the bottom that silently teleports to the top
  * loses the reader's place. An empty list has no cursor, hence -1. */

@@ -6,17 +6,11 @@ import {
   type MouseEvent,
   type PointerEvent,
   type ReactElement,
+  type ReactNode,
   type RefObject,
 } from "react";
 import { PlusIcon, XIcon } from "lucide-react";
-import type { SessionId } from "../../../shared/session";
 import { Button } from "@/components/ui/button";
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
 import {
   Tooltip,
   TooltipContent,
@@ -24,8 +18,17 @@ import {
   TooltipTrigger,
   TOOLTIP_DELAY_MS,
 } from "@/components/ui/tooltip";
+import { ShortcutHint } from "@/components/ui/kbd";
+import { shortRef } from "@/lib/refs";
+import { tabNames, type TabSubject } from "@/lib/tab-name";
 import { cn } from "@/lib/utils";
-import { useReviewStore } from "@/stores/review";
+import {
+  activeTabStop,
+  sameTabStop,
+  useReviewStore,
+  type SessionSlice,
+  type TabStop,
+} from "@/stores/review";
 
 // Hand-built tablist: Base UI's Tabs.Tab renders a native button element, which
 // cannot legally contain the per-tab close, and its Root/Panel pairing assumes
@@ -39,13 +42,26 @@ import { useReviewStore } from "@/stores/review";
 // scrolls once even the floor won't fit. The geometry that can't be utilities
 // (separators, the clipped-name fade, the per-tab container query) is the
 // `[data-tab]` block in index.css.
+//
+// A tab is named after what is inside it, not after the folder it came from — see
+// `lib/tab-name.ts` for why, and for how two tabs that would say the same thing are told
+// apart. The strip is named as a set, so the naming happens here rather than per tab.
+//
+// Not every tab is a session: `+` (and ⌘T) opens a start tab, a renderer-only stop that can
+// sit anywhere in the strip, be dragged like any other, and is replaced in place by whatever
+// review is opened from it (see `tabs` / `claimStartTabSlot` in the store). So the strip is one
+// ordered list of stops here, and the two kinds differ only in what they are about — the box,
+// the width, the compression, the drag and the keyboard are the same code for both.
 
 /** Slop before a press becomes a drag, so a click with an unsteady hand still
  * reads as a click. */
 const DRAG_THRESHOLD_PX = 4;
 
-function tabDomId(id: SessionId): string {
-  return `session-tab-${id}`;
+/** The element id a stop's tab carries. Kept apart by kind so a start tab and a session can
+ * never collide, and always looked up with `getElementById` — a session id is a uuid and a
+ * start id has a `-` in it, neither of which is safe to splice into a selector. */
+function tabDomId(stop: TabStop): string {
+  return `${stop.kind}-tab-${stop.id}`;
 }
 
 function moved<T>(items: T[], from: number, to: number): T[] {
@@ -55,6 +71,30 @@ function moved<T>(items: T[], from: number, to: number): T[] {
     next.splice(to, 0, item);
   }
   return next;
+}
+
+/** What the naming rule is given about one session. A review contributes its authored title
+ * and its head ref; a plain repository session contributes neither, which is what makes it
+ * fall back to the repository's own name. */
+function tabSubject(slice: SessionSlice): TabSubject {
+  const review = slice.reviewOrigin;
+  return {
+    repoName: slice.repo.name,
+    repoPath: slice.repo.path,
+    title: review === null ? null : (slice.overview?.title ?? null),
+    head: review?.head ?? null,
+  };
+}
+
+/** The second line of a tab's hover hint: what the first line cannot say. For a review that
+ * is which project and which range it covers — the name above is the change, not the code it
+ * is against. For a repository session it is the path, which is the only thing that tells two
+ * checkouts of one project apart. */
+function tabHint(slice: SessionSlice): string {
+  const review = slice.reviewOrigin;
+  return review === null
+    ? slice.repo.path
+    : `${slice.repo.name} · ${shortRef(review.base)} → ${shortRef(review.head)}`;
 }
 
 /** True while the element's text is wider than the box holding it. Drives the
@@ -81,37 +121,39 @@ function useClipped(ref: RefObject<HTMLElement | null>, text: string): boolean {
   return clipped;
 }
 
-type SessionTabProps = {
-  id: SessionId;
+/** Everything both kinds of tab share: the box, its states, and its close affordance. The
+ * two differ only in what they are about, so they differ only in what they pass here. */
+function TabShell({
+  domId,
+  name,
+  hint,
+  active,
+  focusStop,
+  closeLabel,
+  dragOffset,
+  dragging,
+  onActivate,
+  onClose,
+  onPointerDown,
+}: {
+  domId: string;
   name: string;
-  path: string;
+  hint: ReactNode;
   active: boolean;
   /** Roving-tabindex holder. Usually the active tab; falls back to the first
-   * tab when no session is active (a salvaged store can null the pointer while
+   * tab when nothing is active (a salvaged store can null the pointer while
    * keeping sessions), so the strip never becomes keyboard-unreachable. */
   focusStop: boolean;
+  closeLabel: string;
   /** Live horizontal offset while this tab is the one being dragged, else null. */
   dragOffset: number | null;
   /** True while *any* tab is being dragged — suppresses tooltips strip-wide, so
    * a drag passing under a resting tab can't summon its popup. */
   dragging: boolean;
-  onActivate: (id: SessionId) => void;
-  onClose: (id: SessionId) => void;
-  onDragStart: (event: PointerEvent<HTMLDivElement>, id: SessionId) => void;
-};
-
-function SessionTab({
-  id,
-  name,
-  path,
-  active,
-  focusStop,
-  dragOffset,
-  dragging,
-  onActivate,
-  onClose,
-  onDragStart,
-}: SessionTabProps): ReactElement {
+  onActivate: () => void;
+  onClose: () => void;
+  onPointerDown: (event: PointerEvent<HTMLDivElement>) => void;
+}): ReactElement {
   const nameRef = useRef<HTMLSpanElement>(null);
   const clipped = useClipped(nameRef, name);
 
@@ -127,7 +169,7 @@ function SessionTab({
         // registers its active trigger by id, and overriding that id on the
         // element leaves it unable to find the trigger again — it then closes
         // the tooltip it just opened, before it can mount.
-        id={tabDomId(id)}
+        id={domId}
         render={
           <div
             role="tab"
@@ -138,11 +180,11 @@ function SessionTab({
             data-active={active}
             aria-selected={active}
             tabIndex={focusStop ? 0 : -1}
-            onClick={() => onActivate(id)}
-            onPointerDown={(event: PointerEvent<HTMLDivElement>) => onDragStart(event, id)}
+            onClick={onActivate}
+            onPointerDown={onPointerDown}
             onAuxClick={(event: MouseEvent<HTMLDivElement>) => {
               if (event.button === 1) {
-                onClose(id);
+                onClose();
               }
             }}
             style={
@@ -156,12 +198,15 @@ function SessionTab({
               // w-48 is the width a tab *wants*; min-w-14 is the floor it will
               // shrink to before the strip gives up and scrolls. Both matter:
               // without the floor tabs crush to nothing, without the preferred
-              // width two tabs would split the whole title bar between them.
+              // width two tabs would split the whole title bar between them. One
+              // width for both kinds, which is also what keeps the drag honest —
+              // it reads the pitch off two adjacent tabs and applies it to every
+              // slot.
               // border+bg-clip-padding mirror the shared Button's fill geometry so
               // a filled tab and the adjacent plus button paint the same
               // 30px-in-32px region — without it the tab's full-bleed fill reads
               // ~2px taller.
-              "group relative flex h-8 w-48 min-w-14 max-w-48 shrink items-center rounded-md border border-transparent bg-clip-padding px-2.5 outline-none select-none",
+              "group relative flex h-8 w-48 max-w-48 min-w-14 shrink items-center rounded-md border border-transparent bg-clip-padding px-2.5 outline-none select-none",
               "focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset",
               // Active tab wears the one shared selection fill (bg-selected); hover
               // sits a neutral step below so a hovered tab never reads as the active
@@ -179,7 +224,7 @@ function SessionTab({
           ref={nameRef}
           data-tab-title
           data-clipped={clipped}
-          // Sans, not mono: a tab names a repository the way the chrome around it
+          // Sans, not mono: a tab names its review the way the chrome around it
           // names things — mono is reserved for machine text (refs, paths, code).
           className="min-w-0 flex-1 overflow-hidden text-xs whitespace-nowrap"
         >
@@ -192,10 +237,10 @@ function SessionTab({
           // ⌘W is the keyboard path to close; the pointer affordance stays out of
           // the tab order so tabbing through the strip never lands inside a tab.
           tabIndex={-1}
-          aria-label={`Close ${name}`}
+          aria-label={closeLabel}
           onClick={(event) => {
             event.stopPropagation();
-            onClose(id);
+            onClose();
           }}
           className={cn(
             // Lifted out of the flow so the name is laid out against the tab's full
@@ -214,12 +259,11 @@ function SessionTab({
         </Button>
       </TooltipTrigger>
       {/* The strip trades the full name away as it compresses, so this is where the
-          name is recoverable — and the path is what actually tells two same-named
-          checkouts apart. */}
+          name is recoverable — and the second line is what the name itself cannot say. */}
       <TooltipContent side="bottom" align="start">
         <div className="flex flex-col gap-0.5">
           <span>{name}</span>
-          <span className="text-background/70">{path}</span>
+          <span className="text-background/70">{hint}</span>
         </div>
       </TooltipContent>
     </Tooltip>
@@ -231,33 +275,47 @@ function SessionTab({
  * track the tab's *current* slot, both re-based each time it swaps, so the
  * offset stays within one slot's width however far the pointer travels. */
 type DragState = {
-  id: SessionId;
+  stop: TabStop;
   pointerId: number;
   originX: number;
   index: number;
-  /** Distance between adjacent slots — tabs share a width, so one number does. */
+  /** Distance between adjacent slots — every tab shares one width, so one number does. */
   step: number;
 };
 
-/** One tab per session in the title-bar chrome; switching only flips
- * `activeSessionId`, so per-session state survives untouched. The strip is the
- * `no-drag` island — the title bar around it keeps dragging the window. */
+/** One tab per stop in the title-bar chrome — a session, or a start screen. Switching only
+ * moves `activeSessionId` / `activeStartTabId`, so per-session state survives untouched. The
+ * strip is the `no-drag` island — the title bar around it keeps dragging the window. */
 export function TabBar(): ReactElement {
   const sessions = useReviewStore((state) => state.sessions);
+  const tabs = useReviewStore((state) => state.tabs);
   const activeSessionId = useReviewStore((state) => state.activeSessionId);
+  const activeStartTabId = useReviewStore((state) => state.activeStartTabId);
   const activateSession = useReviewStore((state) => state.activateSession);
+  const activateStartTab = useReviewStore((state) => state.activateStartTab);
   const closeSession = useReviewStore((state) => state.closeSession);
-  const reorderSessions = useReviewStore((state) => state.reorderSessions);
-  const openRepository = useReviewStore((state) => state.openRepository);
-  const openReview = useReviewStore((state) => state.openReview);
+  const reorderTabs = useReviewStore((state) => state.reorderTabs);
+  const openStartTab = useReviewStore((state) => state.openStartTab);
+  const closeStartTab = useReviewStore((state) => state.closeStartTab);
 
-  const order = Object.values(sessions);
-  const activeIndex = order.findIndex((slice) => slice.id === activeSessionId);
+  // Named as a set, and only the sessions take part: `tabNames` disambiguates against the other
+  // *reviews* in the strip, and every start tab is called the same thing on purpose.
+  const slices = tabs.flatMap((stop) => (stop.kind === "session" ? (sessions[stop.id] ?? []) : []));
+  const names = new Map(
+    tabNames(slices.map((slice) => tabSubject(slice))).map((name, index) => [
+      slices[index]?.id ?? "",
+      name,
+    ]),
+  );
+  const current = activeTabStop({ activeStartTabId, activeSessionId });
+  const activeIndex = current === null ? -1 : tabs.findIndex((stop) => sameTabStop(stop, current));
+  // With nothing active at all, the first tab holds the strip's one tab stop.
+  const focusIndex = activeIndex === -1 ? 0 : activeIndex;
 
   const stripRef = useRef<HTMLDivElement>(null);
   const [clipped, setClipped] = useState({ start: false, end: false });
   const dragRef = useRef<DragState | null>(null);
-  const [drag, setDrag] = useState<{ id: SessionId; offset: number } | null>(null);
+  const [drag, setDrag] = useState<{ stop: TabStop; offset: number } | null>(null);
 
   useEffect(() => {
     // Each edge fades only while tabs are actually hidden past it. Fading both
@@ -283,16 +341,16 @@ export function TabBar(): ReactElement {
       observer.disconnect();
       strip.removeEventListener("scroll", measure);
     };
-  }, [order.length]);
+  }, [tabs.length]);
 
   useEffect(() => {
-    // Activation from anywhere (click, menu ⌘n, a re-opened duplicate) must
+    // Activation from anywhere (click, menu ⌘n, a re-opened duplicate, a start tab) must
     // keep the active tab visible inside the scrollable strip. Only a clipped
     // tab scrolls — an unconditional nudge leaves the strip resting a few px in.
-    if (activeSessionId === null) {
+    if (current === null) {
       return;
     }
-    const tab = document.getElementById(tabDomId(activeSessionId));
+    const tab = document.getElementById(tabDomId(current));
     const strip = tab?.closest('[role="tablist"]');
     if (!tab || !strip) {
       return;
@@ -302,50 +360,73 @@ export function TabBar(): ReactElement {
     if (tabRect.left < stripRect.left || tabRect.right > stripRect.right) {
       tab.scrollIntoView({ block: "nearest", inline: "nearest" });
     }
-  }, [activeSessionId]);
+    // `current` is a fresh object every render, so the effect is keyed on the two ids it is
+    // built from rather than on it.
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- see above
+  }, [activeSessionId, activeStartTabId]);
 
+  /** Show a stop and take the keyboard with it. */
+  const activate = (stop: TabStop): void => {
+    if (stop.kind === "start") {
+      activateStartTab(stop.id);
+    } else {
+      activateSession(stop.id);
+    }
+    document.getElementById(tabDomId(stop))?.focus();
+  };
+
+  /** Show the stop at `index`, for the arrow keys. */
   const activateAt = (index: number): void => {
-    const target = order[index];
+    const target = tabs[index];
     if (target !== undefined) {
-      activateSession(target.id);
-      document.getElementById(tabDomId(target.id))?.focus();
+      activate(target);
     }
   };
 
   /** Pointer closes only: the close button unmounts with its tab, so DOM focus
-   * would drop to body; hand it to whichever tab ends up active. */
-  const closeFromPointer = (id: SessionId): void => {
-    closeSession(id);
-    const nextActive = useReviewStore.getState().activeSessionId;
-    if (nextActive !== null) {
-      document.getElementById(tabDomId(nextActive))?.focus();
+   * would drop to body; hand it to whichever tab ends up focused. */
+  const closeFromPointer = (stop: TabStop): void => {
+    if (stop.kind === "start") {
+      closeStartTab(stop.id);
+    } else {
+      closeSession(stop.id);
+    }
+    const state = useReviewStore.getState();
+    const next = activeTabStop(state);
+    if (next !== null) {
+      document.getElementById(tabDomId(next))?.focus();
     }
   };
 
-  const onTabPointerDown = (event: PointerEvent<HTMLDivElement>, id: SessionId): void => {
+  const onTabPointerDown = (event: PointerEvent<HTMLDivElement>, stop: TabStop): void => {
     // The close button is a press target of its own, and a middle click is a
     // close gesture — neither should arm a drag.
     if (event.button !== 0 || (event.target as HTMLElement).closest("[data-tab-close]") !== null) {
       return;
     }
-    activateSession(id);
+    if (stop.kind === "start") {
+      activateStartTab(stop.id);
+    } else {
+      activateSession(stop.id);
+    }
 
     const strip = stripRef.current;
-    const tabs = strip === null ? [] : [...strip.querySelectorAll<HTMLElement>("[data-tab]")];
-    const index = tabs.findIndex((tab) => tab.id === tabDomId(id));
-    if (index === -1 || tabs.length < 2) {
+    const elements = strip === null ? [] : [...strip.querySelectorAll<HTMLElement>("[data-tab]")];
+    const index = elements.findIndex((tab) => tab.id === tabDomId(stop));
+    if (index === -1 || elements.length < 2) {
       return;
     }
     // Slot pitch straight off the laid-out strip, so it stays honest however far
-    // the tabs have compressed or whatever the gap is set to.
-    const first = tabs[0]?.getBoundingClientRect();
-    const second = tabs[1]?.getBoundingClientRect();
+    // the tabs have compressed or whatever the gap is set to. Every tab shares one
+    // width, so two adjacent ones give the pitch for all of them.
+    const first = elements[0]?.getBoundingClientRect();
+    const second = elements[1]?.getBoundingClientRect();
     const step = first !== undefined && second !== undefined ? second.left - first.left : 0;
     if (step <= 0) {
       return;
     }
     event.currentTarget.setPointerCapture(event.pointerId);
-    dragRef.current = { id, pointerId: event.pointerId, originX: event.clientX, index, step };
+    dragRef.current = { stop, pointerId: event.pointerId, originX: event.clientX, index, step };
   };
 
   const onTabPointerMove = (event: PointerEvent<HTMLDivElement>): void => {
@@ -357,19 +438,19 @@ export function TabBar(): ReactElement {
     if (drag === null && Math.abs(offset) < DRAG_THRESHOLD_PX) {
       return;
     }
-    const ids = Object.keys(useReviewStore.getState().sessions);
+    const stops = useReviewStore.getState().tabs;
     const shift = Math.round(offset / state.step);
     if (shift !== 0) {
-      const target = Math.min(Math.max(state.index + shift, 0), ids.length - 1);
+      const target = Math.min(Math.max(state.index + shift, 0), stops.length - 1);
       if (target !== state.index) {
-        reorderSessions(moved(ids, state.index, target));
+        reorderTabs(moved(stops, state.index, target));
         // Re-base onto the new slot so the tab keeps tracking the pointer rather
         // than jumping by a slot's width the moment it swaps.
         state.originX += (target - state.index) * state.step;
         state.index = target;
       }
     }
-    setDrag({ id: state.id, offset: event.clientX - state.originX });
+    setDrag({ stop: state.stop, offset: event.clientX - state.originX });
   };
 
   const onTabPointerUp = (event: PointerEvent<HTMLDivElement>): void => {
@@ -388,11 +469,11 @@ export function TabBar(): ReactElement {
     switch (event.key) {
       case "ArrowLeft":
         event.preventDefault();
-        activateAt(Math.max(activeIndex - 1, 0));
+        activateAt(Math.max(focusIndex - 1, 0));
         break;
       case "ArrowRight":
         event.preventDefault();
-        activateAt(Math.min(activeIndex + 1, order.length - 1));
+        activateAt(Math.min(focusIndex + 1, tabs.length - 1));
         break;
       case "Home":
         event.preventDefault();
@@ -400,7 +481,7 @@ export function TabBar(): ReactElement {
         break;
       case "End":
         event.preventDefault();
-        activateAt(order.length - 1);
+        activateAt(tabs.length - 1);
         break;
       default:
         break;
@@ -415,7 +496,7 @@ export function TabBar(): ReactElement {
         <div
           ref={stripRef}
           role="tablist"
-          aria-label="Open repositories"
+          aria-label="Open reviews"
           onKeyDown={onKeyDown}
           // Move/up are delegated here rather than bound per tab: pointer capture
           // keeps delivering to the pressed tab, but the strip is what survives a
@@ -428,21 +509,31 @@ export function TabBar(): ReactElement {
           // without a bar, since a scrollbar in 40px of chrome is all noise.
           className="no-scrollbar flex min-w-0 items-center gap-3 overflow-x-auto"
         >
-          {order.map((slice, index) => (
-            <SessionTab
-              key={slice.id}
-              id={slice.id}
-              name={slice.repo.name}
-              path={slice.repo.path}
-              active={slice.id === activeSessionId}
-              focusStop={activeIndex === -1 ? index === 0 : slice.id === activeSessionId}
-              dragOffset={drag?.id === slice.id ? drag.offset : null}
-              dragging={drag !== null}
-              onActivate={activateSession}
-              onClose={closeFromPointer}
-              onDragStart={onTabPointerDown}
-            />
-          ))}
+          {tabs.map((stop, index) => {
+            const slice = stop.kind === "session" ? sessions[stop.id] : undefined;
+            // A stop whose session is mid-close: skip the row rather than paint a nameless
+            // tab for one frame.
+            if (stop.kind === "session" && slice === undefined) {
+              return null;
+            }
+            const name = slice === undefined ? "Start" : (names.get(slice.id) ?? slice.repo.name);
+            return (
+              <TabShell
+                key={`${stop.kind}-${stop.id}`}
+                domId={tabDomId(stop)}
+                name={name}
+                hint={slice === undefined ? "Ask for a review, or reopen one" : tabHint(slice)}
+                active={current !== null && sameTabStop(stop, current)}
+                focusStop={index === focusIndex}
+                closeLabel={`Close ${name}`}
+                dragOffset={drag !== null && sameTabStop(drag.stop, stop) ? drag.offset : null}
+                dragging={drag !== null}
+                onActivate={() => activate(stop)}
+                onClose={() => closeFromPointer(stop)}
+                onPointerDown={(event) => onTabPointerDown(event, stop)}
+              />
+            );
+          })}
         </div>
         {/* Tabs pass under the chrome colour rather than stopping at a hard edge,
             so a scrolled strip reads as continuing past the frame. */}
@@ -459,36 +550,27 @@ export function TabBar(): ReactElement {
           />
         )}
       </div>
-      {/* A session opens from two distinct sources — a repository directory or a
-          saved review file — so the plus offers both; labels mirror the native
-          File menu, which carries the accelerators. */}
-      <DropdownMenu>
-        <TooltipHint side="bottom" align="start" content="Open repository or review">
-          <DropdownMenuTrigger
-            render={
-              <Button
-                variant="ghost"
-                size="icon"
-                aria-label="Open repository or review"
-                // Ghost hover on bg-sidebar chrome comes from the border tone; the
-                // dark: twin outranks the ghost variant's own dark hover arm, and the
-                // aria-expanded arm keeps the wash while the menu is open.
-                className="shrink-0 hover:bg-border/60 aria-expanded:bg-border/60 dark:hover:bg-border/60 dark:aria-expanded:bg-border/60"
-              />
-            }
-          >
-            <PlusIcon />
-          </DropdownMenuTrigger>
-        </TooltipHint>
-        {/* w-auto min-w-40: the trigger is a 32px icon button, so the default
-            anchor-width sizing would wrap the labels. */}
-        <DropdownMenuContent align="start" sideOffset={8} className="w-auto min-w-40">
-          <DropdownMenuItem onClick={() => void openRepository()}>
-            Open Repository…
-          </DropdownMenuItem>
-          <DropdownMenuItem onClick={() => void openReview()}>Open Review…</DropdownMenuItem>
-        </DropdownMenuContent>
-      </DropdownMenu>
+      {/* One button, one meaning: a new tab, showing the start screen. It used to be a menu
+          offering "Open Repository…" and "Open Review…", which made the strip's only
+          affordance a pair of file pickers — the two errands a reader is *least* likely to
+          be on, and both of them still in the File menu and on the start screen itself. */}
+      <TooltipHint
+        side="bottom"
+        align="start"
+        content={<ShortcutHint action="New tab" keys="⌘T" />}
+      >
+        <Button
+          variant="ghost"
+          size="icon"
+          aria-label="New tab"
+          // Ghost hover on bg-sidebar chrome comes from the border tone; the
+          // dark: twin outranks the ghost variant's own dark hover arm.
+          className="shrink-0 hover:bg-border/60 dark:hover:bg-border/60"
+          onClick={openStartTab}
+        >
+          <PlusIcon />
+        </Button>
+      </TooltipHint>
     </div>
   );
 }

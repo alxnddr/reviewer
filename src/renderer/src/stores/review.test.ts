@@ -122,6 +122,7 @@ function makeBridge(overrides: Partial<ReviewerBridge>): ReviewerBridge {
     onCopyCommentPromptCommand: vi.fn().mockReturnValue(() => {}),
     onCopyAllCommentsPromptCommand: vi.fn().mockReturnValue(() => {}),
     onSessionsChanged: vi.fn().mockReturnValue(() => {}),
+    onNewTabCommand: vi.fn().mockReturnValue(() => {}),
     onCloseTabCommand: vi.fn().mockReturnValue(() => {}),
     onCycleTabCommand: vi.fn().mockReturnValue(() => {}),
     onActivateTabCommand: vi.fn().mockReturnValue(() => {}),
@@ -134,6 +135,8 @@ function resetStore(): void {
     boot: "ready",
     sessions: {},
     activeSessionId: null,
+    tabs: [],
+    activeStartTabId: null,
     openFailure: null,
     reviewOpenFailure: null,
     reviewExportFailure: null,
@@ -811,6 +814,7 @@ describe("useReviewStore.selectAdjacentFile", () => {
       boot: "ready",
       sessions: { [SESSION_ID]: seeded },
       activeSessionId: SESSION_ID,
+      tabs: [{ kind: "session", id: SESSION_ID }],
     });
   });
 
@@ -1223,7 +1227,7 @@ describe("session lifecycle", () => {
 
     useReviewStore.getState().closeSession();
 
-    // What App renders as EmptyState: a settled boot with no sessions.
+    // What App renders as the start screen: a settled boot with no sessions.
     expect(useReviewStore.getState().boot).toBe("ready");
     expect(useReviewStore.getState().sessions).toEqual({});
     expect(useReviewStore.getState().activeSessionId).toBeNull();
@@ -1332,6 +1336,339 @@ describe("session lifecycle", () => {
 
     useReviewStore.getState().cycleActiveSession("previous");
     expect(useReviewStore.getState().activeSessionId).toBe(ID_B);
+  });
+});
+
+describe("start tabs", () => {
+  // The strip's `+` (and ⌘T): the start screen as a real tab — several of them if the reader
+  // wants, anywhere in the strip, drawn over whatever review is open rather than instead of it.
+  // Everything here is about the two rules that follow from "real tab": it stays until it is
+  // closed, and the review opened from it takes its slot.
+
+  const startIds = (): string[] =>
+    useReviewStore
+      .getState()
+      .tabs.filter((stop) => stop.kind === "start")
+      .map((stop) => stop.id);
+
+  const strip = (): string[] =>
+    useReviewStore.getState().tabs.map((stop) => `${stop.kind}:${stop.id}`);
+
+  it("goes up over the active session without disturbing it", async () => {
+    const bridge = makeBridge({});
+    await hydrateWith(bridge, {
+      sessions: [storedSession(ID_A, "/repo-a")],
+      activeSessionId: ID_A,
+    });
+    const openBefore = slice(ID_A);
+
+    useReviewStore.getState().openStartTab();
+
+    expect(useReviewStore.getState().activeStartTabId).not.toBeNull();
+    // The review behind it is still the active one, untouched — leaving the start tab is what
+    // returns to it, and it must not have to be re-derived to come back.
+    expect(useReviewStore.getState().activeSessionId).toBe(ID_A);
+    expect(slice(ID_A)).toBe(openBefore);
+  });
+
+  it("gives a new tab on every press, at the end of the strip", async () => {
+    const bridge = makeBridge({});
+    await hydrateWith(bridge, {
+      sessions: [storedSession(ID_A, "/repo-a")],
+      activeSessionId: ID_A,
+    });
+
+    useReviewStore.getState().openStartTab();
+    useReviewStore.getState().openStartTab();
+    useReviewStore.getState().openStartTab();
+
+    const ids = startIds();
+    expect(ids).toHaveLength(3);
+    expect(new Set(ids).size).toBe(3);
+    // Appended, in the order they were opened, after the session.
+    expect(strip()).toEqual([`session:${ID_A}`, ...ids.map((id) => `start:${id}`)]);
+    // The newest one is the one on screen.
+    expect(useReviewStore.getState().activeStartTabId).toBe(ids.at(-1));
+  });
+
+  it("is the whole strip on a machine with no sessions", () => {
+    useReviewStore.getState().openStartTab();
+    expect(strip()).toEqual([`start:${startIds()[0]}`]);
+  });
+
+  it("stays in the strip when another tab is activated — switching is not closing", async () => {
+    const bridge = makeBridge({});
+    await hydrateWith(bridge, {
+      sessions: [storedSession(ID_A, "/repo-a"), storedSession(ID_B, "/repo-b")],
+      activeSessionId: ID_A,
+    });
+
+    useReviewStore.getState().openStartTab();
+    const [start] = startIds();
+    useReviewStore.getState().activateSession(ID_B);
+
+    expect(useReviewStore.getState().activeStartTabId).toBeNull();
+    expect(startIds()).toEqual([start]);
+
+    // And it can be gone back to, which is the point of it still being there.
+    useReviewStore.getState().activateStartTab(start as string);
+    expect(useReviewStore.getState().activeStartTabId).toBe(start);
+  });
+
+  it("refuses to focus a tab that is not in the strip", () => {
+    useReviewStore.getState().activateStartTab("start-does-not-exist");
+    expect(useReviewStore.getState().activeStartTabId).toBeNull();
+  });
+
+  it("is what ⌘W closes while it is focused — the session behind it survives", async () => {
+    const bridge = makeBridge({});
+    await hydrateWith(bridge, {
+      sessions: [storedSession(ID_A, "/repo-a")],
+      activeSessionId: ID_A,
+    });
+    useReviewStore.getState().openStartTab();
+
+    useReviewStore.getState().closeSession();
+
+    expect(startIds()).toEqual([]);
+    expect(useReviewStore.getState().activeStartTabId).toBeNull();
+    expect(useReviewStore.getState().sessions[ID_A]).toBeDefined();
+    expect(bridge.deleteSession).not.toHaveBeenCalled();
+  });
+
+  it("hands the keyboard to its neighbour when the focused one closes", async () => {
+    const bridge = makeBridge({});
+    await hydrateWith(bridge, {
+      sessions: [storedSession(ID_A, "/repo-a"), storedSession(ID_B, "/repo-b")],
+      activeSessionId: ID_A,
+    });
+    useReviewStore.getState().openStartTab();
+    const [start] = startIds();
+
+    useReviewStore.getState().closeStartTab(start as string);
+
+    // Nothing to its right, so the tab on its left — which is a session, and becomes the
+    // surface on screen.
+    expect(useReviewStore.getState().activeStartTabId).toBeNull();
+    expect(useReviewStore.getState().activeSessionId).toBe(ID_B);
+  });
+
+  it("stays put when a background tab of either kind is closed", async () => {
+    const bridge = makeBridge({});
+    await hydrateWith(bridge, {
+      sessions: [storedSession(ID_A, "/repo-a"), storedSession(ID_B, "/repo-b")],
+      activeSessionId: ID_A,
+    });
+    useReviewStore.getState().openStartTab();
+    useReviewStore.getState().openStartTab();
+    const [first, second] = startIds();
+
+    // A pointer close names its tab; only the un-named form means "the focused one".
+    useReviewStore.getState().closeSession(ID_B);
+    expect(useReviewStore.getState().activeStartTabId).toBe(second);
+
+    useReviewStore.getState().closeStartTab(first as string);
+    expect(startIds()).toEqual([second]);
+    expect(useReviewStore.getState().activeStartTabId).toBe(second);
+    expect(bridge.deleteSession).toHaveBeenCalledWith({ id: ID_B });
+  });
+
+  it("survives the last session closing — a strip of one start tab is still a strip", async () => {
+    const bridge = makeBridge({});
+    await hydrateWith(bridge, {
+      sessions: [storedSession(ID_A, "/repo-a")],
+      activeSessionId: ID_A,
+    });
+    useReviewStore.getState().openStartTab();
+    const [start] = startIds();
+
+    useReviewStore.getState().closeSession(ID_A);
+
+    expect(strip()).toEqual([`start:${start}`]);
+  });
+
+  it("is a stop ⌃Tab steps onto and off, wrapping like any other", async () => {
+    const bridge = makeBridge({});
+    await hydrateWith(bridge, {
+      sessions: [storedSession(ID_A, "/repo-a"), storedSession(ID_B, "/repo-b")],
+      activeSessionId: ID_B,
+    });
+    useReviewStore.getState().openStartTab();
+    const [start] = startIds();
+
+    useReviewStore.getState().cycleActiveSession("next");
+    expect(useReviewStore.getState().activeStartTabId).toBeNull();
+    expect(useReviewStore.getState().activeSessionId).toBe(ID_A);
+
+    // And back onto it from the far end, because it is still there to step onto.
+    useReviewStore.getState().cycleActiveSession("previous");
+    expect(useReviewStore.getState().activeStartTabId).toBe(start);
+  });
+
+  it("answers the ⌘-digit for its own position, and ⌘9 when it is last", async () => {
+    const bridge = makeBridge({});
+    await hydrateWith(bridge, {
+      sessions: [storedSession(ID_A, "/repo-a"), storedSession(ID_B, "/repo-b")],
+      activeSessionId: ID_A,
+    });
+    useReviewStore.getState().openStartTab();
+    const [start] = startIds();
+
+    useReviewStore.getState().activateTabByOrdinal(9);
+    expect(useReviewStore.getState().activeStartTabId).toBe(start);
+
+    // ⌘2 is still the second session, whatever is beyond it.
+    useReviewStore.getState().activateTabByOrdinal(2);
+    expect(useReviewStore.getState().activeStartTabId).toBeNull();
+    expect(useReviewStore.getState().activeSessionId).toBe(ID_B);
+
+    // ⌘3 is this tab's own position.
+    useReviewStore.getState().activateTabByOrdinal(3);
+    expect(useReviewStore.getState().activeStartTabId).toBe(start);
+  });
+
+  it("drags anywhere in the strip, and only the session order reaches main", async () => {
+    const bridge = makeBridge({});
+    await hydrateWith(bridge, {
+      sessions: [storedSession(ID_A, "/repo-a"), storedSession(ID_B, "/repo-b")],
+      activeSessionId: ID_A,
+    });
+    useReviewStore.getState().openStartTab();
+    const [start] = startIds();
+
+    // Dropped between the two sessions.
+    useReviewStore.getState().reorderTabs([
+      { kind: "session", id: ID_A },
+      { kind: "start", id: start as string },
+      { kind: "session", id: ID_B },
+    ]);
+
+    expect(strip()).toEqual([`session:${ID_A}`, `start:${start}`, `session:${ID_B}`]);
+    // Main knows nothing about start tabs, so it hears only about the two sessions.
+    expect(bridge.reorderSessions).toHaveBeenCalledWith({ ids: [ID_A, ID_B] });
+  });
+
+  it("is replaced in place by the review opened from it", async () => {
+    const bridge = makeBridge({
+      openReviewByPath: vi.fn().mockResolvedValue({
+        ok: true,
+        value: { kind: "opened", sessionId: ID_C },
+      }),
+    });
+    await hydrateWith(bridge, {
+      sessions: [storedSession(ID_A, "/repo-a"), storedSession(ID_B, "/repo-b")],
+      activeSessionId: ID_A,
+    });
+    // Focused, and dragged into the middle: the slot it holds is the slot the review must land
+    // in — a review appearing at the far end while the spent front door stays put is the strip
+    // rearranging itself behind the reader.
+    useReviewStore.getState().openStartTab();
+    const [start] = startIds();
+    useReviewStore.getState().reorderTabs([
+      { kind: "session", id: ID_A },
+      { kind: "start", id: start as string },
+      { kind: "session", id: ID_B },
+    ]);
+    vi.mocked(bridge.listSessions).mockResolvedValue({
+      sessions: [
+        storedSession(ID_A, "/repo-a"),
+        storedSession(ID_B, "/repo-b"),
+        storedSession(ID_C, "/repo-c"),
+      ],
+      activeSessionId: ID_C,
+    });
+
+    await useReviewStore.getState().openReviewByPath("/abs/x.reviewer.json");
+
+    expect(strip()).toEqual([`session:${ID_A}`, `session:${ID_C}`, `session:${ID_B}`]);
+    expect(useReviewStore.getState().activeStartTabId).toBeNull();
+    expect(useReviewStore.getState().activeSessionId).toBe(ID_C);
+  });
+
+  it("is replaced in place by the repository opened from it", async () => {
+    const bridge = makeBridge({});
+    vi.stubGlobal("window", { reviewer: bridge });
+    useReviewStore.getState().openStartTab();
+    const [start] = startIds();
+
+    await useReviewStore.getState().openRepository();
+
+    const opened = useReviewStore.getState().activeSessionId;
+    expect(opened).not.toBeNull();
+    expect(strip()).toEqual([`session:${opened}`]);
+    expect(startIds()).not.toContain(start);
+    expect(useReviewStore.getState().activeStartTabId).toBeNull();
+  });
+
+  it("is spent even when the repository it opened was already in a tab", async () => {
+    const bridge = makeBridge({});
+    await openFixtureRepo(bridge);
+    const first = useReviewStore.getState().activeSessionId;
+    useReviewStore.getState().openStartTab();
+
+    // Same path: one tab per repository, so this re-activates rather than creating one.
+    await useReviewStore.getState().openRepository();
+
+    expect(useReviewStore.getState().activeSessionId).toBe(first);
+    expect(startIds()).toEqual([]);
+  });
+
+  it("takes the review that arrives from the CLI while it is focused", async () => {
+    const bridge = makeBridge({});
+    await hydrateWith(bridge, {
+      sessions: [storedSession(ID_A, "/repo-a")],
+      activeSessionId: ID_A,
+    });
+    useReviewStore.getState().openStartTab();
+
+    // What a CLI publish looks like from here: main wrote a session and pushed; the renderer
+    // re-lists and finds a session it has never seen as the active one.
+    vi.mocked(bridge.listSessions).mockResolvedValue({
+      sessions: [storedSession(ID_A, "/repo-a"), storedSession(ID_B, "/repo-b")],
+      activeSessionId: ID_B,
+    });
+    await useReviewStore.getState().syncSessions();
+
+    expect(strip()).toEqual([`session:${ID_A}`, `session:${ID_B}`]);
+    expect(useReviewStore.getState().activeStartTabId).toBeNull();
+    expect(useReviewStore.getState().activeSessionId).toBe(ID_B);
+  });
+
+  it("survives a review arriving while the reader is on another tab", async () => {
+    const bridge = makeBridge({});
+    await hydrateWith(bridge, {
+      sessions: [storedSession(ID_A, "/repo-a")],
+      activeSessionId: ID_A,
+    });
+    // Parked in the strip, not focused: nothing here is the reader's front door right now, so
+    // nothing here may close their tab.
+    useReviewStore.getState().openStartTab();
+    const [start] = startIds();
+    useReviewStore.getState().activateSession(ID_A);
+
+    vi.mocked(bridge.listSessions).mockResolvedValue({
+      sessions: [storedSession(ID_A, "/repo-a"), storedSession(ID_B, "/repo-b")],
+      activeSessionId: ID_B,
+    });
+    await useReviewStore.getState().syncSessions();
+
+    expect(startIds()).toEqual([start]);
+    expect(useReviewStore.getState().activeStartTabId).toBeNull();
+  });
+
+  it("stays focused through a re-list that changes nothing", async () => {
+    const bridge = makeBridge({});
+    await hydrateWith(bridge, {
+      sessions: [storedSession(ID_A, "/repo-a")],
+      activeSessionId: ID_A,
+    });
+    useReviewStore.getState().openStartTab();
+    const [start] = startIds();
+
+    await useReviewStore.getState().syncSessions();
+
+    expect(useReviewStore.getState().activeStartTabId).toBe(start);
+    expect(startIds()).toEqual([start]);
   });
 });
 
@@ -1700,6 +2037,7 @@ describe("useReviewStore layer navigation", () => {
       boot: "ready",
       sessions: { [SESSION_ID]: seeded },
       activeSessionId: SESSION_ID,
+      tabs: [{ kind: "session", id: SESSION_ID }],
     });
   });
 
@@ -1818,6 +2156,7 @@ describe("useReviewStore tour doc navigation", () => {
       boot: "ready",
       sessions: { [SESSION_ID]: seeded },
       activeSessionId: SESSION_ID,
+      tabs: [{ kind: "session", id: SESSION_ID }],
     });
   }
 
@@ -1998,6 +2337,7 @@ describe("useReviewStore comment navigation", () => {
       boot: "ready",
       sessions: { [SESSION_ID]: { ...base, ...overrides } },
       activeSessionId: SESSION_ID,
+      tabs: [{ kind: "session", id: SESSION_ID }],
     });
   }
 
@@ -2160,6 +2500,7 @@ describe("review export actions", () => {
       boot: "ready",
       sessions: { [SESSION_ID]: { ...base, ...overrides } },
       activeSessionId: SESSION_ID,
+      tabs: [{ kind: "session", id: SESSION_ID }],
     });
   }
 
@@ -2412,6 +2753,7 @@ describe("exit gate", () => {
       boot: "ready",
       sessions: { [SESSION_ID]: seeded },
       activeSessionId: SESSION_ID,
+      tabs: [{ kind: "session", id: SESSION_ID }],
     });
   }
 
@@ -2666,6 +3008,7 @@ describe("reading progress", () => {
       boot: "ready",
       sessions: { [SESSION_ID]: seeded },
       activeSessionId: SESSION_ID,
+      tabs: [{ kind: "session", id: SESSION_ID }],
     });
   });
 

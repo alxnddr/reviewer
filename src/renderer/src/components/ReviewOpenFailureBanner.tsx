@@ -8,7 +8,7 @@ import { useReviewStore } from "@/stores/review";
 /** A failed review open: app-level, like a failed repo open — the open never
  * produced a session to report in, so it surfaces as a dismissible bar under the
  * title bar (the OpenFailureBanner treatment). Shown regardless of whether a
- * session is active, since a drop/CLI open can fail from the empty state or over
+ * session is active, since a drop/CLI open can fail from the start screen or over
  * an open review alike. */
 export function ReviewOpenFailureBanner(): ReactElement | null {
   const failure = useReviewStore((state) => state.reviewOpenFailure);

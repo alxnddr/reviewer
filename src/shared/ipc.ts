@@ -88,6 +88,10 @@ export const IpcEvent = {
   // session in main, then fires this so the renderer re-lists via `sessions:list`.
   // The imported path/model never crosses the bridge.
   sessionsChanged: "sessions:changed",
+  // ⌘T. The start screen as a tab of its own: the strip's `+` by the keyboard, and the
+  // reason this is a menu command rather than a DOM handler is the reason every other one
+  // is — the chord has to fire whatever holds focus, including inside the diff's shadow root.
+  menuNewTab: "menu:new-tab",
   menuCloseTab: "menu:close-tab",
   menuNextTab: "menu:next-tab",
   menuPreviousTab: "menu:previous-tab",
@@ -243,6 +247,8 @@ export type ReviewerBridge = {
   /** Subscribes to the payload-free push fired after a CLI/`open-file` import
    * wrote a session; the listener re-lists (`sessions:list`). Returns unsubscribe. */
   onSessionsChanged: (listener: () => void) => () => void;
+  /** Subscribes to the ⌘T New Tab menu command; returns unsubscribe. */
+  onNewTabCommand: (listener: () => void) => () => void;
   /** Subscribes to the ⌘W Close Tab menu command; returns unsubscribe. */
   onCloseTabCommand: (listener: () => void) => () => void;
   /** Subscribes to the ⌃Tab / ⌃⇧Tab cycle commands; the direction is derived

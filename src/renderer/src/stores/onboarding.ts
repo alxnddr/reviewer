@@ -15,7 +15,7 @@ export const ONBOARDING_STEPS = 3;
 
 type OnboardingState = {
   /** Whether the guide is on screen. False until main says this install has never seen it,
-   * or the reader asks for it again from the empty state. */
+   * or the reader asks for it again from the start screen. */
   open: boolean;
   step: number;
   /** null before main answers, and outside Electron (the preview harness), where there is
@@ -26,18 +26,13 @@ type OnboardingState = {
   installing: boolean;
   /** Why the last install did not land, or null. Cleared when another is attempted. */
   problem: CliInstallProblem | null;
-  /** Whether the standing "rvw is missing" notice has been waved off. Deliberately not
-   * persisted: the app cannot receive a single review without the launcher, so the notice
-   * earns its way back every launch — dismissing it means "not now", never "never". */
-  cliBannerDismissed: boolean;
   /** Asks main both questions and opens the guide if this install has never seen it. */
   hydrate: () => Promise<void>;
   /** Re-reads where the launcher stands. Cheap (one `existsSync` in main) and worth
    * repeating: `rvw` is installed from a terminal as often as from this app, and a notice
    * that outlives the problem it names is worse than no notice. */
   refreshCli: () => Promise<void>;
-  dismissCliBanner: () => void;
-  /** Re-opens it on demand — from the empty state, for a reader who skipped. */
+  /** Re-opens it on demand — from the start screen, for a reader who skipped. */
   show: () => void;
   goTo: (step: number) => void;
   next: () => void;
@@ -53,13 +48,35 @@ function clampStep(step: number): number {
   return Math.min(Math.max(step, 0), ONBOARDING_STEPS - 1);
 }
 
+/** Whether the standing "rvw is not installed" notice is on screen (see CliBanner).
+ *
+ * There is no way to dismiss it, and that is the point: without the launcher on the PATH the
+ * app cannot receive a single review, so the window is a viewer no agent can reach. A notice a
+ * reader can wave off is a notice about a preference; this one is about the app not working,
+ * and it stands until it is not true any more — which the same button that raises it is what
+ * resolves.
+ *
+ * Two ways to be unreachable — nothing installed, or another launcher answering to `rvw` — and
+ * neither is worth saying while the guide is up, which says it better and is where the install
+ * button properly lives.
+ *
+ * A predicate over the store rather than a condition inside the component so it can be proven
+ * without mounting anything, like every other rule in this app that decides whether a surface
+ * exists. */
+export function cliNoticeShowing(state: Pick<OnboardingState, "cli" | "open">): boolean {
+  const cli = state.cli;
+  if (cli === null || !cli.supported || state.open) {
+    return false;
+  }
+  return !cli.installed || cli.shadowedBy !== null;
+}
+
 export const useOnboardingStore = create<OnboardingState>((set, get) => ({
   open: false,
   step: 0,
   cli: null,
   installing: false,
   problem: null,
-  cliBannerDismissed: false,
 
   hydrate: async () => {
     const bridge = window.reviewer;
@@ -83,8 +100,6 @@ export const useOnboardingStore = create<OnboardingState>((set, get) => ({
     // the last failed attempt left on screen — the complaint is about a state that is over.
     set(cli.installed ? { cli, problem: null } : { cli });
   },
-
-  dismissCliBanner: () => set({ cliBannerDismissed: true }),
 
   show: () => set({ open: true, step: 0 }),
   goTo: (step) => set({ step: clampStep(step) }),

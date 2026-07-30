@@ -15,8 +15,8 @@ import { ONBOARDING_STEPS, useOnboardingStore } from "@/stores/onboarding";
 // loop. Three steps is the shortest form that still answers what it is, why the command
 // exists, and what to type; anything the reader can do without is not here.
 //
-// It is not a modal and does not float: it is the card the start screen shows first, on the
-// same surface the empty state uses once the guide has run (see StartScreen). On first launch
+// It is not a modal and does not float: it is the card the start screen shows first, in place
+// of the document that screen becomes once the guide has run (see StartScreen). On first launch
 // there is nothing behind it to be modal over, and a scrim over a blank page is a shadow cast
 // by nothing — so there is no scrim, no overlay, and no z-index. Whether it is on screen at
 // all is the start screen's decision, not this component's.
@@ -48,7 +48,7 @@ const COPY: readonly StepCopy[] = [
     // explains it underneath, so a body that introduces the block above it is aimed at the
     // wrong half of the card — this one says what to do with what the reader has just read.
     title: "Ask your agent for a review",
-    body: "Copy the prompt into your agent, from inside the repo you want reviewed. Reviewer opens the moment the review lands.",
+    body: "Add the clause to however you already ask for one, from inside the repo you want reviewed. Reviewer opens the moment the review lands.",
   },
 ];
 
@@ -103,7 +103,10 @@ export function OnboardingCard(): ReactElement | null {
           ) : step === 1 ? (
             <CliStage />
           ) : (
-            <AgentPromptBlock note={<AnyAgentNote />} />
+            <AgentPromptBlock
+              label="Add the marked clause to however you ask"
+              note={<AnyAgentNote />}
+            />
           )}
         </Stage>
         <h2 id={titleId} className="mt-6 text-lg leading-7 font-medium text-foreground">

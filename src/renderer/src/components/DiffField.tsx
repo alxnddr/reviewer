@@ -1,8 +1,11 @@
 import type { ReactElement } from "react";
 import { cn } from "@/lib/utils";
 
-// What the app's two glass surfaces float over when there is no review yet: the first-run
-// guide, and the empty state that succeeds it.
+// What the first-run guide floats over: it is the app's one glass card, and it stands where
+// the reader has no review open.
+//
+// The standing start screen used to float on this too, and does not any more — it is a
+// document in the app's own materials now (see StartScreen), and the field went with the card.
 //
 // Glass needs something behind it or it is just a pale rectangle: the blur and the saturate
 // are entirely about what they are blurring, and on a blank page they produce nothing. The
@@ -10,7 +13,7 @@ import { cn } from "@/lib/utils";
 // paints — a diff at reading distance and out of focus, close enough that the eye reads
 // "code, with things added and removed" and far enough that there is nothing to try to read.
 //
-// It is drawn rather than sampled from a real diff on purpose: both surfaces stand where the
+// It is drawn rather than sampled from a real diff on purpose: the card stands where the
 // reader has no repository open, so any real content would be a lie about their own work.
 
 /** One line of the field: how far it is indented, how wide its run of "code" is (percent of
@@ -104,8 +107,8 @@ const INK: Record<FieldLine[2], string> = {
   del: "bg-diff-del-fg/30",
 };
 
-/** Fills its positioned ancestor — the guide's full-window overlay, or the empty state's
- * pane. Purely decorative, and inert to the pointer. */
+/** Fills its positioned ancestor — the guide's full-window overlay. Purely decorative, and
+ * inert to the pointer. */
 export function DiffField(): ReactElement {
   return (
     <div aria-hidden="true" className="absolute inset-0 overflow-hidden bg-background">

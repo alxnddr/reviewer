@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { RecentReview } from "../../../shared/recent-reviews";
 import {
   filterRecents,
+  groupRecents,
   recentFileName,
   recentRange,
   recentSearchText,
@@ -138,6 +139,70 @@ describe("filterRecents", () => {
 
   it("answers empty when nothing matches, rather than falling back to everything", () => {
     expect(filterRecents(rows, "zzzz")).toEqual([]);
+  });
+});
+
+describe("groupRecents", () => {
+  // Local times, because the bands are calendar-relative and so is the reader.
+  const now = new Date(2026, 6, 29, 9, 30);
+  const at = (date: Date): RecentReview =>
+    review({ path: `/${date.getTime()}.reviewer.json`, modified: date.toISOString() });
+
+  it("bands by calendar day, so 'yesterday' is a day and not 24 hours", () => {
+    // Eleven last night and eight this morning are nine hours apart and in different bands.
+    const groups = groupRecents([at(new Date(2026, 6, 29, 8)), at(new Date(2026, 6, 28, 23))], now);
+    expect(groups.map((group) => group.label)).toEqual(["Today", "Yesterday"]);
+  });
+
+  it("drops the bands that hold nothing", () => {
+    const groups = groupRecents([at(new Date(2026, 6, 29, 1)), at(new Date(2026, 5, 1))], now);
+    expect(groups.map((group) => group.label)).toEqual(["Today", "Older"]);
+  });
+
+  it("keeps the newest-first order inside a band", () => {
+    const groups = groupRecents(
+      [at(new Date(2026, 6, 29, 9)), at(new Date(2026, 6, 29, 4)), at(new Date(2026, 6, 29, 1))],
+      now,
+    );
+    expect(groups[0]?.reviews.map((row) => row.modified)).toEqual([
+      new Date(2026, 6, 29, 9).toISOString(),
+      new Date(2026, 6, 29, 4).toISOString(),
+      new Date(2026, 6, 29, 1).toISOString(),
+    ]);
+  });
+
+  it("puts every band in its own place, coarsest last", () => {
+    const groups = groupRecents(
+      [
+        at(new Date(2026, 6, 29, 9)),
+        at(new Date(2026, 6, 28, 9)),
+        at(new Date(2026, 6, 25, 9)),
+        at(new Date(2026, 6, 10, 9)),
+        at(new Date(2025, 1, 1, 9)),
+      ],
+      now,
+    );
+    expect(groups.map((group) => group.label)).toEqual([
+      "Today",
+      "Yesterday",
+      "Previous 7 days",
+      "Previous 30 days",
+      "Older",
+    ]);
+  });
+
+  it("bands a clock-skewed future mtime as today rather than dropping the row", () => {
+    const groups = groupRecents([at(new Date(2026, 6, 30, 9))], now);
+    expect(groups).toEqual([{ label: "Today", reviews: [at(new Date(2026, 6, 30, 9))] }]);
+  });
+
+  it("survives an unreadable timestamp by banding it as the oldest thing there is", () => {
+    const groups = groupRecents([review({ modified: "not a date" })], now);
+    expect(groups.map((group) => group.label)).toEqual(["Older"]);
+  });
+
+  it("has no bands at all for an empty list", () => {
+    expect(groupRecents([], now)).toEqual([]);
   });
 });
 

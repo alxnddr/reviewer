@@ -181,7 +181,7 @@ export type SessionSlice = {
 };
 
 /** `hydrate` runs once ("pending" gates a StrictMode double effect); "hydrating"
- * spans the `sessions:list` round-trip, during which the empty state must not
+ * spans the `sessions:list` round-trip, during which the start screen must not
  * flash; "ready" resolves to empty or sessions by whether slices exist. */
 export type BootPhase = "pending" | "hydrating" | "ready";
 
@@ -198,13 +198,31 @@ export type PromptCopy =
 
 type ReviewState = {
   boot: BootPhase;
-  /** Tab order is insertion order: hydration inserts in main's persisted order
-   * and opens append, so the key order IS the tab strip everywhere. */
+  /** Every open project's state, by session id. Insertion order used to *be* the tab strip;
+   * it is now only the order sessions were learned about in — `tabs` is the strip. */
   sessions: Record<SessionId, SessionSlice>;
   /** Invariant (matching main's store): names an existing slice or nothing. */
   activeSessionId: SessionId | null;
+  /** The tab strip, in order: one stop per session plus one per open start tab, interleaved
+   * however the reader has arranged them.
+   *
+   * It is an explicit list because the strip holds two kinds of thing and only one of them is
+   * a session. A start tab is not a session and must not become one — a session is a
+   * repository or an imported review, both main-owned, persisted and re-derived — so the
+   * renderer owns the order and writes back only the session part of it (`reorderTabs`).
+   *
+   * Invariant: exactly one stop per session in `sessions`, in this list, at all times.
+   * `reconcileTabs` is what maintains that against a fresh listing from main. */
+  tabs: TabStop[];
+  /** The focused start tab, or null when a session is the reader's stop.
+   *
+   * It rides *over* `activeSessionId`, which is left pointing at the session the reader came
+   * from, so leaving a start tab returns them to the exact tab and scroll position they had.
+   * Ephemeral like `overviewOpen`: start tabs are never persisted, so a relaunch lands on the
+   * review someone was reading rather than on the front door. */
+  activeStartTabId: StartTabId | null;
   /** A failed repo-open is app-level: it never lands in a slice. The
-   * OpenFailureBanner renders it while a session is active, the empty state
+   * OpenFailureBanner renders it while a session is active, the start screen
    * otherwise. */
   openFailure: GitFailure | null;
   /** A failed review-open (bad extension, oversize, malformed, …): also app-level
@@ -226,13 +244,22 @@ type ReviewState = {
   /** Boot hydration: pull main's persisted sessions, derive the active one only. */
   hydrate: () => Promise<void>;
   activateSession: (id: SessionId) => void;
-  /** Deletes the session in main and removes the slice; closing the active tab
-   * activates the right neighbor, else the left, else lands on the empty state. */
+  /** Focus a start tab already in the strip. */
+  activateStartTab: (id: StartTabId) => void;
+  /** A new start tab at the end of the strip, focused — the `+`, and ⌘T. Every press is a new
+   * tab, like every other tabbed app: the button sits at the end of the strip, so that is
+   * where its tab lands. */
+  openStartTab: () => void;
+  /** Take one out of the strip: its own close button, and ⌘W while it is focused. */
+  closeStartTab: (id?: StartTabId) => void;
+  /** Deletes the session in main and removes the slice; closing the focused tab
+   * activates the right neighbour, else the left — either kind — else lands on the start
+   * screen. */
   closeSession: (sessionId?: SessionId) => void;
-  /** Re-seats the tab strip after a drag. Key insertion order IS tab order, so the
-   * record is rebuilt rather than annotated — ⌘1…9 and ⌃Tab then follow the new
-   * arrangement for free, since both read that same order. */
-  reorderSessions: (ids: SessionId[]) => void;
+  /** Re-seats the strip after a drag. Both kinds of tab move; only the session order crosses
+   * to main, which knows nothing about start tabs. ⌘1…9 and ⌃Tab follow the new arrangement
+   * for free, since they read this same list. */
+  reorderTabs: (tabs: TabStop[]) => void;
   /** ⌘1…⌘8 are positional; ⌘9 is the last tab (macOS tabbed-app convention). */
   activateTabByOrdinal: (ordinal: TabOrdinal) => void;
   /** ⌃Tab / ⌃⇧Tab; wraps at both ends. */
@@ -365,6 +392,125 @@ export type SessionsView = Pick<ReviewState, "sessions" | "activeSessionId">;
 
 export function selectActiveSlice(state: SessionsView): SessionSlice | null {
   return state.activeSessionId === null ? null : (state.sessions[state.activeSessionId] ?? null);
+}
+
+/** A start tab's identity. Renderer-only and meaningless outside this window's lifetime —
+ * unlike a session id, which main assigns and persists. */
+export type StartTabId = string;
+
+/** One stop in the tab strip: a session, or a start screen. */
+export type TabStop = { kind: "session"; id: SessionId } | { kind: "start"; id: StartTabId };
+
+/** Distinguishes one start tab from the next. A counter rather than a clock or a random
+ * source, for the same reason `promptCopySequence` is one: it only has to differ from the
+ * values before it, and a counter is the same in a test as it is in the app. */
+let startTabSequence = 0;
+
+function nextStartTabId(): StartTabId {
+  startTabSequence += 1;
+  return `start-${startTabSequence}`;
+}
+
+/** Whether two stops are the same tab. Exported for the strip, which has to find the focused
+ * stop's position in the list — and cannot do it by session id alone, since the session a
+ * focused start tab is drawn over is still the active one underneath. */
+export function sameTabStop(a: TabStop, b: TabStop): boolean {
+  return a.kind === b.kind && a.id === b.id;
+}
+
+/** Which stop the reader is on. A focused start tab wins: it is drawn over the active session
+ * rather than instead of it, so `activeSessionId` is still set underneath. */
+export function activeTabStop(
+  state: Pick<ReviewState, "activeStartTabId" | "activeSessionId">,
+): TabStop | null {
+  if (state.activeStartTabId !== null) {
+    return { kind: "start", id: state.activeStartTabId };
+  }
+  return state.activeSessionId === null ? null : { kind: "session", id: state.activeSessionId };
+}
+
+/** The strip rebuilt against a fresh listing from main, holding whatever arrangement the reader
+ * has made of it.
+ *
+ * Main owns which sessions exist and knows nothing about start tabs, so this is the one place
+ * the two facts meet: every stop that still names a live session keeps its slot, every start
+ * tab keeps its slot, sessions main has that the strip does not are appended in main's own
+ * order, and stops for sessions that are gone drop out. `at` places the appended ones somewhere
+ * other than the end — which is what makes a review opened *from* a start tab land in that
+ * tab's slot rather than at the back of the strip. */
+function reconcileTabs(tabs: TabStop[], sessionIds: readonly SessionId[], at?: number): TabStop[] {
+  const live = new Set(sessionIds);
+  const kept = tabs.filter((stop) => stop.kind === "start" || live.has(stop.id));
+  const known = new Set(kept.filter((stop) => stop.kind === "session").map((stop) => stop.id));
+  const added: TabStop[] = sessionIds
+    .filter((id) => !known.has(id))
+    .map((id) => ({ kind: "session", id }));
+  if (added.length === 0) {
+    return kept;
+  }
+  const index = at === undefined ? kept.length : Math.min(Math.max(at, 0), kept.length);
+  return [...kept.slice(0, index), ...added, ...kept.slice(index)];
+}
+
+/** A session taking a start tab's slot: that stop becomes this session's, wherever the
+ * session's own stop happens to be at the time.
+ *
+ * This is the browser's new-tab-page rule, and it is the whole reason the strip is an ordered
+ * list rather than "sessions, then start tabs". Opening a review from the third tab leaves the
+ * review *as* the third tab — a fresh tab appearing at the far end while the spent front door
+ * stays put is a strip rearranging itself behind the reader's back.
+ *
+ * A start tab that is no longer there (closed while a native picker was up) leaves the strip
+ * alone: the session keeps whatever slot it was given, which is the end. */
+function claimStartTabSlot(tabs: TabStop[], from: StartTabId, sessionId: SessionId): TabStop[] {
+  if (!tabs.some((stop) => stop.kind === "start" && stop.id === from)) {
+    return tabs;
+  }
+  const without = tabs.filter((stop) => stop.kind !== "session" || stop.id !== sessionId);
+  const slot = without.findIndex((stop) => stop.kind === "start" && stop.id === from);
+  return [
+    ...without.slice(0, slot),
+    { kind: "session", id: sessionId },
+    ...without.slice(slot + 1),
+  ];
+}
+
+/** Show a stop, whichever kind it is — through the store's own two actions, so a keyboard
+ * activation derives its session exactly like a click does. */
+function activateStop(get: Getter, stop: TabStop): void {
+  if (stop.kind === "start") {
+    get().activateStartTab(stop.id);
+  } else {
+    get().activateSession(stop.id);
+  }
+}
+
+/** The stop that takes over when `index` is closed: the right neighbour, else the left, else
+ * nothing — over the whole strip, so closing a session can land on a start tab and the other
+ * way round. The one rule every tabbed app has, applied to a strip with two kinds of tab. */
+function neighbourStop(tabs: TabStop[], index: number): TabStop | null {
+  return tabs[index + 1] ?? tabs[index - 1] ?? null;
+}
+
+/** The nearest *session* to `index`, searching right then left — what `activeSessionId` has to
+ * be re-pointed at when the session it names is closed.
+ *
+ * It is not the same question as `neighbourStop`, and conflating them is a real bug: the
+ * neighbour may be a start tab, and the pointer must name a session or nothing (see the
+ * invariant on `activeSessionId`). Leaving it on a deleted id gives the shell a session that
+ * resolves to no slice — the diff pane with nothing behind it. */
+function nearestSessionStop(tabs: TabStop[], index: number): SessionId | null {
+  for (let step = 1; step <= tabs.length; step += 1) {
+    const right = tabs[index + step];
+    if (right?.kind === "session") {
+      return right.id;
+    }
+    const left = tabs[index - step];
+    if (left?.kind === "session") {
+      return left.id;
+    }
+  }
+  return null;
 }
 
 /** The slice's soloed diff: the authored layers plus the inferred "not covered by layers"
@@ -1055,6 +1201,8 @@ export const useReviewStore = create<ReviewState>((set, get) => ({
   boot: "pending",
   sessions: {},
   activeSessionId: null,
+  tabs: [],
+  activeStartTabId: null,
   openFailure: null,
   reviewOpenFailure: null,
   reviewExportFailure: null,
@@ -1077,7 +1225,7 @@ export const useReviewStore = create<ReviewState>((set, get) => ({
       snapshot = await bridge.listSessions();
     } catch (error) {
       // Session reads are designed never to fail, but an
-      // IPC-level rejection must still degrade to the empty state with a visible
+      // IPC-level rejection must still degrade to the start screen with a visible
       // failure — never a forever-blank "hydrating" boot.
       console.error("Session hydration failed:", error);
       set({ boot: "ready", openFailure: { code: "unexpected" } });
@@ -1089,10 +1237,18 @@ export const useReviewStore = create<ReviewState>((set, get) => ({
     }
     // Salvage can null the active pointer while keeping sessions — the dropped
     // session was the active one. Land on the first surviving tab so a restore
-    // never renders the empty state behind a populated strip; the
+    // never renders the start screen behind a populated strip; the
     // recovered pointer heals main's null on the next write-back.
     const restoredActive = snapshot.activeSessionId ?? snapshot.sessions[0]?.id ?? null;
-    set({ boot: "ready", sessions, activeSessionId: restoredActive });
+    // The strip is main's order on a fresh launch — there are no start tabs yet, since they
+    // are never persisted.
+    set({
+      boot: "ready",
+      sessions,
+      tabs: snapshot.sessions.map((session) => ({ kind: "session", id: session.id })),
+      activeSessionId: restoredActive,
+      activeStartTabId: null,
+    });
     if (restoredActive !== null) {
       if (snapshot.activeSessionId === null) {
         scheduleActiveWriteBack(get);
@@ -1108,16 +1264,69 @@ export const useReviewStore = create<ReviewState>((set, get) => ({
     if (slice === undefined) {
       return;
     }
+    // Clicking a tab means "show me that", which is also a way of leaving a start screen —
+    // including when the tab clicked is the one already underneath it. That start tab stays in
+    // the strip: the reader switched tabs, they did not close one.
     if (get().activeSessionId !== id) {
-      set({ activeSessionId: id });
+      set({ activeSessionId: id, activeStartTabId: null });
       scheduleActiveWriteBack(get);
+    } else if (get().activeStartTabId !== null) {
+      set({ activeStartTabId: null });
     }
     if (slice.needsDerive) {
       void deriveSession(set, get, id);
     }
   },
 
+  activateStartTab: (id) => {
+    // Only a stop that is actually in the strip: a stale id (its tab closed while a menu was
+    // open) must not resurrect a tab, and `activeStartTabId` naming a tab nobody renders would
+    // be a screen with no tab selected.
+    if (get().tabs.some((stop) => stop.kind === "start" && stop.id === id)) {
+      set({ activeStartTabId: id });
+    }
+  },
+
+  openStartTab: () => {
+    const id = nextStartTabId();
+    set({ tabs: [...get().tabs, { kind: "start", id }], activeStartTabId: id });
+  },
+
+  closeStartTab: (startTabId) => {
+    const id = startTabId ?? get().activeStartTabId;
+    if (id === null) {
+      return;
+    }
+    const tabs = get().tabs;
+    const index = tabs.findIndex((stop) => stop.kind === "start" && stop.id === id);
+    if (index === -1) {
+      return;
+    }
+    const remaining = tabs.filter((_, position) => position !== index);
+    if (get().activeStartTabId !== id) {
+      // A background tab closed by its own X: the reader stays where they are.
+      set({ tabs: remaining });
+      return;
+    }
+    // The focused one: the strip's own neighbour rule, read off the arrangement it is leaving —
+    // right neighbour, else left, and both of them are stops that survive the close. Landing on
+    // a session activates it (deriving it if it has never been shown); landing on nothing leaves
+    // the start screen up, which is what an empty strip shows anyway.
+    const next = neighbourStop(tabs, index);
+    set({ tabs: remaining, activeStartTabId: null });
+    if (next !== null) {
+      activateStop(get, next);
+    }
+  },
+
   closeSession: (sessionId) => {
+    // ⌘W closes the focused tab, and while a start screen is up that is the focused tab — the
+    // session behind it is not what the reader is looking at. A pointer close always names its
+    // session explicitly (the X on a background tab), so it is unaffected.
+    if (sessionId === undefined && get().activeStartTabId !== null) {
+      get().closeStartTab();
+      return;
+    }
     const id = sessionId ?? get().activeSessionId;
     if (id === null || get().sessions[id] === undefined) {
       return;
@@ -1129,69 +1338,81 @@ export const useReviewStore = create<ReviewState>((set, get) => ({
       clearTimeout(pending);
       pendingSessionWrites.delete(id);
     }
-    const order = Object.keys(get().sessions);
-    const index = order.indexOf(id);
-    const neighborId = order[index + 1] ?? order[index - 1] ?? null;
+    const tabs = get().tabs;
+    const index = tabs.findIndex((stop) => stop.kind === "session" && stop.id === id);
+    // Two different questions, and they have two different answers whenever a start tab is
+    // involved. What the reader should be *looking at* is the closed tab's neighbour, either
+    // kind — that is what every tabbed app does and what they watch happen. What
+    // `activeSessionId` may *name* is a session or nothing, so it takes the nearest session
+    // instead, which is also the tab a focused start tab is drawn over and returns to.
+    const neighbour = index === -1 ? null : neighbourStop(tabs, index);
+    const pointer = index === -1 ? null : nearestSessionStop(tabs, index);
     const remaining = { ...get().sessions };
     delete remaining[id];
-    const wasActive = get().activeSessionId === id;
-    set(wasActive ? { sessions: remaining, activeSessionId: neighborId } : { sessions: remaining });
+    // The pointer moves whenever it named the closed session — including while a start tab is
+    // drawn over it, where leaving it behind would point at a session that no longer exists.
+    // Only a close of the tab actually *on screen* moves the reader.
+    const wasPointer = get().activeSessionId === id;
+    const onScreen = wasPointer && get().activeStartTabId === null;
+    set({
+      sessions: remaining,
+      tabs: tabs.filter((stop) => stop.kind !== "session" || stop.id !== id),
+      ...(wasPointer ? { activeSessionId: pointer } : {}),
+    });
     void window.reviewer?.deleteSession({ id });
-    if (wasActive && neighborId !== null) {
+    if (wasPointer && pointer !== null) {
       // Main nulled its active pointer on delete; the debounced write-back
-      // re-points it at the neighbor. Last-tab closes stay null on both sides.
+      // re-points it. Last-tab closes stay null on both sides.
       scheduleActiveWriteBack(get);
-      if (get().sessions[neighborId]?.needsDerive === true) {
-        void deriveSession(set, get, neighborId);
-      }
+    }
+    if (onScreen && neighbour !== null) {
+      // Through the shared activation so a session neighbour derives on arrival exactly as a
+      // click on it would, and a start-tab neighbour becomes the surface.
+      activateStop(get, neighbour);
     }
   },
 
-  reorderSessions: (ids) => {
-    const current = get().sessions;
-    const reordered: Record<SessionId, SessionSlice> = {};
-    for (const id of ids) {
-      const slice = current[id];
-      if (slice !== undefined) {
-        reordered[id] = slice;
-      }
-    }
-    // A session that opened mid-drag isn't in `ids`; keep it at the back rather
-    // than dropping it, matching how main resolves the same gap.
-    for (const [id, slice] of Object.entries(current)) {
-      if (reordered[id] === undefined) {
-        reordered[id] = slice;
-      }
-    }
-    set({ sessions: reordered });
-    void window.reviewer?.reorderSessions({ ids: Object.keys(reordered) });
+  reorderTabs: (tabs) => {
+    // Only stops that still exist, and every live one exactly once: a drag that lands while a
+    // session is opening or closing must not drop a tab or invent one.
+    const sessionIds = Object.keys(get().sessions);
+    const next = reconcileTabs(tabs, sessionIds);
+    set({ tabs: next });
+    // Main knows nothing about start tabs, so it is told the session order and nothing else.
+    void window.reviewer?.reorderSessions({
+      ids: next.filter((stop) => stop.kind === "session").map((stop) => stop.id),
+    });
   },
 
   activateTabByOrdinal: (ordinal) => {
-    const order = Object.keys(get().sessions);
-    const id = ordinal === 9 ? order.at(-1) : order[ordinal - 1];
-    if (id !== undefined) {
-      get().activateSession(id);
+    // Over the whole strip, start tabs included: the accelerators name positions in what the
+    // reader can see, and a digit that skipped a tab because it is not a session would be
+    // counting something else.
+    const stops = get().tabs;
+    const stop = ordinal === 9 ? stops.at(-1) : stops[ordinal - 1];
+    if (stop !== undefined) {
+      activateStop(get, stop);
     }
   },
 
   cycleActiveSession: (direction) => {
     const state = get();
-    const order = Object.keys(state.sessions);
-    const first = order[0];
+    const stops = state.tabs;
+    const first = stops[0];
     if (first === undefined) {
       return;
     }
-    const index = state.activeSessionId === null ? -1 : order.indexOf(state.activeSessionId);
-    if (index === -1) {
+    const current = activeTabStop(state);
+    if (current === null) {
       // Sessions exist but none is active (salvaged store): cycling enters the strip.
-      state.activateSession(first);
+      activateStop(get, first);
       return;
     }
+    const index = stops.findIndex((stop) => sameTabStop(stop, current));
     const step = direction === "next" ? 1 : -1;
-    const next = order[(index + step + order.length) % order.length];
-    if (next !== undefined && next !== state.activeSessionId) {
-      state.activateSession(next);
+    const next = stops[(index + step + stops.length) % stops.length];
+    if (next !== undefined && !sameTabStop(next, current)) {
+      activateStop(get, next);
     }
   },
 
@@ -1204,7 +1425,7 @@ export const useReviewStore = create<ReviewState>((set, get) => ({
     if (!opened.ok) {
       // App-level failure: opening belongs to the shell, so it must not clobber
       // whichever session happens to be active. The banner surfaces it
-      // over an active session; the empty state renders it otherwise.
+      // over an active session; the start screen renders it otherwise.
       set({ openFailure: opened.failure });
       return;
     }
@@ -1215,10 +1436,18 @@ export const useReviewStore = create<ReviewState>((set, get) => ({
     // One tab per repository: re-opening a path that already has a session
     // re-activates its tab — two tabs over one repo would silently fight over
     // the same persisted state through the write-back.
+    // Captured before the awaits: the reader may have switched tabs while the picker was up,
+    // and this is a fact about where the errand started.
+    const from = get().activeStartTabId;
     const existing = Object.values(get().sessions).find((slice) => slice.repo.path === repo.path);
     if (existing !== undefined) {
       set({ openFailure: null });
       get().activateSession(existing.id);
+      // The start tab was still spent — it did its job, the tab it would have become was
+      // already open — so it goes rather than lingering as a door nobody opened.
+      if (from !== null) {
+        get().closeStartTab(from);
+      }
       return;
     }
     // The id comes from main (sessions are main-owned); creation also
@@ -1252,9 +1481,18 @@ export const useReviewStore = create<ReviewState>((set, get) => ({
       needsDerive: false,
       requestTicket: 0,
     };
+    const sessions = { ...get().sessions, [session.id]: slice };
     set({
-      sessions: { ...get().sessions, [session.id]: slice },
+      sessions,
       activeSessionId: session.id,
+      // Into the start tab's own slot, and that tab out of the strip: the browser's
+      // new-tab-page rule (see `placeOpenedSession`). Opened from anywhere else — ⌘O over a
+      // review — it appends, and every parked start tab stays where it is.
+      tabs: (() => {
+        const appended = reconcileTabs(get().tabs, Object.keys(sessions));
+        return from === null ? appended : claimStartTabSlot(appended, from, session.id);
+      })(),
+      activeStartTabId: null,
       openFailure: null,
     });
 
@@ -1343,7 +1581,29 @@ export const useReviewStore = create<ReviewState>((set, get) => ({
         : current !== null && sessions[current] !== undefined
           ? current
           : null;
-    set({ boot: "ready", sessions, activeSessionId: nextActive });
+    // A session the strip has never seen, becoming the active one, is a review *arriving* —
+    // from the reader's own click on the start screen's list, from a drop, or from a CLI
+    // publish while they waited on it. That is the one event the start screen exists for, so
+    // the tab it was waited on takes the review: same slot, same position, no spent front door
+    // left in the strip and nothing for the reader to close.
+    //
+    // Only the *focused* start tab, though. One parked in the strip while the reader is
+    // elsewhere is a tab they put there, and a review landing somewhere else is not permission
+    // to close it. A re-list that changes nothing (a session closed elsewhere, a write-back
+    // echo) touches none of this.
+    const from = get().activeStartTabId;
+    const arrived = nextActive !== null && existing[nextActive] === undefined;
+    const reconciled = reconcileTabs(get().tabs, Object.keys(sessions));
+    set({
+      boot: "ready",
+      sessions,
+      tabs:
+        from !== null && arrived && nextActive !== null
+          ? claimStartTabSlot(reconciled, from, nextActive)
+          : reconciled,
+      activeSessionId: nextActive,
+      ...(from !== null && arrived ? { activeStartTabId: null } : {}),
+    });
     if (nextActive !== null && sessions[nextActive]?.needsDerive === true) {
       await deriveSession(set, get, nextActive);
     }
