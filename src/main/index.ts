@@ -21,9 +21,7 @@ import { createMainWindow } from "./window";
 // is the Electron.app bundle's own identity, and only becomes "Reviewer" once packaged.)
 app.setName("Reviewer");
 
-if (!app.requestSingleInstanceLock()) {
-  app.quit();
-} else {
+if (app.requestSingleInstanceLock()) {
   const gitRunner = createGitRunner();
   const sessionStore = createSessionStore();
 
@@ -31,7 +29,8 @@ if (!app.requestSingleInstanceLock()) {
   // double-click), which can fire before `ready` on a cold start; the queue owns
   // the import → reveal ordering and the pre-ready buffering.
   const openQueue = createReviewOpenQueue({
-    importSession: (absolutePath) => importReviewSessionFromArg(sessionStore, absolutePath),
+    importSession: (absolutePath) =>
+      importReviewSessionFromArg(gitRunner, sessionStore, absolutePath),
     hasWindow: () => BrowserWindow.getAllWindows().length > 0,
     createWindow: () => {
       createMainWindow();
@@ -82,7 +81,7 @@ if (!app.requestSingleInstanceLock()) {
     flushSessionsThenTerminateGit(sessionStore, gitRunner);
   });
 
-  void app.whenReady().then(async () => {
+  void app.whenReady().then(() => {
     app.on("browser-window-created", (_, window) => {
       optimizer.watchWindowShortcuts(window);
     });
@@ -129,4 +128,6 @@ if (!app.requestSingleInstanceLock()) {
       app.quit();
     }
   });
+} else {
+  app.quit();
 }

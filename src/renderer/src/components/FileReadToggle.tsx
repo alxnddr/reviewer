@@ -1,4 +1,4 @@
-import { type ReactElement } from "react";
+import { memo, type ReactElement } from "react";
 import { Check } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { TooltipHint } from "@/components/ui/tooltip";
@@ -24,8 +24,14 @@ type FileReadToggleProps = { path: string };
 /** The checkbox alone — no word beside it. The box is the one control everybody already
  * reads as "done", and the header band it sits in is a row of quiet metadata; a lit word
  * repeated down a long diff is louder than the state it reports. What it means is carried
- * by the tooltip and the accessible name, which say it in full. */
-export function FileReadToggle({ path }: FileReadToggleProps): ReactElement | null {
+ * by the tooltip and the accessible name, which say it in full.
+ *
+ * Memoized on its one prop: Pierre re-renders every visible file's header slots whenever
+ * the portal host re-renders, and this component answers four store selectors per render.
+ * The click that changes it comes through its own subscription, not through the parent. */
+export const FileReadToggle = memo(function FileReadToggle({
+  path,
+}: FileReadToggleProps): ReactElement | null {
   const file = useReviewStore((state) => {
     const diff = selectActiveSlice(state)?.diff;
     return diff !== undefined && diff.phase === "loaded"
@@ -74,4 +80,4 @@ export function FileReadToggle({ path }: FileReadToggleProps): ReactElement | nu
       </Button>
     </TooltipHint>
   );
-}
+});

@@ -51,13 +51,13 @@ export function reviewFileName(
  * "no name here" and replaces with its fallback. */
 export function lastSegment(path: string): string {
   const segments = path.split("/").filter((segment) => segment.length > 0);
-  return segments[segments.length - 1] ?? "";
+  return segments.at(-1) ?? "";
 }
 
 /** Trailing separators dropped, so a home or an `RVW_HOME` given with one does not produce a
  * doubled slash mid-path. A lone `/` trims to empty, which is the right root to join onto. */
 function trimEnd(path: string): string {
-  return path.replace(/\/+$/, "");
+  return path.replace(/\/+$/u, "");
 }
 
 /** A ref or repo name reduced to a short, filesystem-safe token: runs of non-alphanumerics
@@ -65,7 +65,7 @@ function trimEnd(path: string): string {
  * result is capped. Empty in, empty out — the caller supplies the fallback. */
 function slug(value: string): string {
   return value
-    .replace(/[^a-zA-Z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "")
+    .replaceAll(/[^a-zA-Z0-9]+/gu, "-")
+    .replaceAll(/^-+|-+$/gu, "")
     .slice(0, 16);
 }

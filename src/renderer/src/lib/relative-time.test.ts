@@ -24,9 +24,9 @@ describe("absoluteTime", () => {
     // Locale-formatted, so the assertion is on the parts rather than the punctuation
     // between them — the point is that the day, month, year and clock time are there.
     const formatted = absoluteTime("2026-07-04T09:30:00Z");
-    expect(formatted).toMatch(/Jul/);
-    expect(formatted).toMatch(/4/);
-    expect(formatted).toMatch(/2026/);
+    expect(formatted).toMatch(/Jul/u);
+    expect(formatted).toMatch(/4/u);
+    expect(formatted).toMatch(/2026/u);
   });
 
   it("returns empty for an unparseable timestamp", () => {

@@ -16,8 +16,8 @@ export interface LocalContext {
 
 /** Adapt the real Node process to Stricli's minimal process interface for the shipped
  * entrypoint. The streams are the real ones (output reaches the terminal); `exitCode`
- * starts `null` so Stricli's `??=` fills it, and the entrypoint reads it back to call
- * the real `process.exit` — so this wrapper needs no write-through to `process`. `null`
+ * starts `null` so Stricli's `??=` fills it, and the entrypoint reads it back to set the
+ * real `process.exitCode` — so this wrapper needs no write-through to `process`. `null`
  * (not `undefined`) because Stricli types the field `number | string | null`. */
 export function buildContext(nodeProcess: NodeJS.Process): LocalContext {
   return {

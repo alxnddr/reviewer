@@ -1,6 +1,6 @@
 import type { Comment, ReviewLayer } from "../../../shared/review";
 import { changedLines, type ChangedLines } from "../../../tools/review-coverage";
-import { coverageSummary } from "./coverage";
+import { effectiveLayers } from "./coverage";
 import type { FileChangeStatus, PatchFile } from "./diff/patch";
 import { snippetForAnchor, type DiffSnippet } from "./diff/snippet";
 import { layerOutline, layerOwning, resolveLayerScroll } from "./layers";
@@ -183,15 +183,15 @@ export function buildOverview({
   const read = readPaths(files, readFiles);
   const changedByPath = new Map(files.map((file) => [file.path, changedLines(file)]));
 
-  // The authored chapters plus the inferred "not covered by layers" one — the same
-  // effective list the rail and the solo machinery use, so every surface offers the same
-  // set of stops. `coverageSummary` computes both in one pass over the diff.
-  const summary = coverageSummary(files, layers);
-  // A review with no layers at all is "entirely uncovered" by the coverage core's rule,
-  // but there is no walkthrough for anything to be missing from — listing the whole diff
-  // as one not-covered chapter would be a table of contents for a book with no chapters.
-  const uncovered = layers.length === 0 ? null : summary.uncoveredLayer;
-  const effective = uncovered === null ? [...layers] : [...layers, uncovered];
+  // The authored chapters plus the inferred "not covered by layers" one — from
+  // `effectiveLayers` itself, the same list the rail and the solo machinery read, so every
+  // surface offers the same set of stops and one walk of the diff produces it.
+  //
+  // The one thing that is this doc's alone is the guard: a review with no layers at all is
+  // "entirely uncovered" by the coverage core's rule, but there is no walkthrough for
+  // anything to be missing from — listing the whole diff as one not-covered chapter would
+  // be a table of contents for a book with no chapters.
+  const effective = layers.length === 0 ? [] : effectiveLayers(files, layers);
 
   // Ownership is exclusive and sits at the deepest layer that claims the lines
   // (`layerOwning`), so a comment is explained by the most specific section that covers

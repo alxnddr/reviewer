@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
-import type { CodeViewLineSelection } from "@pierre/diffs";
-import type { Comment } from "../../../../shared/review";
+import type { CodeViewLineSelection, DiffLineAnnotation } from "@pierre/diffs";
+import type { Comment, ReviewAnchor } from "../../../../shared/review";
+import { resolveAnchor } from "./anchor";
 import {
   anchorFromLine,
   anchorFromRange,
@@ -11,6 +12,7 @@ import {
   type CommentSlot,
   type CommentUiState,
 } from "./comment-annotations";
+import { RENAMES_PATCH, TWO_HUNKS_PATCH } from "./fixtures";
 import { parsePatch } from "./patch";
 
 // One modification hunk over new-file lines 10..14 (additions) and old-file
@@ -33,6 +35,10 @@ const PATCH = [
 
 const FILES = parsePatch(PATCH, "test");
 
+// `src/old-edit.txt` → `src/edit.txt` (one hunk over old/new lines 1..5) and
+// `src/old-pure.txt` → `src/pure.txt` (no hunks at all).
+const RENAMED = parsePatch(RENAMES_PATCH, "test");
+
 const NO_UI: CommentUiState = { editingId: null, draft: null };
 
 function comment(overrides: Partial<Comment> = {}): Comment {
@@ -51,6 +57,14 @@ function comment(overrides: Partial<Comment> = {}): Comment {
 function annotationsOf(comments: Comment[], ui: CommentUiState = NO_UI) {
   const [item] = buildCommentItems(FILES, comments, ui, false);
   return { item, annotations: item?.annotations ?? [] };
+}
+
+/** One named file's annotation list, for a diff with more than one file. */
+function annotationsOfFile(
+  items: ReturnType<typeof buildCommentItems>,
+  path: string,
+): DiffLineAnnotation<CommentSlot>[] {
+  return items.find((item) => item.id === path)?.annotations ?? [];
 }
 
 describe("buildCommentItems", () => {
@@ -99,6 +113,75 @@ describe("buildCommentItems", () => {
     const items = buildCommentItems(FILES, [comment({ file: "src/gone.ts" })], NO_UI, false);
     expect(items).toHaveLength(1);
     expect(items[0]?.annotations).toHaveLength(0);
+  });
+
+  it("hosts a comment authored before a rename on the renamed file, on its old-file line", () => {
+    // The deletions side is old-file coordinates, which is exactly what an anchor
+    // written against `src/old-edit.txt` carries — so the rename costs it nothing.
+    const authored = comment({
+      file: "src/old-edit.txt",
+      side: "deletions",
+      startLine: 2,
+      endLine: 2,
+    });
+    const items = buildCommentItems(RENAMED, [authored], NO_UI, false);
+    const edited = annotationsOfFile(items, "src/edit.txt");
+    expect(edited).toHaveLength(1);
+    expect(edited[0]?.lineNumber).toBe(2);
+    const slot = edited[0]?.metadata as Extract<CommentSlot, { kind: "comment" }>;
+    expect(slot.outdated).toBe(false);
+    // And on no other file: the old path is not a second home for it.
+    expect(annotationsOfFile(items, "src/pure.txt")).toHaveLength(0);
+  });
+
+  it("hosts a comment authored before a pure rename at the renamed file's header", () => {
+    // A pure rename carries no hunks, so nothing can cover the range — but the file is
+    // right there, so the comment pins to its header rather than vanishing.
+    const authored = comment({ file: "src/old-pure.txt", startLine: 2, endLine: 2 });
+    const items = buildCommentItems(RENAMED, [authored], NO_UI, false);
+    const renamed = annotationsOfFile(items, "src/pure.txt");
+    expect(renamed).toHaveLength(1);
+    expect(renamed[0]?.lineNumber).toBe(0);
+    const slot = renamed[0]?.metadata as Extract<CommentSlot, { kind: "comment" }>;
+    expect(slot.outdated).toBe(true);
+  });
+
+  it("still marks a comment outdated when its content moved within the renamed file", () => {
+    const moved = comment({
+      file: "src/old-edit.txt",
+      side: "additions",
+      startLine: 90,
+      endLine: 90,
+    });
+    const items = buildCommentItems(RENAMED, [moved], NO_UI, false);
+    const edited = annotationsOfFile(items, "src/edit.txt");
+    expect(edited).toHaveLength(1);
+    const slot = edited[0]?.metadata as Extract<CommentSlot, { kind: "comment" }>;
+    expect(slot.outdated).toBe(true);
+  });
+
+  it("gives a contested path to the file that carries it now, not the one renamed away from it", () => {
+    // `src/shared.txt` was renamed to `src/moved.txt` while a new file took the name:
+    // the comment belongs to the file that *is* `src/shared.txt` today.
+    const collision = [
+      "diff --git a/src/shared.txt b/src/moved.txt",
+      "similarity index 100%",
+      "rename from src/shared.txt",
+      "rename to src/moved.txt",
+      "diff --git a/src/shared.txt b/src/shared.txt",
+      "new file mode 100644",
+      "index 0000000..1111111",
+      "--- /dev/null",
+      "+++ b/src/shared.txt",
+      "@@ -0,0 +1,2 @@",
+      "+fresh line1",
+      "+fresh line2",
+      "",
+    ].join("\n");
+    const authored = comment({ file: "src/shared.txt", startLine: 1, endLine: 1 });
+    const items = buildCommentItems(parsePatch(collision, "test"), [authored], NO_UI, false);
+    expect(annotationsOfFile(items, "src/moved.txt")).toHaveLength(0);
+    expect(annotationsOfFile(items, "src/shared.txt")).toHaveLength(1);
   });
 
   it("stacks multiple comments anchored to the same line", () => {
@@ -203,6 +286,12 @@ describe("selectionRange", () => {
     ).toEqual({ startLine: 11, endLine: 13, side: "additions" });
   });
 
+  it("orders a bottom-up drag, which Pierre reports as anchor → current", () => {
+    expect(
+      selectionRange(selection({ start: 13, end: 11, side: "additions" }), "src/foo.ts"),
+    ).toEqual({ startLine: 11, endLine: 13, side: "additions" });
+  });
+
   it("returns null for a selection on a different file", () => {
     expect(
       selectionRange(selection({ start: 11, end: 13, side: "additions" }), "src/other.ts"),
@@ -238,34 +327,170 @@ describe("pickAddAnchor", () => {
     return { id: "src/foo.ts", range };
   }
   const dragged = selection({ start: 11, end: 13, side: "additions" });
+  // The one hunk of `src/foo.ts`, covering additions 10..14 / deletions 10..12.
+  const hunks = FILES[0]?.fileDiff.hunks ?? [];
 
   it("commits the drag range when the clicked + sits inside it", () => {
-    const anchor = pickAddAnchor("src/foo.ts", { lineNumber: 13, side: "additions" }, dragged);
+    const anchor = pickAddAnchor(
+      "src/foo.ts",
+      { lineNumber: 13, side: "additions" },
+      dragged,
+      hunks,
+    );
     expect(anchor).toEqual({ file: "src/foo.ts", side: "additions", startLine: 11, endLine: 13 });
   });
 
   it("commits the drag range for a + placed from the selection (no hovered line)", () => {
-    const anchor = pickAddAnchor("src/foo.ts", null, dragged);
+    const anchor = pickAddAnchor("src/foo.ts", null, dragged, hunks);
     expect(anchor).toEqual({ file: "src/foo.ts", side: "additions", startLine: 11, endLine: 13 });
   });
 
   it("adds on the hovered line, not a stale selection, when the + is outside the range", () => {
-    const anchor = pickAddAnchor("src/foo.ts", { lineNumber: 30, side: "additions" }, dragged);
+    const anchor = pickAddAnchor(
+      "src/foo.ts",
+      { lineNumber: 30, side: "additions" },
+      dragged,
+      hunks,
+    );
     expect(anchor).toEqual({ file: "src/foo.ts", side: "additions", startLine: 30, endLine: 30 });
   });
 
   it("ignores a selection on the opposite side of the hovered +", () => {
-    const anchor = pickAddAnchor("src/foo.ts", { lineNumber: 12, side: "deletions" }, dragged);
+    const anchor = pickAddAnchor(
+      "src/foo.ts",
+      { lineNumber: 12, side: "deletions" },
+      dragged,
+      hunks,
+    );
     expect(anchor).toEqual({ file: "src/foo.ts", side: "deletions", startLine: 12, endLine: 12 });
   });
 
   it("adds a single line when nothing is selected", () => {
-    const anchor = pickAddAnchor("src/foo.ts", { lineNumber: 12, side: "additions" }, null);
+    const anchor = pickAddAnchor("src/foo.ts", { lineNumber: 12, side: "additions" }, null, hunks);
     expect(anchor).toEqual({ file: "src/foo.ts", side: "additions", startLine: 12, endLine: 12 });
   });
 
   it("is null with neither a hovered line nor a usable selection", () => {
-    expect(pickAddAnchor("src/foo.ts", null, null)).toBeNull();
+    expect(pickAddAnchor("src/foo.ts", null, null, hunks)).toBeNull();
+  });
+
+  it("commits the whole range when one hunk already covers it", () => {
+    // The clamp is a ceiling, not a rewrite: a range wholly inside its hunk is
+    // committed exactly as dragged, endpoints included.
+    const wholeHunk = selection({ start: 10, end: 14, side: "additions" });
+    const anchor = pickAddAnchor(
+      "src/foo.ts",
+      { lineNumber: 12, side: "additions" },
+      wholeHunk,
+      hunks,
+    );
+    expect(anchor).toEqual({ file: "src/foo.ts", side: "additions", startLine: 10, endLine: 14 });
+  });
+});
+
+// A drag can cross a hunk boundary — hunks render contiguously, separated only by a
+// visual row — and the range it yields spans collapsed context no single hunk covers,
+// so `resolveAnchor` would call the new comment outdated the instant it was made. The
+// committed anchor is clamped to the hunk the `+` was clicked in instead, and every
+// case below is asserted to place against the very diff it was authored on.
+describe("pickAddAnchor across a hunk boundary", () => {
+  // Two hunks over additions 1..6 and 27..33, with 7..26 collapsed between them.
+  const [twoHunks] = parsePatch(TWO_HUNKS_PATCH, "test");
+  const path = "src/two-hunks.txt";
+  const hunks = twoHunks?.fileDiff.hunks ?? [];
+  // Dragged from the tail of the first hunk into the head of the second.
+  const across: CodeViewLineSelection = {
+    id: path,
+    range: { start: 5, end: 28, side: "additions" },
+  };
+
+  /** Whether the anchor places on the diff it was just authored against. */
+  function places(anchor: ReviewAnchor | null): boolean {
+    return (
+      anchor !== null &&
+      resolveAnchor(anchor, { kind: "derived", file: twoHunks?.fileDiff ?? null }).status ===
+        "placed"
+    );
+  }
+
+  it("clamps to the first hunk when the + is clicked in it", () => {
+    const anchor = pickAddAnchor(path, { lineNumber: 5, side: "additions" }, across, hunks);
+    expect(anchor).toEqual({ file: path, side: "additions", startLine: 5, endLine: 6 });
+    expect(places(anchor)).toBe(true);
+  });
+
+  it("clamps to the second hunk when the + is clicked in it", () => {
+    const anchor = pickAddAnchor(path, { lineNumber: 28, side: "additions" }, across, hunks);
+    expect(anchor).toEqual({ file: path, side: "additions", startLine: 27, endLine: 28 });
+    expect(places(anchor)).toBe(true);
+  });
+
+  it("clamps to the hunk the range starts in for a + placed from the selection", () => {
+    const anchor = pickAddAnchor(path, null, across, hunks);
+    expect(anchor).toEqual({ file: path, side: "additions", startLine: 5, endLine: 6 });
+    expect(places(anchor)).toBe(true);
+  });
+
+  it("clamps a deletions-side drag against the old-file hunk lines", () => {
+    const onDeletions: CodeViewLineSelection = {
+      id: path,
+      range: { start: 4, end: 30, side: "deletions" },
+    };
+    const anchor = pickAddAnchor(path, { lineNumber: 29, side: "deletions" }, onDeletions, hunks);
+    expect(anchor).toEqual({ file: path, side: "deletions", startLine: 27, endLine: 30 });
+    expect(places(anchor)).toBe(true);
+  });
+
+  it("clamps a bottom-up drag, whose endpoints Pierre reports reversed", () => {
+    // The same gesture run upwards: Pierre reports `anchor → current`, so the range
+    // arrives as {start: 28, end: 5}. Ordered on the way in (`selectionRange`), it
+    // clamps like any other — unordered, its bounds would compare backwards and the
+    // whole cross-hunk range would sail through.
+    const upwards: CodeViewLineSelection = {
+      id: path,
+      range: { start: 28, end: 5, side: "additions" },
+    };
+    expect(pickAddAnchor(path, { lineNumber: 28, side: "additions" }, upwards, hunks)).toEqual({
+      file: path,
+      side: "additions",
+      startLine: 27,
+      endLine: 28,
+    });
+    expect(pickAddAnchor(path, null, upwards, hunks)).toEqual({
+      file: path,
+      side: "additions",
+      startLine: 5,
+      endLine: 6,
+    });
+  });
+
+  it("leaves the range as picked when the clicked line belongs to no hunk", () => {
+    // Expanded context: Pierre reveals the collapsed lines but widens no hunk span, so
+    // there is nothing to clamp to. The range stays as dragged rather than being moved
+    // to a hunk the reader never pointed at — it does not place, but neither would a
+    // single-line add on that same expanded line.
+    const anchor = pickAddAnchor(path, { lineNumber: 15, side: "additions" }, across, hunks);
+    expect(anchor).toEqual({ file: path, side: "additions", startLine: 5, endLine: 28 });
+    expect(places(anchor)).toBe(false);
+  });
+
+  it("commits the range as picked for a file with no hunks at all", () => {
+    expect(pickAddAnchor(path, { lineNumber: 5, side: "additions" }, across, [])).toEqual({
+      file: path,
+      side: "additions",
+      startLine: 5,
+      endLine: 28,
+    });
+  });
+
+  it("clamps a drag that swallows a whole hunk down to the one it was committed from", () => {
+    const wide: CodeViewLineSelection = {
+      id: path,
+      range: { start: 2, end: 33, side: "additions" },
+    };
+    const anchor = pickAddAnchor(path, { lineNumber: 30, side: "additions" }, wide, hunks);
+    expect(anchor).toEqual({ file: path, side: "additions", startLine: 27, endLine: 33 });
+    expect(places(anchor)).toBe(true);
   });
 });
 
@@ -278,5 +503,17 @@ describe("unplaceableComments", () => {
 
   it("is empty when every comment's file is in the diff", () => {
     expect(unplaceableComments(FILES, [comment()])).toEqual([]);
+  });
+
+  it("does not strand a comment whose file was renamed out from under it", () => {
+    const beforeRename = comment({ file: "src/old-edit.txt" });
+    const beforePureRename = comment({
+      id: "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
+      file: "src/old-pure.txt",
+    });
+    const stranded = comment({ id: "cccccccc-cccc-4ccc-8ccc-cccccccccccc", file: "src/gone.ts" });
+    expect(unplaceableComments(RENAMED, [beforeRename, beforePureRename, stranded])).toEqual([
+      stranded,
+    ]);
   });
 });

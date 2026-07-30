@@ -4,7 +4,7 @@ import type { Comment } from "../../../shared/review";
 import { Button } from "@/components/ui/button";
 import { TooltipHint } from "@/components/ui/tooltip";
 import { CommentBody } from "@/components/CommentBody";
-import { commentLocation } from "@/lib/comment-body";
+import { commentLocation } from "@/lib/comment-location";
 
 type UnplaceableCommentsProps = {
   /** Comments whose file is absent from the loaded diff — already derived by

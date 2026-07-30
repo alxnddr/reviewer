@@ -23,7 +23,7 @@ export const UNCOVERED_LAYER_ID = "reviewer:uncovered";
  *
  * The headline numbers stay *line*-based (they are the coverage-quality readout, and the
  * same ones `rvw check --coverage` prints); the remainder is *file*-based, because soloing is
- * file-granular — see `buildUncoveredLayer`. */
+ * file-granular — see `uncoveredLayerFrom`. */
 export type CoverageSummary = {
   report: CoverageReport;
   /** Coverable changed lines a layer spans, and the coverable universe. */
@@ -67,7 +67,7 @@ export function coverageSummary(
     }
   }
 
-  const uncoveredLayer = buildUncoveredLayer(report, layers);
+  const uncoveredLayer = uncoveredLayerFrom(report, layers);
   const uncoveredFiles =
     uncoveredLayer === null ? 0 : new Set(uncoveredLayer.ranges.map((r) => r.file)).size;
 
@@ -93,8 +93,11 @@ export function coverageSummary(
  * both in a layer and not covered by layers. The headline % stays line-based; that is the
  * coverage-*quality* question, and it is a different one.
  *
- * Null when every coverable file is walked. */
-function buildUncoveredLayer(
+ * Null when every coverable file is walked.
+ *
+ * Exported so a caller that already holds a report never pays for a second walk to get the
+ * layer out of it — the report *is* the expensive part. */
+export function uncoveredLayerFrom(
   report: CoverageReport,
   layers: readonly ReviewLayer[],
 ): ReviewLayer | null {
@@ -138,12 +141,23 @@ function count(n: number, noun: string): string {
 /** The authored layers plus the inferred remainder — the single ordered list every
  * consumer (the store's navigation, the sidebar tree, the diff surface) resolves the
  * active layer against, so the synthetic layer solos and steps exactly like a real one.
- * Returns the input array unchanged (same reference) when nothing is uncovered, so a
- * fully-covered review adds no row and no churn. */
+ * A fully-covered review adds no row — just the authored layers, copied out. The result is
+ * a fresh array either way, which is why `soloed-diff.ts` holds one per input change rather
+ * than letting each consumer key its memos on a new list every render.
+ *
+ * `summary` is the same derivation already in hand: a caller that needed the headline
+ * numbers too passes its `CoverageSummary` and the diff is walked once for both, instead of
+ * once here and once there. It must have been computed from *these* `files` and `layers` —
+ * it is a shortcut past the walk, not a different question. `soloed-diff.ts` is the one
+ * place that pairs them for the surfaces; everything else can pass nothing. */
 export function effectiveLayers(
   files: readonly PatchFile[],
   layers: readonly ReviewLayer[],
+  summary?: CoverageSummary,
 ): ReviewLayer[] {
-  const uncovered = buildUncoveredLayer(coverageOfFiles(files, layers), layers);
+  const uncovered =
+    summary === undefined
+      ? uncoveredLayerFrom(coverageOfFiles(files, layers), layers)
+      : summary.uncoveredLayer;
   return uncovered === null ? [...layers] : [...layers, uncovered];
 }

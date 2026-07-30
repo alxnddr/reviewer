@@ -14,6 +14,7 @@ import { Sidebar } from "@/components/Sidebar";
 import { SidebarNav } from "@/components/SidebarNav";
 import { StartScreen } from "@/components/StartScreen";
 import { nextRegion, visibleRegions } from "@/lib/focus-regions";
+import { shortcutBlocked } from "@/lib/shortcut-guard";
 import { useOnboardingStore } from "@/stores/onboarding";
 import { useRecentReviewsStore } from "@/stores/recent-reviews";
 import { selectActiveSlice, useReviewStore } from "@/stores/review";
@@ -21,9 +22,10 @@ import { selectActiveSlice, useReviewStore } from "@/stores/review";
 /** `o` toggles the tour doc from anywhere in a review — into it from the diff, and back
  * out to the full diff from inside it. Mounted at the app level (not in either screen)
  * because it has to work on both sides of the switch. Guarded like the other
- * single-letter shortcuts (j/k, n/p): never inside a text field, never with a modifier. */
+ * single-letter shortcuts (j/k, n/p) through the one shared rule: never inside a text field,
+ * never with a modifier, never behind an open sheet. */
 function useOverviewShortcut(): void {
-  const hasOverview = useReviewStore((state) => selectActiveSlice(state)?.overview !== null);
+  const hasOverview = useReviewStore((state) => selectActiveSlice(state)?.overview != null);
   const overviewOpen = useReviewStore((state) => selectActiveSlice(state)?.overviewOpen ?? false);
   const openOverview = useReviewStore((state) => state.openOverview);
   const closeOverview = useReviewStore((state) => state.closeOverview);
@@ -33,15 +35,7 @@ function useOverviewShortcut(): void {
       return;
     }
     const onKeyDown = (event: KeyboardEvent): void => {
-      const target = event.target;
-      if (
-        event.metaKey ||
-        event.ctrlKey ||
-        event.altKey ||
-        event.key !== "o" ||
-        (target instanceof HTMLElement &&
-          (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable))
-      ) {
+      if (event.key !== "o" || shortcutBlocked(event)) {
         return;
       }
       event.preventDefault();
@@ -54,6 +48,59 @@ function useOverviewShortcut(): void {
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [hasOverview, overviewOpen, openOverview, closeOverview]);
+}
+
+/** j/k step the focused file, n/p walk the comments, Escape ends the walk, r marks the focused
+ * file read — the review's whole letter vocabulary, all of it acting on the session rather than
+ * on whatever is painted.
+ *
+ * They live here, beside `o` and F6, rather than in DiffScreen, which is where they used to be
+ * and where they were only half true: DiffScreen is unmounted the whole time the tour doc is up,
+ * so every one of these keys was silently dead on the doc — including the ones whose store
+ * action closes the doc as its first move, which is exactly what a reader pressing `j` in there
+ * means by it. The sheet says single keys work anywhere, and now they do; the actions already
+ * no-op with no session and no loaded diff, so nothing has to check where it is. */
+function useReviewShortcuts(): void {
+  const selectAdjacentFile = useReviewStore((state) => state.selectAdjacentFile);
+  const stepComment = useReviewStore((state) => state.stepComment);
+  const clearActiveComment = useReviewStore((state) => state.clearActiveComment);
+  const toggleFileRead = useReviewStore((state) => state.toggleFileRead);
+
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent): void => {
+      if (shortcutBlocked(event)) {
+        return;
+      }
+      switch (event.key) {
+        case "j":
+        case "k":
+          event.preventDefault();
+          selectAdjacentFile(event.key === "j" ? 1 : -1);
+          break;
+        case "n":
+        case "p":
+          event.preventDefault();
+          stepComment(event.key === "n" ? 1 : -1);
+          break;
+        // Marking does not move: a reader who marks the file they are looking at is still
+        // looking at it, and a surface that jumped out from under that press would make the
+        // whole gesture something to be careful with.
+        case "r":
+          event.preventDefault();
+          toggleFileRead();
+          break;
+        // No preventDefault — Escape is shared (the layer tree clears its solo with it, a
+        // field clears its filter), and this handler only ever ends the comment walk.
+        case "Escape":
+          clearActiveComment();
+          break;
+        default:
+          break;
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [selectAdjacentFile, stepComment, clearActiveComment, toggleFileRead]);
 }
 
 /** F6 (⇧F6 backwards) steps focus between the shell's big regions — the layer tree, the
@@ -166,6 +213,7 @@ export function App(): ReactElement {
   }, [hydrate]);
 
   useOverviewShortcut();
+  useReviewShortcuts();
   useRegionShortcut();
   useOnboardingLifecycle();
   useRecentReviewsCommand();
@@ -232,16 +280,14 @@ export function App(): ReactElement {
             )
           }
         >
-          {activeSessionId !== null ? (
-            showOverview ? (
-              <OverviewScreen />
-            ) : (
-              <DiffScreen />
-            )
-          ) : (
+          {activeSessionId === null ? (
             // Everything before the first review, including the frames before the store has
             // answered: the start screen owns its own settling, so nothing here waits.
             <StartScreen failure={openFailure} />
+          ) : showOverview ? (
+            <OverviewScreen />
+          ) : (
+            <DiffScreen />
           )}
         </AppShell>
       </ReviewDropZone>

@@ -3,6 +3,7 @@ import { cpSync, existsSync, mkdirSync, mkdtempSync, realpathSync, writeFileSync
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { MAX_PATCH_BYTES } from "../src/shared/git-diff";
 
 // The harness for the CLI suites that must run `rvw` the way an agent does: as the
 // distributed bundle, under `node`, from a git repo that is not this checkout and has no
@@ -74,7 +75,9 @@ function write(root: string, path: string, contents: string | Uint8Array): void 
  * `<root>/dist/rvw.js` + `<root>/skills` layout is the one `rvw skills` resolves
  * against, so it is preserved rather than flattened. `dist/package.json` travels with
  * the bundle: it is what declares the ESM the bundle is written in, so an install without it
- * would only run on a Node new enough to guess.
+ * would only run on a Node new enough to guess. That this install synthesizes the layout is
+ * why `portability.test.ts` also reads `electron-builder.yml` — a manifest copied here and not
+ * into the packaged app is the drift a green suite once hid.
  *
  * Copy only: `cli/bundle.setup.ts` built `dist/rvw.js` before any worker started, so nothing is
  * writing it while suites running in parallel read it. */
@@ -109,6 +112,10 @@ export function rvw(
   const result = spawnSync("node", [cli.bundle, ...args], {
     cwd: repo.path,
     encoding: "utf8",
+    // The same cap the CLI's own git runner uses, not `spawnSync`'s 1 MB default: a suite that
+    // proves a multi-megabyte patch reaches the pipe intact must be able to *read* it, and the
+    // default would kill the child with ENOBUFS and report the truncation as the harness's.
+    maxBuffer: MAX_PATCH_BYTES,
     ...(stdin === undefined ? {} : { input: stdin }),
   });
   return { status: result.status ?? -1, stdout: result.stdout, stderr: result.stderr };
@@ -143,6 +150,41 @@ export function minimalRepo(): ForeignRepo {
   const root = initRepo("rvw-foreign-");
   write(root, "a.txt", "one\ntwo\nthree\n");
   return commitPair(root, (head) => write(head, "a.txt", "one\nTWO\nthree\nfour\n"));
+}
+
+// The oversized fixture: a range whose diff is measured in megabytes, so a suite can assert
+// that all of stdout survives the pipe. Size is the entire point — macOS's pipe buffer is 64 KB
+// and stdout-to-a-pipe is asynchronous, so a patch that fits in the buffer proves nothing about
+// whether the entrypoint flushes what it wrote (see cli/index.ts).
+//
+// Every *other* line is rewritten rather than a contiguous block, and that shape is load-bearing
+// too: it yields one changed span per changed line instead of one span for the whole file, so
+// `rvw check --coverage --json` — the other verb that can outgrow the buffer — has a report worth
+// megabytes to print rather than four lines.
+const BULK_LINES = 20_000;
+const BULK_PADDING = "x".repeat(48);
+
+function bulkContents(rewritten: boolean): string {
+  const lines = Array.from({ length: BULK_LINES }, (_, index) => {
+    const marker = rewritten && index % 2 === 0 ? "changed " : "";
+    return `line ${index + 1} ${marker}${BULK_PADDING}`;
+  });
+  return `${lines.join("\n")}\n`;
+}
+
+/** The coverable changed-line count of `bulkyRepo`'s range — half the file's lines, counted on
+ * both the deletion and the addition side, so `BULK_LINES / 2 * 2`. Exported so a suite can
+ * assert a coverage report arrived *whole* rather than as a prefix that happened to parse. */
+export const BULK_COVERABLE_LINES = BULK_LINES;
+
+/** A foreign repo whose `base...head` patch is well past 1 MB: one file, half its lines
+ * rewritten. `bulk.txt` is text (a binary blob would be non-coverable and produce no patch body
+ * at all), and there is only one file because what is being measured is bytes on stdout, not
+ * the classification of a change. */
+export function bulkyRepo(): ForeignRepo {
+  const root = initRepo("rvw-bulky-");
+  write(root, "bulk.txt", bulkContents(false));
+  return commitPair(root, (head) => write(head, "bulk.txt", bulkContents(true)));
 }
 
 // The exit-gate fixture: a change shaped like a real one, so the gate exercises every

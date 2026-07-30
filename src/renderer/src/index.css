@@ -192,9 +192,11 @@ html[data-theme="nord"] {
      * register is calibrated against. Inherits into
      * the Pierre shadow roots. */
     @apply bg-background font-sans text-base text-foreground antialiased;
-    /* Desktop chrome is not selectable text; content surfaces opt back in. */
+    /* Desktop chrome is not selectable text; content surfaces opt back in.
+     * Unprefixed only — the build's Lightning CSS pass emits `-webkit-user-select` for
+     * Safari on its own, and a hand-written twin here is the same landmine that silently
+     * deleted the glass blur from every packaged build (see [data-glass] below). */
     user-select: none;
-    -webkit-user-select: none;
   }
 }
 
@@ -425,20 +427,30 @@ html[data-theme="nord"] {
      * why it read as a pale sheet of nothing over legible text. `filter: url()` on ordinary
      * content is fine and unrelated; it is specifically the backdrop form that is inert.
      *
+     * NO HAND-WRITTEN `-webkit-` TWIN EITHER, which is a sharper trap because it only fires
+     * in a packaged build. Tailwind runs the production stylesheet through Lightning CSS,
+     * which reads `backdrop-filter` and `-webkit-backdrop-filter` as one property declared
+     * twice, keeps the last, and prints it back with only the prefix it was handed — so the
+     * pair below collapsed to a lone `-webkit-backdrop-filter`. Chromium does not implement
+     * that prefix at all (`CSS.supports("-webkit-backdrop-filter", "blur(1px)")` is false),
+     * so every shipped build painted glass with no blur and no saturate: a 32% tint over
+     * legible text. `bun dev` never showed it, because Lightning CSS only runs on build.
+     * The `@supports` guard could not catch it either — its `or` arm is satisfied by the
+     * unprefixed property this very rule had just lost, so the opaque fallback below stayed
+     * off. Declare the standard property alone; Lightning CSS emits the prefix for Safari.
+     *
      * Light takes a heavier blur than dark, which looks backwards until you notice what each
      * is blurring: dark-mode prose is light text on near-black, so it dissolves into a glow
      * almost immediately, while light-mode prose is near-black on white — the highest
      * contrast the app ever paints — and survives a blur that would erase anything else. */
     [data-glass] {
       backdrop-filter: blur(40px) saturate(190%);
-      -webkit-backdrop-filter: blur(40px) saturate(190%);
     }
     .dark [data-glass] {
       /* The brightness lift is what keeps dark-theme glass from reading as a hole: the
        * backdrop it samples is already near-black, so without it the panel comes out darker
        * than the page it floats over, which is the opposite of how a lit surface behaves. */
       backdrop-filter: blur(30px) saturate(180%) brightness(1.6);
-      -webkit-backdrop-filter: blur(30px) saturate(180%) brightness(1.6);
     }
   }
 
@@ -459,8 +471,10 @@ html[data-theme="nord"] {
   @media (prefers-reduced-transparency: reduce) {
     [data-glass],
     .dark [data-glass] {
+      /* Unprefixed only, for the reason spelled out above: the pair collapses to the webkit
+       * form in a packaged build, and this override would then have failed to switch off the
+       * blur it is here to switch off. */
       backdrop-filter: none;
-      -webkit-backdrop-filter: none;
       background-color: var(--popover);
       background-image: none;
       border-color: var(--border);

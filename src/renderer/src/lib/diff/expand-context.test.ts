@@ -139,9 +139,12 @@ describe("toLoadedFiles", () => {
 describe("createExpandLoader", () => {
   it("reads each side from its own source and returns both file contents", async () => {
     const requests: FileContentsRequest[] = [];
-    const fetch: FileContentsFetch = vi.fn(async (request): Promise<FileContentsResponse> => {
+    const fetch: FileContentsFetch = vi.fn((request): Promise<FileContentsResponse> => {
       requests.push(request);
-      return { ok: true, value: present(`${sourceLabel(request.source)}:${request.path}`) };
+      return Promise.resolve({
+        ok: true,
+        value: present(`${sourceLabel(request.source)}:${request.path}`),
+      });
     });
     const loader = createExpandLoader(REPO, BRANCH_SOURCES, fetch);
 
@@ -159,9 +162,9 @@ describe("createExpandLoader", () => {
 
   it("reads a commit range's old side at the parent, new side off disk", async () => {
     const requests: FileContentsRequest[] = [];
-    const fetch: FileContentsFetch = vi.fn(async (request): Promise<FileContentsResponse> => {
+    const fetch: FileContentsFetch = vi.fn((request): Promise<FileContentsResponse> => {
       requests.push(request);
-      return { ok: true, value: present("body") };
+      return Promise.resolve({ ok: true, value: present("body") });
     });
     const sources = expansionSources({ kind: "commitRangeWithUncommitted", first: SHA_A });
     const loader = createExpandLoader(REPO, sources, fetch);
@@ -176,9 +179,9 @@ describe("createExpandLoader", () => {
 
   it("reads a rename-changed old side at the pre-rename path", async () => {
     const requests: FileContentsRequest[] = [];
-    const fetch: FileContentsFetch = vi.fn(async (request): Promise<FileContentsResponse> => {
+    const fetch: FileContentsFetch = vi.fn((request): Promise<FileContentsResponse> => {
       requests.push(request);
-      return { ok: true, value: present("body") };
+      return Promise.resolve({ ok: true, value: present("body") });
     });
     const loader = createExpandLoader(REPO, BRANCH_SOURCES, fetch);
 
@@ -192,10 +195,8 @@ describe("createExpandLoader", () => {
 
   it("rejects the load when a side read fails, so Pierre keeps the hunk-only view", async () => {
     const fetch: FileContentsFetch = vi.fn(
-      async (): Promise<FileContentsResponse> => ({
-        ok: false,
-        failure: { code: "unknownRevision" },
-      }),
+      (): Promise<FileContentsResponse> =>
+        Promise.resolve({ ok: false, failure: { code: "unknownRevision" } }),
     );
     const loader = createExpandLoader(REPO, BRANCH_SOURCES, fetch);
 
@@ -206,7 +207,7 @@ describe("createExpandLoader", () => {
 describe("resolveExpandLoader (the frozen gate)", () => {
   const selection: DiffSelection = { kind: "branches", base: "main", head: "feature" };
   const fetch: FileContentsFetch = vi.fn(
-    async (): Promise<FileContentsResponse> => ({ ok: true, value: present("x") }),
+    (): Promise<FileContentsResponse> => Promise.resolve({ ok: true, value: present("x") }),
   );
 
   it("builds a loader for a live-repo two-ref selection", () => {
@@ -221,10 +222,15 @@ describe("resolveExpandLoader (the frozen gate)", () => {
       { kind: "commitRangeWithUncommitted", first: SHA_A },
       { kind: "uncommitted" },
     ];
-    for (const selection of brushed) {
-      expect(resolveExpandLoader({ frozen: false, repoPath: REPO, selection, fetch })).toBeTypeOf(
-        "function",
-      );
+    for (const brushedSelection of brushed) {
+      expect(
+        resolveExpandLoader({
+          frozen: false,
+          repoPath: REPO,
+          selection: brushedSelection,
+          fetch,
+        }),
+      ).toBeTypeOf("function");
     }
   });
 

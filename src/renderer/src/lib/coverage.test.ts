@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 import type { ReviewLayer } from "../../../shared/review";
-import { coverageSummary, effectiveLayers, UNCOVERED_LAYER_ID } from "./coverage";
+import {
+  coverageSummary,
+  effectiveLayers,
+  uncoveredLayerFrom,
+  UNCOVERED_LAYER_ID,
+} from "./coverage";
 import { parsePatch, type PatchFile } from "./diff/patch";
 
 // A two-file diff measured by the real parser, so the changed-line universe the summary
@@ -114,5 +119,22 @@ describe("effectiveLayers", () => {
   it("returns just the authored layers when fully covered", () => {
     const layers = effectiveLayers(FILES, ALL);
     expect(layers.map((l) => l.id)).toEqual(["foo-all", "bar-all"]);
+  });
+
+  it("reads a precomputed summary instead of walking the diff again", () => {
+    // The shortcut has to answer the same question the walk does — including the
+    // fully-covered case, where "no inferred layer" is a real answer and not a missing one.
+    for (const layers of [[FOO_ADDS], ALL, []]) {
+      expect(effectiveLayers(FILES, layers, coverageSummary(FILES, layers))).toEqual(
+        effectiveLayers(FILES, layers),
+      );
+    }
+  });
+});
+
+describe("uncoveredLayerFrom", () => {
+  it("lifts the remainder out of a report the caller already holds", () => {
+    const { report, uncoveredLayer } = coverageSummary(FILES, [FOO_ADDS]);
+    expect(uncoveredLayerFrom(report, [FOO_ADDS])).toEqual(uncoveredLayer);
   });
 });

@@ -3,15 +3,23 @@ import * as z from "zod";
 // The git IPC contract: every payload crossing the bridge is defined here as a zod
 // schema so refs are proven safe before any spawn.
 
-/** Absolute path to a repository work tree. v1 is macOS-only, so absolute = leading `/`. */
-export const RepoPath = z.string().refine((path) => path.startsWith("/"), {
-  error: "Repo path must be absolute",
-});
+/** Absolute path to a repository work tree. v1 is macOS-only, so absolute = leading `/`.
+ * Bounded like `FilePath` because a *review artifact* chooses this string (`ReviewArtifact.repo`)
+ * and the app is up to 32 MiB of attacker-authored JSON: an unbounded path never becomes a repo
+ * (the OS refuses it long before git does) but it does ride the typed failure into the renderer's
+ * open-failure banner — and the recents rows — as one unbreakable text node. macOS `PATH_MAX` is
+ * 1024, so the bound refuses nothing real. */
+export const RepoPath = z
+  .string()
+  .max(4096, { error: "Repo path is too long" })
+  .refine((path) => path.startsWith("/"), {
+    error: "Repo path must be absolute",
+  });
 export type RepoPath = z.infer<typeof RepoPath>;
 
 /** Full commit hash (40-hex SHA-1 or 64-hex SHA-256), never an abbreviation or a rev
  * expression — anything else could smuggle flags or rev syntax into a spawn. */
-export const CommitSha = z.string().regex(/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/, {
+export const CommitSha = z.string().regex(/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/u, {
   error: "Commit sha must be a full lowercase hex hash",
 });
 export type CommitSha = z.infer<typeof CommitSha>;
@@ -20,7 +28,7 @@ export type CommitSha = z.infer<typeof CommitSha>;
 // `..`, `@{`, `//`, leading `-` `.` `/`, trailing `.` `/`, trailing `.lock`.
 // Leading `-` and whitespace are the injection-critical rejections.
 // oxlint-disable-next-line no-control-regex -- matching control chars is the point of this deny-list
-const BRANCH_NAME_FORBIDDEN = /[\x00-\x20\x7f~^:?*[\\]|\.\.|@\{|\/\/|^[-./]|[./]$|\.lock$/;
+const BRANCH_NAME_FORBIDDEN = /[\u0000-\u0020\u007F~^:?*[\\]|\.\.|@\{|\/\/|^[-./]|[./]$|\.lock$/u;
 
 export const BranchName = z
   .string()
@@ -41,7 +49,7 @@ export type ReviewRef = z.infer<typeof ReviewRef>;
 // Control bytes are the injection-critical rejection; a NUL would truncate the
 // argument mid-spawn.
 // oxlint-disable-next-line no-control-regex -- rejecting control bytes is the point of this deny-list
-const FILE_PATH_FORBIDDEN = /[\x00-\x1f]/;
+const FILE_PATH_FORBIDDEN = /[\u0000-\u001F]/u;
 
 /** A repo-relative file path as it appears in a diff, addressed as `<ref>:<path>`
  * for a full-file read. Flag injection is impossible because the validated

@@ -144,11 +144,11 @@ function active(): SessionSlice {
   if (state.activeSessionId === null) {
     throw new Error("no active session");
   }
-  const slice = state.sessions[state.activeSessionId];
-  if (slice === undefined) {
+  const found = state.sessions[state.activeSessionId];
+  if (found === undefined) {
     throw new Error("active session id names no slice");
   }
-  return slice;
+  return found;
 }
 
 function slice(id: string): SessionSlice {
@@ -830,6 +830,31 @@ describe("useReviewStore.selectAdjacentFile", () => {
     patchActive({ diff: { phase: "loading" }, selectedFilePath: null });
     useReviewStore.getState().selectAdjacentFile(1);
     expect(active().selectedFilePath).toBeNull();
+  });
+
+  it("steps only the visible (soloed) file set, like the comment walk", () => {
+    // greet.ts and notes.txt, with three hidden files between them and added.txt.
+    const solo: ReviewLayer[] = [
+      {
+        id: "two-files",
+        label: "Two files",
+        summary: "greet and notes",
+        ranges: [
+          { file: "greet.ts", side: "additions", startLine: 1, endLine: 1 },
+          { file: "notes.txt", side: "additions", startLine: 1, endLine: 1 },
+        ],
+      },
+    ];
+    patchActive({ layers: solo, activeLayerId: "two-files", selectedFilePath: "added.txt" });
+    // From a file the solo hides, forward lands on the layer's first — never on doomed.txt,
+    // which is next in the full diff and absent from the screen.
+    useReviewStore.getState().selectAdjacentFile(1);
+    expect(active().selectedFilePath).toBe("greet.ts");
+    useReviewStore.getState().selectAdjacentFile(1);
+    expect(active().selectedFilePath).toBe("notes.txt");
+    // And it clamps at the layer's last file rather than walking out the far side of it.
+    useReviewStore.getState().selectAdjacentFile(1);
+    expect(active().selectedFilePath).toBe("notes.txt");
   });
 });
 
@@ -1529,7 +1554,7 @@ describe("comment curation", () => {
     const [added] = active().comments;
     expect(added?.body).toBe("needs a guard");
     expect(added?.file).toBe("added.txt");
-    expect(added?.id).toMatch(/^[0-9a-f-]{36}$/);
+    expect(added?.id).toMatch(/^[0-9a-f-]{36}$/u);
 
     expect(bridge.updateSession).not.toHaveBeenCalled();
     await vi.advanceTimersByTimeAsync(WRITE_BACK_DEBOUNCE_MS);
@@ -1686,18 +1711,18 @@ describe("useReviewStore layer navigation", () => {
     // The three layers cover three single lines of a multi-file diff, so a coverable
     // gap remains: the inferred "not covered by layers" layer is the last stop in the
     // effective order, reachable by stepping past the last authored layer.
-    const { stepLayer } = useReviewStore.getState();
-    stepLayer(1);
+    const { stepLayer: step } = useReviewStore.getState();
+    step(1);
     expect(active().activeLayerId).toBe("layer-a");
-    stepLayer(1);
+    step(1);
     expect(active().activeLayerId).toBe("layer-b");
-    stepLayer(1);
+    step(1);
     expect(active().activeLayerId).toBe("layer-c");
-    stepLayer(1);
+    step(1);
     expect(active().activeLayerId).toBe(UNCOVERED_LAYER_ID);
-    stepLayer(1);
+    step(1);
     expect(active().activeLayerId).toBe(UNCOVERED_LAYER_ID);
-    stepLayer(-1);
+    step(-1);
     expect(active().activeLayerId).toBe("layer-c");
   });
 
@@ -1843,18 +1868,18 @@ describe("useReviewStore tour doc navigation", () => {
 
   it("steps the doc as stop zero: forward enters chapter one, back off it returns", () => {
     seedTour();
-    const { stepLayer } = useReviewStore.getState();
+    const { stepLayer: step } = useReviewStore.getState();
 
-    stepLayer(-1);
+    step(-1);
     expect(active().overviewOpen).toBe(true); // already at the start
 
-    stepLayer(1);
+    step(1);
     expect(active()).toMatchObject({ overviewOpen: false, activeLayerId: "layer-a" });
-    stepLayer(1);
+    step(1);
     expect(active().activeLayerId).toBe("layer-b");
-    stepLayer(-1);
+    step(-1);
     expect(active().activeLayerId).toBe("layer-a");
-    stepLayer(-1);
+    step(-1);
     expect(active()).toMatchObject({ overviewOpen: true, activeLayerId: null });
   });
 
@@ -1978,6 +2003,18 @@ describe("useReviewStore comment navigation", () => {
     useReviewStore.getState().focusComment(ID_B);
     expect(active().activeCommentId).toBe(ID_B);
     expect(active().selectedFilePath).toBe("greet.ts");
+  });
+
+  it("focuses a comment authored before a rename onto the file's current path", () => {
+    // MULTI_STATUS_PATCH renames oldname.txt → newname.txt. The comment still names the
+    // old path, but the file focus and the unfold are keyed on the path the loaded diff
+    // carries — the old one matches no file, so it would focus and unfold nothing.
+    const beforeRename: Comment = { ...C_ADDED, file: "oldname.txt" };
+    seedComments([beforeRename], { collapsedFiles: new Set(["newname.txt"]) });
+    useReviewStore.getState().focusComment(ID_A);
+    expect(active().activeCommentId).toBe(ID_A);
+    expect(active().selectedFilePath).toBe("newname.txt");
+    expect(active().collapsedFiles.has("newname.txt")).toBe(false);
   });
 
   it("steps in document order from nothing, forward lands on the first comment", () => {
@@ -2340,7 +2377,7 @@ describe("exit gate", () => {
   }
 
   function seedImportedReview(review: ImportedReview): void {
-    const slice: SessionSlice = {
+    const seeded: SessionSlice = {
       id: SESSION_ID,
       repo: review.repo,
       log: null,
@@ -2370,7 +2407,7 @@ describe("exit gate", () => {
     };
     useReviewStore.setState({
       boot: "ready",
-      sessions: { [SESSION_ID]: slice },
+      sessions: { [SESSION_ID]: seeded },
       activeSessionId: SESSION_ID,
     });
   }
@@ -2658,7 +2695,7 @@ describe("reading progress", () => {
 
   it("marks a whole layer's extent, and only the files the diff carries", () => {
     useReviewStore.getState().setLayerRead("greeting", true);
-    expect([...active().readFiles.keys()].sort()).toEqual(["added.txt", "greet.ts"]);
+    expect([...active().readFiles.keys()].toSorted()).toEqual(["added.txt", "greet.ts"]);
     expect(active().collapsedFiles.has("notes.txt")).toBe(false);
   });
 
@@ -2666,7 +2703,7 @@ describe("reading progress", () => {
     useReviewStore.getState().setLayerRead("greeting", true);
     useReviewStore.getState().setLayerRead("notes", true);
     useReviewStore.getState().clearFilesRead(["greet.ts"]);
-    expect([...active().readFiles.keys()].sort()).toEqual(["added.txt", "notes.txt"]);
+    expect([...active().readFiles.keys()].toSorted()).toEqual(["added.txt", "notes.txt"]);
   });
 
   it("never schedules a write-back: progress is view state, not session input", () => {

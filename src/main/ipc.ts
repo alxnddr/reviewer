@@ -49,7 +49,7 @@ export function registerIpcHandlers(gitRunner: GitRunner, sessionStore: SessionS
   );
 
   registerGitIpcHandlers(gitRunner);
-  registerReviewIpcHandlers(sessionStore);
+  registerReviewIpcHandlers(gitRunner, sessionStore);
   registerReviewSaveHandlers();
 
   registerIpcHandler(

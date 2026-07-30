@@ -3,16 +3,16 @@ import type { CodeViewHandle } from "@pierre/diffs/react";
 import type { CommentSlot } from "./comment-annotations";
 import type { PatchFile } from "./patch";
 import { buildSearchIndex, findMatches, type DiffLineRef } from "./search";
+import { modalOpen } from "@/lib/shortcut-guard";
 
 /** Find-in-diff, wired to CodeView's own scroll + selection API — the only way to
  * reach a virtualized surface, where off-screen lines are absent from the DOM and
  * the browser's native find cannot see them. The pure index/match half lives in
  * `search.ts`; this hook owns the UI state, the ⌘F/⌃F trigger, and the imperative
  * navigation: the active match line is scrolled to centre and selected, and the
- * selection *is* the highlight. Programmatic selection writes go through the React
- * handle, which always writes `notify: false` — so the highlight never feeds
- * DiffView's comment-add mirror, and a single-line search selection stays
- * invisible to the gutter `+` (which reads only deliberate multi-line ranges). */
+ * selection *is* the highlight. A search highlight is always a collapsed single-line
+ * selection, so it stays invisible to the gutter `+`, which reads only deliberate
+ * multi-line ranges. */
 export type DiffSearchState = {
   open: boolean;
   query: string;
@@ -143,7 +143,14 @@ export function useDiffSearch(
   // and preventDefault keeps the browser find-of-nothing from flashing.
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent): void => {
-      if ((event.metaKey || event.ctrlKey) && !event.altKey && event.key.toLowerCase() === "f") {
+      if (
+        (event.metaKey || event.ctrlKey) &&
+        !event.altKey &&
+        event.key.toLowerCase() === "f" &&
+        // Not from under a sheet: the find bar would open on a diff the reader cannot see,
+        // and steal the focus the dialog is holding.
+        !modalOpen()
+      ) {
         event.preventDefault();
         openSearch();
       }

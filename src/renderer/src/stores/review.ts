@@ -22,9 +22,9 @@ import {
 } from "../../../shared/review";
 import type { ReviewOpenFailure, ReviewOpenResponse } from "../../../shared/review-open";
 import type { Session, SessionId, SessionSnapshot } from "../../../shared/session";
-import { parsePatch, type PatchFile } from "../lib/diff/patch";
+import { filesByAnchorPath, parsePatch, type PatchFile } from "../lib/diff/patch";
 import { findLayer, soloFiles, stepLayer as stepLayerId } from "../lib/layers";
-import { effectiveLayers } from "../lib/coverage";
+import { NO_FILES, soloedDiff, type SoloedDiff } from "../lib/soloed-diff";
 import {
   isFileRead,
   markFilesRead,
@@ -335,14 +335,30 @@ export function selectActiveSlice(state: SessionsView): SessionSlice | null {
   return state.activeSessionId === null ? null : (state.sessions[state.activeSessionId] ?? null);
 }
 
-/** The authored layers plus the inferred "not covered by layers" layer, resolved against
- * whatever diff is loaded. Navigation and soloing key off this so the synthetic layer
- * steps and filters exactly like an authored one; it is never persisted (it stays out of
- * `slice.layers`), only ever reachable through the ephemeral `activeLayerId`. An
- * unloaded diff has no universe, so it degrades to the authored layers. */
-function sliceLayers(slice: SessionSlice): ReviewLayer[] {
-  const files = slice.diff.phase === "loaded" ? slice.diff.files : [];
-  return effectiveLayers(files, slice.layers);
+/** The slice's soloed diff: the authored layers plus the inferred "not covered by layers"
+ * layer, the active one resolved against that list, and the file subset a solo leaves. The
+ * synthetic layer is never persisted (it stays out of `slice.layers`), only ever reachable
+ * through the ephemeral `activeLayerId`. An unloaded diff has no universe, so it degrades
+ * to the authored layers over an empty file set.
+ *
+ * Navigation, soloing and the two surfaces all read this one derivation
+ * (`lib/soloed-diff.ts`), which memoises on the identities `slice` holds — so an action
+ * that fires per keypress costs a lookup, not a walk of the diff. */
+function sliceSolo(slice: SessionSlice): SoloedDiff {
+  const files = slice.diff.phase === "loaded" ? slice.diff.files : NO_FILES;
+  return soloedDiff(files, slice.layers, slice.activeLayerId);
+}
+
+/** A stable empty layer list, so the sessionless case below hits one cache entry rather
+ * than keying a new one per call. */
+const NO_LAYERS: readonly ReviewLayer[] = [];
+
+/** The same derivation for the active session, for the components that render it — one
+ * cached object, so subscribing to it is a reference check and never a re-render on its
+ * own. Sessionless (no slice) reads as an empty diff with no layers. */
+export function selectSoloedDiff(state: SessionsView): SoloedDiff {
+  const slice = selectActiveSlice(state);
+  return slice === null ? soloedDiff(NO_FILES, NO_LAYERS, null) : sliceSolo(slice);
 }
 
 /** What the current mode's state asks of the diff pane. */
@@ -503,7 +519,7 @@ let pendingActiveWrite: ReturnType<typeof setTimeout> | null = null;
  * carrying one (never a real toplevel basename, but untrusted all the same) is
  * flattened rather than sent as a request main would reject. */
 function reviewFileBase(repoName: string): string {
-  const safe = repoName.replace(/[\\/]/g, "-").split("\0").join("-").trim();
+  const safe = repoName.replaceAll(/[\\/]/gu, "-").split("\0").join("-").trim();
   return `${safe === "" ? "review" : safe}-review`;
 }
 
@@ -817,7 +833,7 @@ function brushAfterWalk(
   // which is the same shape a review session opens in over its own range. A plain
   // history is not something anyone means "all of" by, so it lands on the newest entry.
   const whole = (): BrushRange | null =>
-    slice.base !== null ? reviewFullBrush(entries) : { anchor: 0, focus: 0 };
+    slice.base === null ? { anchor: 0, focus: 0 } : reviewFullBrush(entries);
   if (land || slice.commitSelection === null) {
     return whole();
   }
@@ -915,12 +931,12 @@ async function deriveSession(set: Setter, get: Getter, sessionId: SessionId): Pr
       ? { phase: "loaded", list: branches.value }
       : { phase: "failed", failure: branches.failure },
     brush:
-      review !== null
-        ? review.brush
-        : log.ok
+      review === null
+        ? log.ok
           ? brushAfterWalk(log.value.entries, current, false)
-          : null,
-    reviewSubrange: review !== null ? review.reviewSubrange : current.reviewSubrange,
+          : null
+        : review.brush,
+    reviewSubrange: review === null ? current.reviewSubrange : review.reviewSubrange,
     // A persisted pick wins; a fresh session lists the branch it is standing on. `base`
     // is deliberately not defaulted: a session opens on the branch's own history, and a
     // comparison is something the reviewer asks for.
@@ -1085,7 +1101,7 @@ export const useReviewStore = create<ReviewState>((set, get) => ({
 
   activateTabByOrdinal: (ordinal) => {
     const order = Object.keys(get().sessions);
-    const id = ordinal === 9 ? order[order.length - 1] : order[ordinal - 1];
+    const id = ordinal === 9 ? order.at(-1) : order[ordinal - 1];
     if (id !== undefined) {
       get().activateSession(id);
     }
@@ -1396,7 +1412,14 @@ export const useReviewStore = create<ReviewState>((set, get) => ({
     if (slice === undefined || slice.diff.phase !== "loaded" || slice.diff.files.length === 0) {
       return;
     }
-    const files = slice.diff.files;
+    // Walk the file set the surface actually shows, the same way `n`/`p` does: with a layer
+    // soloed the diff renders only that layer's extent, and stepping the full list marched
+    // the selection off into files that are not on screen — from the reader's side, j/k
+    // simply stopped working at the layer's last file.
+    const files = sliceSolo(slice).files;
+    if (files.length === 0) {
+      return;
+    }
     const currentIndex = files.findIndex((file) => file.path === slice.selectedFilePath);
     const nextIndex =
       currentIndex === -1
@@ -1554,7 +1577,7 @@ export const useReviewStore = create<ReviewState>((set, get) => ({
     if (slice === undefined) {
       return;
     }
-    const layers = sliceLayers(slice);
+    const layers = sliceSolo(slice).layers;
     if (slice.overviewOpen) {
       // From stop zero, forward enters the first chapter; back is the start of the
       // walkthrough, so it stays put rather than wrapping to the end.
@@ -1599,26 +1622,31 @@ export const useReviewStore = create<ReviewState>((set, get) => ({
     if (comment === undefined) {
       return;
     }
+    // The file hosting the comment, under the path the loaded diff knows it by: an
+    // anchor authored before a rename names the old path, and every path below (solo
+    // cover, fold, file focus) is keyed on the diff's current one. Falls back to the
+    // authored path when no file claims it — an unplaceable comment focuses nothing.
+    const hostPath =
+      slice.diff.phase === "loaded"
+        ? (filesByAnchorPath(slice.diff.files).get(comment.file)?.path ?? comment.file)
+        : comment.file;
     // A soloed layer that doesn't cover the target's file would leave its
     // annotation unmounted, so there'd be nothing to scroll to; clear the solo
     // first (the panel lists every comment, soloed-out ones included). The full
     // diff is unaffected, so this only fires when a solo is actually hiding it.
-    const layers = sliceLayers(slice);
     const clearsSolo =
       slice.activeLayerId !== null &&
       slice.diff.phase === "loaded" &&
-      !soloFiles(slice.diff.files, findLayer(layers, slice.activeLayerId), layers).some(
-        (file) => file.path === comment.file,
-      );
+      !sliceSolo(slice).files.some((file) => file.path === hostPath);
     // A folded file renders no lines, so its comment cards are not mounted and there is
     // nothing to scroll to — the same reason a solo that hides the file is cleared above.
     // Unfold it rather than refuse the jump: the reader asked for this finding.
-    const collapsedFiles = withCollapsed(slice.collapsedFiles, [comment.file], false);
+    const collapsedFiles = withCollapsed(slice.collapsedFiles, [hostPath], false);
     // The active id is ephemeral (no write-back); the file focus moves with it so
     // the tree and j/k stay on the comment's file — that half persists.
     setSlice(set, get, id, {
       activeCommentId: commentId,
-      selectedFilePath: comment.file,
+      selectedFilePath: hostPath,
       ...(collapsedFiles === slice.collapsedFiles ? {} : { collapsedFiles }),
       // Stepping to a comment is diff navigation, so it leaves the doc — the card is
       // about to be scrolled to, and it lives on the diff surface.
@@ -1641,8 +1669,7 @@ export const useReviewStore = create<ReviewState>((set, get) => ({
     // the diff and this walk, so `n`/`p` never jumps to a comment that isn't on
     // screen. `frozen` places every anchor; otherwise placement is positional.
     const frozen = slice.reviewDiff?.kind === "frozenPatch";
-    const layers = sliceLayers(slice);
-    const visible = soloFiles(slice.diff.files, findLayer(layers, slice.activeLayerId), layers);
+    const visible = sliceSolo(slice).files;
     const entries = navigableEntries(orderedComments(visible, slice.comments, frozen));
     if (entries.length === 0) {
       return;
@@ -1715,7 +1742,7 @@ export const useReviewStore = create<ReviewState>((set, get) => ({
     if (slice === undefined || slice.diff.phase !== "loaded") {
       return;
     }
-    const layers = sliceLayers(slice);
+    const layers = sliceSolo(slice).layers;
     const layer = findLayer(layers, layerId);
     if (layer === null) {
       return;

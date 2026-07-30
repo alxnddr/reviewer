@@ -13,6 +13,12 @@ describe("RepoPath", () => {
   it.each(["repo", "../repo", ""])("rejects the non-absolute path %j", (path) => {
     expect(RepoPath.safeParse(path).success).toBe(false);
   });
+
+  it("rejects a path longer than any real one", () => {
+    // An artifact's `repo` is attacker-chosen; without a bound a megabyte-long
+    // string would reach the open-failure banner and the recents rows verbatim.
+    expect(RepoPath.safeParse(`/${"a".repeat(4096)}`).success).toBe(false);
+  });
 });
 
 describe("CommitSha", () => {

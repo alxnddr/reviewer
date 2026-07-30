@@ -315,7 +315,7 @@ function spansCover(ranges: readonly LineSpan[], line: number): boolean {
 /** Group sorted line numbers into contiguous runs — consecutive integers merge into one
  * span. Input order is not assumed, so the lines are sorted first. */
 function contiguousSpans(lines: readonly number[]): LineSpan[] {
-  const sorted = [...lines].sort((a, b) => a - b);
+  const sorted = [...lines].toSorted((a, b) => a - b);
   const spans: LineSpan[] = [];
   for (const line of sorted) {
     const last = spans.at(-1);

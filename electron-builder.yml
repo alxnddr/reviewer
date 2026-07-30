@@ -2,24 +2,29 @@ appId: dev.al.reviewer
 productName: Reviewer
 directories:
   buildResources: build
+# An allowlist, not a denylist: electron-builder does not read .gitignore, so anything not named
+# here — agent worktrees under .claude/, scratch dirs, screenshots, build-time configs — would
+# otherwise ship. out/ (the built main, preload and renderer) and package.json (Electron's
+# entrypoint manifest) are everything the app loads from the asar at runtime; LICENSE is here
+# because a distributed binary should carry its terms, not because anything reads it.
+# Production node_modules are added by electron-builder itself and need no entry.
+# Anything shipped beside them belongs in extraResources below.
 files:
-  - "!**/.vscode/*"
-  - "!.github/*"
-  - "!src/*"
-  - "!design/*"
-  - "!assets/*"
-  - "!electron.vite.config.{js,ts,mjs,cjs}"
-  - "!vitest.config.{js,ts,mjs,cjs}"
-  - "!{.editorconfig,README.md}"
-  - "!{.env,.env.*,.npmrc}"
-  - "!{tsconfig.json,tsconfig.node.json,tsconfig.web.json}"
-  - "!*.tsbuildinfo"
-  - "!skills/*"
+  - out/**
+  - package.json
+  - LICENSE
 # The rvw CLI and its agent-agnostic review skills (assets shipped by `rvw skills`), laid out
 # as the CLI resolves them: rvw.js one directory below the dir holding `skills/` (bundledSkillsRoot).
+#
+# The manifest travels with the bundle and must land in the same directory: it is the
+# `{"type":"module"}` that declares the ESM `rvw.js` is written in. The shim installed into
+# /usr/local/bin execs `node "$RVW"` with whatever node is on the user's PATH, so without it the
+# CLI runs only on a Node new enough to detect module syntax by itself (>=20.19 / >=22.7).
 extraResources:
   - from: dist/rvw.js
     to: cli/rvw.js
+  - from: dist/package.json
+    to: cli/package.json
   - from: skills
     to: skills
 mac:

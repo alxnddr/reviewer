@@ -1,7 +1,12 @@
-import type { CodeViewDiffItem, CodeViewLineSelection, DiffLineAnnotation } from "@pierre/diffs";
+import type {
+  CodeViewDiffItem,
+  CodeViewLineSelection,
+  DiffLineAnnotation,
+  Hunk,
+} from "@pierre/diffs";
 import type { Comment, ReviewAnchor, ReviewSide } from "../../../../shared/review";
-import type { PatchFile } from "./patch";
-import { resolveAnchor } from "./anchor";
+import { filesByAnchorPath, type PatchFile } from "./patch";
+import { hunkSpan, resolveAnchor } from "./anchor";
 
 // Comments as Pierre line annotations: each comment is our React subtree slotted
 // beneath its anchored diff line, never a restyle of Pierre's shadow DOM. The
@@ -11,8 +16,10 @@ import { resolveAnchor } from "./anchor";
 // and anchors resolve positionally. A comment whose range drifted keeps its
 // authored anchor and pins to the file header (`lineNumber: 0`); a comment whose
 // file has vanished from the diff has no host item and is left in session state
-// (never dropped), re-anchoring if its file returns. Curation UI state (which
-// comment is being edited, an in-flight draft) rides in the annotation metadata so
+// (never dropped), re-anchoring if its file returns. A rename is not a vanishing —
+// the file answers to both its names (`filesByAnchorPath`), so a comment authored
+// before it hosts on the renamed file. Curation UI state (which comment is being
+// edited, an in-flight draft) rides in the annotation metadata so
 // the item `version` fingerprint below sees it: CodeView reuses an item record and
 // re-renders its slots only when the version changes (`syncItemRecord`), so every
 // rendered change must bump it.
@@ -64,9 +71,11 @@ export type CommentUiState = { editingId: string | null; draft: CommentDraft | n
 function fnv1a(input: string): number {
   let hash = 0x811c9dc5;
   for (let index = 0; index < input.length; index += 1) {
+    // oxlint-disable-next-line unicorn/prefer-code-point -- FNV-1a folds fixed-width units and this loop is indexed by `input.length` (UTF-16 units); `codePointAt` would change every hash
     hash ^= input.charCodeAt(index);
     hash = Math.imul(hash, 0x01000193);
   }
+  // oxlint-disable-next-line unicorn/prefer-math-trunc -- `>>> 0` is the uint32 coercion FNV-1a ends on; `Math.trunc` would leave the sign bit and return a negative
   return hash >>> 0;
 }
 
@@ -97,12 +106,26 @@ function annotationsVersion(
   return fnv1a(`${collapsed ? "1" : "0"}\n${parts.join("\n")}`);
 }
 
-export function groupByFile(comments: readonly Comment[]): Map<string, Comment[]> {
+/** Comments keyed by the *current* path of the file that carries them, so a caller
+ * walking `files` finds each file's list under `file.path`. The authored
+ * `comment.file` is resolved through `filesByAnchorPath`, so a comment written
+ * before a rename groups onto the renamed file rather than a key nothing matches.
+ * A comment whose path is in neither `path` nor `previousPath` has no file to group
+ * under and is left out entirely — those are `unplaceableComments`. */
+export function groupByFile(
+  files: readonly PatchFile[],
+  comments: readonly Comment[],
+): Map<string, Comment[]> {
+  const fileByPath = filesByAnchorPath(files);
   const byFile = new Map<string, Comment[]>();
   for (const comment of comments) {
-    const list = byFile.get(comment.file);
+    const file = fileByPath.get(comment.file);
+    if (file === undefined) {
+      continue;
+    }
+    const list = byFile.get(file.path);
     if (list === undefined) {
-      byFile.set(comment.file, [comment]);
+      byFile.set(file.path, [comment]);
     } else {
       list.push(comment);
     }
@@ -112,8 +135,9 @@ export function groupByFile(comments: readonly Comment[]): Map<string, Comment[]
 
 /** The diff items CodeView renders, each carrying its comments as annotations
  * placed by the resolver and a `version` that changes whenever its annotations
- * do. A comment whose file is not among `files` produces no annotation — it is
- * absent from the surface, not from the review (kept in session state). */
+ * do. A comment whose file is not among `files` — under either of a renamed
+ * file's names — produces no annotation: it is absent from the surface, not from
+ * the review (kept in session state). */
 export function buildCommentItems(
   files: readonly PatchFile[],
   comments: readonly Comment[],
@@ -129,7 +153,7 @@ export function buildCommentItems(
    * here because the fold is a property of the rendered item. */
   collapsedPaths: ReadonlySet<string> = new Set(),
 ): CodeViewDiffItem<CommentSlot>[] {
-  const byFile = groupByFile(comments);
+  const byFile = groupByFile(files, comments);
   return files.map((file) => {
     const twoColumn = rendersTwoColumns(file, diffStyle);
     const collapsed = collapsedPaths.has(file.path);
@@ -175,12 +199,14 @@ export function buildCommentItems(
  * in session state (never dropped) but show nothing. Derived here so a surface
  * can list them. Resolved against the *full* loaded diff, never a soloed
  * subset — soloing a layer hides a file's comments from the surface but does not
- * make them unplaceable; they re-anchor the moment their file is back on screen. */
+ * make them unplaceable; they re-anchor the moment their file is back on screen.
+ * A renamed file's old path counts as present (same `filesByAnchorPath` the
+ * grouping uses), so a rename does not read as a vanished file. */
 export function unplaceableComments(
   files: readonly PatchFile[],
   comments: readonly Comment[],
 ): Comment[] {
-  const present = new Set(files.map((file) => file.path));
+  const present = filesByAnchorPath(files);
   return comments.filter((comment) => !present.has(comment.file));
 }
 
@@ -221,7 +247,8 @@ export function anchorFromRange(
 }
 
 /** The picked line range on one file: what the gutter `+` reads from Pierre's
- * active selection to commit a range add. */
+ * active selection to commit a range add. Always ascending (`startLine ≤ endLine`),
+ * which every consumer here relies on. */
 export type SelectedRange = { startLine: number; endLine: number; side: ReviewSide };
 
 /** Pierre's active line selection normalized to a single-side range on `fileId`,
@@ -229,7 +256,14 @@ export type SelectedRange = { startLine: number; endLine: number; side: ReviewSi
  * different file; a collapsed single-line selection — what a plain click leaves
  * behind — so the deliberate drag gesture stays distinct from an ordinary click
  * (the hovered-line path owns single lines); and a sideless or cross-column
- * selection, which has no one side an anchor can live on. */
+ * selection, which has no one side an anchor can live on.
+ *
+ * The endpoints are ordered here rather than downstream: Pierre reports the range as
+ * `anchor → current` (`InteractionManager.buildSelectionRange`) and never sorts it, so
+ * a bottom-up drag arrives with `start > end`. Left raw, that range is a line interval
+ * nothing can test membership in — the `+` would read its own hovered line as outside
+ * the drag, and the hunk clamp would compare against reversed bounds and pass a
+ * cross-hunk range straight through. */
 export function selectionRange(
   selection: CodeViewLineSelection | null,
   fileId: string,
@@ -247,22 +281,64 @@ export function selectionRange(
   if (endSide !== undefined && endSide !== side) {
     return null;
   }
-  return { startLine: start, endLine: end, side };
+  return { startLine: Math.min(start, end), endLine: Math.max(start, end), side };
 }
 
 /** A hovered gutter line normalized to the anchor's side vocabulary. */
 export type HoveredLine = { lineNumber: number; side: ReviewSide };
 
+/** A picked range narrowed to the single hunk `line` sits in. Pierre's selection is
+ * file line numbers over one continuously rendered file, and consecutive hunks are
+ * separated by nothing but a visual separator row, so a drag from the tail of one hunk
+ * into the head of the next yields a range that also swallows the collapsed context
+ * between them — a range no single hunk covers, which `resolveAnchor` would call
+ * outdated on the very diff it was just authored against. Clamping keeps the anchor on
+ * what the reader actually dragged over: the selected lines of the hunk they committed
+ * it from.
+ *
+ * `line` is always inside the range (the caller only clamps a range the click belongs
+ * to), so once its hunk is found the clamp can only pull the endpoints inward past it —
+ * the result still contains `line` and stays ascending and non-empty.
+ *
+ * A line no same-side hunk holds is expanded context (Pierre tracks an expansion apart
+ * from the hunk metadata, so the extra rows widen no span): there is no hunk to clamp
+ * to, and no anchor places on such a line anyway, so the range is left as picked rather
+ * than moved somewhere the reader never pointed.
+ *
+ * NOTE (034): this walks the hunk list with a different question than `coversRange` —
+ * "which hunk holds this line" rather than "does one hunk cover this range" — and shares
+ * only `hunkSpan` with it. A unification has to keep both. */
+function clampToHunk(range: SelectedRange, line: number, hunks: readonly Hunk[]): SelectedRange {
+  const holder = hunks.find((hunk) => {
+    const span = hunkSpan(hunk, range.side);
+    return span.start <= line && line <= span.end;
+  });
+  if (holder === undefined) {
+    return range;
+  }
+  const span = hunkSpan(holder, range.side);
+  return {
+    ...range,
+    startLine: Math.max(range.startLine, span.start),
+    endLine: Math.min(range.endLine, span.end),
+  };
+}
+
 /** The anchor a gutter `+` click commits: the active drag range when the click
  * belongs to it — a `+` placed from the selection reports no hovered line, or the
  * hovered line falls inside the range on the same side — else the single hovered
  * line. A stale selection under an unrelated line is ignored, so that `+` adds on
- * its own line rather than a range the reader is no longer pointing at. Null when
+ * its own line rather than a range the reader is no longer pointing at. A committed
+ * range is clamped to the hunk it was committed from (`clampToHunk`), so a range picked
+ * off hunk lines never reaches further than the one hunk that can carry it. Null when
  * neither yields a valid anchor. */
 export function pickAddAnchor(
   fileId: string,
   hovered: HoveredLine | null,
   selection: CodeViewLineSelection | null,
+  /** The file's hunks, which bound how far a committed range may reach (`clampToHunk`).
+   * Empty for a file the caller has no hunks for, which commits the range as picked. */
+  hunks: readonly Hunk[],
 ): ReviewAnchor | null {
   const range = selectionRange(selection, fileId);
   const clickBelongsToRange =
@@ -272,7 +348,10 @@ export function pickAddAnchor(
         hovered.lineNumber >= range.startLine &&
         hovered.lineNumber <= range.endLine));
   if (range !== null && clickBelongsToRange) {
-    return anchorFromRange(fileId, range.startLine, range.endLine, range.side);
+    // The `+` clicked from the selection itself reports no hovered line; the hunk it
+    // was committed from is then the one the range starts in.
+    const clamped = clampToHunk(range, hovered?.lineNumber ?? range.startLine, hunks);
+    return anchorFromRange(fileId, clamped.startLine, clamped.endLine, clamped.side);
   }
   if (hovered === null) {
     return null;

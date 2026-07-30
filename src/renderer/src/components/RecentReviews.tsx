@@ -188,33 +188,33 @@ function RecentReviewsPanel(): ReactElement {
         case "ArrowDown":
           event.preventDefault();
           moveCursor(1);
-          return;
+          break;
         case "ArrowUp":
           event.preventDefault();
           moveCursor(-1);
-          return;
+          break;
         case "PageDown":
           event.preventDefault();
           moveCursor(PAGE_ROWS);
-          return;
+          break;
         case "PageUp":
           event.preventDefault();
           moveCursor(-PAGE_ROWS);
-          return;
+          break;
         case "Home":
           event.preventDefault();
           moveCursor(-reviews.length);
-          return;
+          break;
         case "End":
           event.preventDefault();
           moveCursor(reviews.length);
-          return;
+          break;
         case "Enter":
           event.preventDefault();
           openAt(activeIndex);
-          return;
-        default:
-          return;
+          break;
+        // No default: an unlisted key is left to the field, which is the point of
+        // claiming only the list commands above.
       }
     },
     [moveCursor, openAt, activeIndex, reviews.length],
@@ -260,40 +260,42 @@ function RecentReviewsPanel(): ReactElement {
         )}
       </header>
 
-      {phase !== "loaded" ? (
+      {phase === "loaded" ? (
+        reviews.length === 0 ? (
+          <EmptyRecents query={query} total={total} dir={dir} unreadable={unreadable} />
+        ) : (
+          <div
+            ref={scrollRef}
+            id={listId}
+            role="listbox"
+            aria-labelledby={titleId}
+            className="min-h-0 flex-1 overflow-y-auto overscroll-contain p-1.5"
+          >
+            <div className="relative w-full" style={{ height: `${virtualizer.getTotalSize()}px` }}>
+              {virtualizer.getVirtualItems().map((item) => {
+                const review = reviews[item.index];
+                return review === undefined ? null : (
+                  <RecentRow
+                    key={review.path}
+                    id={rowDomId(item.index)}
+                    review={review}
+                    now={now}
+                    active={item.index === activeIndex}
+                    offset={item.start}
+                    onHover={(event) => hoverRow(item.index, event)}
+                    onOpen={() => openAt(item.index)}
+                  />
+                );
+              })}
+            </div>
+          </div>
+        )
+      ) : (
         // Not a spinner. The read is one directory listing and a few small parses — it
         // resolves inside a frame or two on any real reviews folder — so a spinner would be a
         // flash of anxiety, where an empty field of the right height is simply the panel
         // before its rows land.
         <div className="min-h-40 flex-1" />
-      ) : reviews.length === 0 ? (
-        <EmptyRecents query={query} total={total} dir={dir} unreadable={unreadable} />
-      ) : (
-        <div
-          ref={scrollRef}
-          id={listId}
-          role="listbox"
-          aria-labelledby={titleId}
-          className="min-h-0 flex-1 overflow-y-auto overscroll-contain p-1.5"
-        >
-          <div className="relative w-full" style={{ height: `${virtualizer.getTotalSize()}px` }}>
-            {virtualizer.getVirtualItems().map((item) => {
-              const review = reviews[item.index];
-              return review === undefined ? null : (
-                <RecentRow
-                  key={review.path}
-                  id={rowDomId(item.index)}
-                  review={review}
-                  now={now}
-                  active={item.index === activeIndex}
-                  offset={item.start}
-                  onHover={(event) => hoverRow(item.index, event)}
-                  onOpen={() => openAt(item.index)}
-                />
-              );
-            })}
-          </div>
-        </div>
       )}
 
       <footer className="flex items-center justify-between gap-4 border-t border-foreground/10 px-4 py-2 text-xs text-text-faint">

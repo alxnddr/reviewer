@@ -1,4 +1,4 @@
-import { useEffect, useMemo, type ReactElement } from "react";
+import { memo, useEffect, useMemo, type ReactElement } from "react";
 import { History, MapPinOff, MessageSquare } from "lucide-react";
 import type { Comment } from "../../../shared/review";
 import type { PatchFile } from "@/lib/diff/patch";
@@ -6,7 +6,8 @@ import type { FitToContentRefs } from "@/lib/fit-panel";
 import { orderedComments, type CommentNavEntry } from "@/lib/diff/comment-navigation";
 import { FileTypeIcon } from "@/components/FileTypeIcon";
 import { TooltipHint } from "@/components/ui/tooltip";
-import { commentLocation, segmentInlineCode } from "@/lib/comment-body";
+import { commentLocation } from "@/lib/comment-location";
+import { flattenMarkdown } from "@/lib/markdown";
 import {
   RAIL_GLYPH,
   RailCaption,
@@ -49,26 +50,32 @@ function rowDomId(commentId: string): string {
  * rail's own glyph size rather than guessed as a padding class. */
 const COMMENT_INDENT_PX = 20;
 
-/** The body collapsed to a single scannable line: newlines and runs of space fold
- * to one space so the row's `truncate` shows a clean preview (the full body reads
- * on the card in the diff, and on this row's hover hint). */
-function bodyPreview(body: string): string {
-  return body.replace(/\s+/g, " ").trim();
-}
+/** A comment body as a rail can show it: markdown flattened to its words
+ * (`flattenMarkdown`), with code runs kept mono. Nobody reads markup in a 256px column —
+ * a body opening `**[BUG]**` spends the row's first characters on asterisks and brackets,
+ * and the bold they ask for is a distinction this register does not draw anyway. What
+ * survives is the sans/mono split, because a `symbol` reads as machine text at any size
+ * and it is most of what makes a one-line preview recognisable as the comment it stands
+ * for. The card in the diff renders the same body in full, one click away.
+ *
+ * Ink is left to the caller: this runs inside a 13px row and inside an inverted hint,
+ * both of which set their own. */
+function PlainBody({ body }: { body: string }): ReactElement {
+  // Held against the body, because flattening is a full remark parse and the panel
+  // re-renders on every step of the `n`/`p` walk — a list of N comments would otherwise
+  // re-parse all N on each keypress, for a body that has not changed since it was
+  // written. The same memo `Markdown` keeps over its own pipeline, for the same reason.
+  const runs = useMemo(() => flattenMarkdown(body), [body]);
 
-/** A body's sans/mono split, inline — the same rule `CommentBody` applies on the
- * card, without its reading-register type and colour: here it runs inside a 13px
- * row and inside an inverted hint, both of which set their own ink. */
-function InlineBody({ body }: { body: string }): ReactElement {
   return (
     <>
-      {segmentInlineCode(body).map((segment, index) =>
-        segment.code ? (
+      {runs.map((run, index) =>
+        run.code ? (
           <code key={index} className="font-mono">
-            {segment.text}
+            {run.text}
           </code>
         ) : (
-          <span key={index}>{segment.text}</span>
+          <span key={index}>{run.text}</span>
         ),
       )}
     </>
@@ -85,17 +92,21 @@ function splitPath(path: string): { dir: string; name: string } {
 }
 
 /** Consecutive entries sharing a file, in the order `orderedComments` produced —
- * the grouping only inserts headings, it never reorders. */
+ * the grouping only inserts headings, it never reorders. Keyed on the entry's host
+ * `path` rather than the authored `comment.file`, so a heading names a file the diff
+ * and the tree actually carry: comments authored on either side of a rename are one
+ * group under the file's current name, not two alternating ones under a name the diff
+ * no longer has. An unplaceable entry's path *is* its authored one. */
 function groupByFile(
   entries: readonly CommentNavEntry[],
 ): { file: string; rows: CommentNavEntry[] }[] {
   const groups: { file: string; rows: CommentNavEntry[] }[] = [];
   for (const entry of entries) {
-    const last = groups[groups.length - 1];
-    if (last !== undefined && last.file === entry.comment.file) {
+    const last = groups.at(-1);
+    if (last !== undefined && last.file === entry.path) {
       last.rows.push(entry);
     } else {
-      groups.push({ file: entry.comment.file, rows: [entry] });
+      groups.push({ file: entry.path, rows: [entry] });
     }
   }
   return groups;
@@ -160,10 +171,13 @@ export function CommentsPanel({
         <ul>
           {group.rows.map((entry) => (
             <li key={entry.comment.id}>
+              {/* The handler is passed down as-is rather than closed over the id here:
+                  a fresh closure per render is a changed prop, which would defeat the
+                  row's memo on every step of the walk. The row knows its own id. */}
               <CommentRow
                 entry={entry}
                 active={entry.comment.id === activeCommentId}
-                onFocus={() => onFocusComment(entry.comment.id)}
+                onFocus={onFocusComment}
               />
             </li>
           ))}
@@ -269,7 +283,9 @@ function FileHeading({ path }: { path: string }): ReactElement {
 type CommentRowProps = {
   entry: CommentNavEntry;
   active: boolean;
-  onFocus: () => void;
+  /** Takes the id rather than closing over it, so the panel can hand every row the
+   * one store action and the memo below holds. */
+  onFocus: (commentId: string) => void;
 };
 
 /** One comment: its body on a single elided line, indented under its file heading,
@@ -277,8 +293,18 @@ type CommentRowProps = {
  * own gutter idiom, in the shell's tabular figures, and the one piece of metadata the
  * row cannot infer from the heading above it. An outdated anchor has no line to name (it pins to the file
  * header on the surface), so the column carries the drift glyph instead of a number
- * that would be a guess. The active row is lit to match the ringed card in the diff. */
-function CommentRow({ entry, active, onFocus }: CommentRowProps): ReactElement {
+ * that would be a guess. The active row is lit to match the ringed card in the diff.
+ *
+ * Memoised, because the one prop the walk changes is `active` and it changes for two
+ * rows out of N: `activeCommentId` re-renders the whole panel on every `n`/`p` step,
+ * and a row whose entry and lit state are both unchanged has nothing new to draw. The
+ * entries it reads are already held (`orderedComments` above), so the identities line
+ * up. */
+const CommentRow = memo(function CommentRow({
+  entry,
+  active,
+  onFocus,
+}: CommentRowProps): ReactElement {
   const { comment, status } = entry;
   // The placed line — where the comment actually renders on the current diff, which
   // is what a reader jumping there will see in the gutter, not the authored line it
@@ -288,7 +314,7 @@ function CommentRow({ entry, active, onFocus }: CommentRowProps): ReactElement {
   return (
     <RailRowButton
       id={rowDomId(comment.id)}
-      onClick={onFocus}
+      onClick={() => onFocus(comment.id)}
       aria-current={active}
       selected={active}
       // Indented to line the preview up with the heading's file name (the glyph and its
@@ -305,7 +331,7 @@ function CommentRow({ entry, active, onFocus }: CommentRowProps): ReactElement {
         content={
           <div className="flex min-w-0 flex-col gap-1">
             <span className="whitespace-pre-wrap">
-              <InlineBody body={comment.body} />
+              <PlainBody body={comment.body} />
             </span>
             {/* Where it sits, but only when the row can't say it: a placed comment
                 already shows its file in the heading above and its line at the right,
@@ -321,11 +347,11 @@ function CommentRow({ entry, active, onFocus }: CommentRowProps): ReactElement {
           </div>
         }
       >
-        {/* The preview keeps the body's sans/mono split — a `symbol` reads as machine
-            text here exactly as it does on the card, which is most of what makes a
-            one-line preview recognisable as the comment it stands for. */}
+        {/* One line: `truncate`'s `nowrap` folds the flattened body's block breaks into
+            spaces, so a comment written as three paragraphs previews as its opening
+            sentence rather than as its first word. */}
         <span className="min-w-0 flex-1 truncate text-sm">
-          <InlineBody body={bodyPreview(comment.body)} />
+          <PlainBody body={comment.body} />
         </span>
       </TooltipHint>
       {status === "outdated" ? (
@@ -335,4 +361,4 @@ function CommentRow({ entry, active, onFocus }: CommentRowProps): ReactElement {
       )}
     </RailRowButton>
   );
-}
+});

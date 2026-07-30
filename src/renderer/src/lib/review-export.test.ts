@@ -8,6 +8,8 @@ import {
   type ReviewStamp,
 } from "../../../shared/review";
 import type { RepoInfo } from "../../../shared/git";
+import { RENAMES_PATCH } from "./diff/fixtures";
+import { parsePatch } from "./diff/patch";
 import {
   exportSourceFor,
   markdownCommentsFrom,
@@ -393,6 +395,26 @@ describe("markdownCommentsFrom", () => {
   it("never flags outdated against a frozen embedded patch", () => {
     const [projected] = markdownCommentsFrom([comment], [], true);
     expect(projected?.outdated).toBe(false);
+  });
+
+  it("resolves a comment authored before a rename against the renamed file", () => {
+    // The app hosts this one on `src/edit.txt` and shows it placed; an export that
+    // looked the file up by its current path alone would print it outdated. The
+    // exported anchor stays the authored path — that is what the artifact carries.
+    const beforeRename: Comment = {
+      ...comment,
+      file: "src/old-edit.txt",
+      side: "deletions",
+      startLine: 2,
+      endLine: 2,
+    };
+    const [projected] = markdownCommentsFrom(
+      [beforeRename],
+      parsePatch(RENAMES_PATCH, "test"),
+      false,
+    );
+    expect(projected?.outdated).toBe(false);
+    expect(projected?.file).toBe("src/old-edit.txt");
   });
 });
 

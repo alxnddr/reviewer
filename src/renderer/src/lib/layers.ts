@@ -96,7 +96,7 @@ function buildTree(layers: readonly ReviewLayer[]): LayerTree {
 
   for (const layer of layers) {
     const chain = ancestorChain(layer, byId);
-    const parent = chain === null ? undefined : chain[chain.length - 1];
+    const parent = chain === null ? undefined : chain.at(-1);
     depthOf.set(layer.id, chain === null ? 0 : chain.length);
     if (parent === undefined) {
       roots.push(layer);
@@ -170,7 +170,7 @@ export function layerSubtree(layer: ReviewLayer, layers: readonly ReviewLayer[])
   const tree = buildTree(layers);
   const collect = (current: ReviewLayer): ReviewLayer[] => [
     current,
-    ...(tree.childrenOf.get(current.id) ?? []).flatMap(collect),
+    ...(tree.childrenOf.get(current.id) ?? []).flatMap((child) => collect(child)),
   ];
   // A layer the array does not carry (the inferred not-covered layer, resolved against the
   // authored set) stands for itself.
@@ -290,7 +290,7 @@ export function stepLayer(
   }
   const index = activeId === null ? -1 : layers.findIndex((layer) => layer.id === activeId);
   if (index === -1) {
-    return (direction === 1 ? layers[0] : layers[layers.length - 1])?.id ?? null;
+    return (direction === 1 ? layers[0] : layers.at(-1))?.id ?? null;
   }
   const next = Math.min(Math.max(index + direction, 0), layers.length - 1);
   return layers[next]?.id ?? null;

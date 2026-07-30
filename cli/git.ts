@@ -19,6 +19,13 @@ export type GitCapture = { ok: true; stdout: string } | { ok: false; message: st
  * prints exactly this and `emit`/`check` validate against exactly this. */
 export type PatchCapture = { ok: true; patch: string } | { ok: false; message: string };
 
+/** The deadline a single git child gets, the same 30s the app runner enforces
+ * (`DEFAULT_TIMEOUT_MS` in src/main/git/runner.ts). Read-only operations on a healthy repo
+ * finish in milliseconds; the ones that do not — a stalled network mount, an `fsmonitor`, a
+ * hook waiting on something — would otherwise hang `rvw` forever with nothing on either
+ * stream, which is the one failure an agent cannot act on. */
+const TIMEOUT_MS = 30_000;
+
 /** Run git in the target repo and return stdout, or a typed failure. Env is hardened like
  * the app runner (src/main/git/runner.ts): the `GIT_*` repo overrides are scrubbed — they
  * would redirect the diff to a different repo than `--repo`, whose internally-consistent
@@ -39,13 +46,25 @@ export function git(repo: string, args: readonly string[]): GitCapture {
     encoding: "utf8",
     env,
     maxBuffer: MAX_PATCH_BYTES,
+    timeout: TIMEOUT_MS,
   });
-  // A diff past the cap is an ENOBUFS error (not a non-zero exit); name it precisely so
-  // "narrow the range" is actionable rather than a mislabeled "git failed".
-  if (result.error !== undefined && "code" in result.error && result.error.code === "ENOBUFS") {
+  // Neither overflowing the cap nor running past the deadline is a non-zero exit: both kill
+  // the child and arrive as a spawn error, so they are named here rather than falling through
+  // to the generic "git failed" with no exit code and no stderr to explain it.
+  const spawnErrorCode =
+    result.error !== undefined && "code" in result.error ? result.error.code : undefined;
+  // A diff past the cap is an ENOBUFS error; name it precisely so "narrow the range" is
+  // the actionable thing the caller is told.
+  if (spawnErrorCode === "ENOBUFS") {
     return {
       ok: false,
       message: `git ${args.join(" ")} produced more than ${MAX_PATCH_BYTES} bytes — narrow the range and re-run`,
+    };
+  }
+  if (spawnErrorCode === "ETIMEDOUT") {
+    return {
+      ok: false,
+      message: `git ${args.join(" ")} did not finish within ${TIMEOUT_MS / 1000}s — the repo may be on a stalled mount, or a hook or fsmonitor is holding it`,
     };
   }
   if (result.status !== 0) {

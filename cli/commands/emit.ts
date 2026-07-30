@@ -89,10 +89,13 @@ export const emitCommand = buildCommand<EmitFlags, [], LocalContext>({
       "--no-open writes it and stops. --embed-patch carries the diff inside the artifact so it",
       "opens on a machine without the repo (CI); the diff is then frozen, so the app cannot",
       "expand context around a hunk or narrow to a subrange of commits.",
-      "The draft is read from stdin unless --draft names a file,",
-      "and its only keys are overview, comments, and layers — at least one of which must be",
-      "present. --out is optional and must end .reviewer.json; without it the artifact lands in",
-      "rvw's managed reviews dir (~/.rvw/reviews, or $RVW_HOME/reviews) rather than the repo.",
+      "Name branches on --base/--head: a local branch is recorded as written and the review",
+      "follows it, while a tag, HEAD, a rev expression or a sha is pinned to the commit it named.",
+      "The draft is read from stdin unless --draft names a file, and its only keys are overview,",
+      "comments, and layers — at least one of which must be present, and layers (the reading order",
+      "the app tours the diff in) unless the review was asked for as comments alone.",
+      "--out is optional and must end .reviewer.json; without it the artifact lands in rvw's",
+      "managed reviews dir (~/.rvw/reviews, or $RVW_HOME/reviews) rather than the repo.",
       "Exit 0 when written (even if the launch failed — the file is real either way); 1 when the",
       "gate refused, nothing written and each problem located; 2 when the shell could not run.",
     ].join("\n"),
@@ -115,13 +118,14 @@ export const emitCommand = buildCommand<EmitFlags, [], LocalContext>({
       base: {
         kind: "parsed",
         parse: String,
-        brief: "Range base — any revision git resolves; default the fork point",
+        brief: "Range base — a branch where one fits (recorded as written); default the fork point",
         optional: true,
       },
       head: {
         kind: "parsed",
         parse: String,
-        brief: "Range head — any revision git resolves; default the current branch",
+        brief:
+          "Range head — a branch where one fits (recorded as written); default the branch you are on",
         optional: true,
       },
       draft: {
@@ -306,9 +310,10 @@ function unreadable(message: string): { readonly ok: false; readonly error: CliE
  * `-`). Reading fd 0 synchronously is what lets this stay a plain function in a synchronous
  * command body — the same posture as every other read in the CLI.
  *
- * The TTY check is the one guard worth having: with no `--draft` and a terminal on stdin the
- * caller has not piped anything and never will, so the command would otherwise hang on a read
- * that can never complete. Naming both ways in is more useful than blocking. */
+ * The TTY check is the one guard worth having, and it covers both spellings of stdin — the
+ * defaulted one and the explicit `-`: with a terminal on fd 0 the caller has not piped
+ * anything and never will, so the command would otherwise hang on a read that can never
+ * complete. Naming both ways in is more useful than blocking. */
 function readDraftBytes(source: string | undefined): DraftBytes {
   if (source !== undefined && source !== STDIN) {
     try {
@@ -318,7 +323,7 @@ function readDraftBytes(source: string | undefined): DraftBytes {
     }
   }
 
-  if (source === undefined && process.stdin.isTTY === true) {
+  if ((source === undefined || source === STDIN) && process.stdin.isTTY === true) {
     return unreadable("no draft: pass --draft <file>, or pipe the draft JSON on stdin");
   }
 

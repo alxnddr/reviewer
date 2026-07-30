@@ -8,7 +8,7 @@ function capturing(): { context: LocalContext; written: () => string } {
     context: {
       process: {
         stdout: { write: (chunk: string) => void (out += chunk) },
-        stderr: { write: () => undefined },
+        stderr: { write: () => {} },
         exitCode: null,
       } as unknown as LocalContext["process"],
     },

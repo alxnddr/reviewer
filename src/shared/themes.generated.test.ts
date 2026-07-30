@@ -37,6 +37,6 @@ describe("generated globals.css", () => {
   });
 
   it("emits the shared Tailwind color mapping exactly once", () => {
-    expect(GLOBALS.match(/^@theme inline \{/gm)?.length).toBe(1);
+    expect(GLOBALS.match(/^@theme inline \{/gmu)?.length).toBe(1);
   });
 });

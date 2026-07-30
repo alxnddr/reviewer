@@ -1,5 +1,6 @@
 import { useMemo, useState, type ReactElement } from "react";
 import type { Comment, ReviewLayer } from "../../../shared/review";
+import type { PatchFile } from "@/lib/diff/patch";
 import { CommentsPanel } from "@/components/CommentsPanel";
 import { FileTreePanel } from "@/components/FileTreePanel";
 import { LayerList } from "@/components/LayerList";
@@ -8,10 +9,9 @@ import { RailNote } from "@/components/rail";
 import { SelectionPanel, SelectionRow } from "@/components/SelectionPanel";
 import { commentCountsByFile } from "@/lib/diff/comment-navigation";
 import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from "@/components/ui/resizable";
-import { emptySoloReason, findLayer, soloFiles } from "@/lib/layers";
-import { effectiveLayers } from "@/lib/coverage";
+import { emptySoloReason } from "@/lib/layers";
 import { useFitToContent } from "@/lib/fit-panel";
-import { selectActiveSlice, useReviewStore } from "@/stores/review";
+import { selectActiveSlice, selectSoloedDiff, useReviewStore } from "@/stores/review";
 
 // The rail, top to bottom: the diff it is about, then the review's stops, then the
 // files — widest scope first, one section bar each (see rail.tsx, which owns every bar
@@ -28,6 +28,7 @@ import { selectActiveSlice, useReviewStore } from "@/stores/review";
 // layer-less session, rather than a fresh [] that would re-render every tick.
 const EMPTY_LAYERS: ReviewLayer[] = [];
 const EMPTY_COMMENTS: Comment[] = [];
+const EMPTY_FILES: PatchFile[] = [];
 
 export function SidebarNav(): ReactElement {
   const diff = useReviewStore((state) => selectActiveSlice(state)?.diff ?? null);
@@ -36,6 +37,13 @@ export function SidebarNav(): ReactElement {
     (state) => selectActiveSlice(state)?.reviewDiff?.kind === "frozenPatch",
   );
   const activeLayerId = useReviewStore((state) => selectActiveSlice(state)?.activeLayerId ?? null);
+  // The soloed diff — the effective layer list, the resolved active layer, and the file
+  // subset the tree lists — derived once for the whole app (`lib/soloed-diff.ts`) and read
+  // here as a subscription rather than recomputed in the render body. The rail re-renders on
+  // every comment step and every disclosure toggle; this used to run the full O(files ×
+  // layers × ranges) coverage scan on each of them, and hand `FileTreePanel` a fresh
+  // `files` array that invalidated its memos for good measure.
+  const soloed = useReviewStore(selectSoloedDiff);
   const hasOverview = useReviewStore((state) => selectActiveSlice(state)?.overview != null);
   const overviewOpen = useReviewStore((state) => selectActiveSlice(state)?.overviewOpen ?? false);
   const comments = useReviewStore((state) => selectActiveSlice(state)?.comments ?? EMPTY_COMMENTS);
@@ -56,7 +64,15 @@ export function SidebarNav(): ReactElement {
   // by default: an artifact's layers *are* the reading order it was written in, so the
   // walkthrough is what the rail should offer first, with the tree underneath.
   const [layersExpanded, setLayersExpanded] = useState(true);
-  const commentCounts = useMemo(() => commentCountsByFile(comments), [comments]);
+  // Counted against the loaded diff, not the tree's (possibly soloed) subset: the badge
+  // is a property of the file, and the count is keyed on the path the tree rows carry —
+  // which is why the files go in at all (a comment authored before a rename badges the
+  // renamed row, the one its card is actually on).
+  const loadedFiles = diff !== null && diff.phase === "loaded" ? diff.files : EMPTY_FILES;
+  const commentCounts = useMemo(
+    () => commentCountsByFile(loadedFiles, comments),
+    [loadedFiles, comments],
+  );
 
   // A tree only exists for a loaded diff; every other phase (idle, loading,
   // empty, failed) forces the picker open and holds it there — there is nothing to
@@ -109,12 +125,10 @@ export function SidebarNav(): ReactElement {
       />
       {showTree && diff.phase === "loaded" ? (
         (() => {
-          // Resolve the active layer against the authored layers *plus* the inferred
+          // The active layer resolved against the authored layers *plus* the inferred
           // "not covered by layers" layer, so soloing that synthetic row filters the
           // tree to the skipped files exactly as an authored layer would.
-          const effLayers = effectiveLayers(diff.files, layers);
-          const activeLayer = findLayer(effLayers, activeLayerId);
-          const treeFiles = soloFiles(diff.files, activeLayer, effLayers);
+          const { layers: effLayers, activeLayer, files: treeFiles } = soloed;
           // An empty subset means either the layer's files all drifted out of the diff or
           // the layer names none at all; `emptySoloReason` keeps the hint from reading a
           // layer with nothing of its own as broken, mirroring the diff surface's
@@ -214,12 +228,7 @@ export function SidebarNav(): ReactElement {
           const stack =
             layers.length === 0 ? (
               restStack
-            ) : !layersExpanded ? (
-              <div className="flex min-h-0 flex-1 flex-col">
-                {layersList}
-                {restStack}
-              </div>
-            ) : (
+            ) : layersExpanded ? (
               <ResizablePanelGroup
                 orientation="vertical"
                 {...layersFit.group}
@@ -239,6 +248,11 @@ export function SidebarNav(): ReactElement {
                   <div className="flex h-full min-h-0 flex-col">{restStack}</div>
                 </ResizablePanel>
               </ResizablePanelGroup>
+            ) : (
+              <div className="flex min-h-0 flex-1 flex-col">
+                {layersList}
+                {restStack}
+              </div>
             );
           if (overviewRow === null) {
             return stack;

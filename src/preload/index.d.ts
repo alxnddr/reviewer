@@ -8,4 +8,5 @@ declare global {
   }
 }
 
+// oxlint-disable-next-line unicorn/require-module-specifiers -- the empty export is what makes this ambient file a module, without which `declare global` is not legal
 export {};

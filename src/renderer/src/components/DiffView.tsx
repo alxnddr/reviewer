@@ -1,4 +1,5 @@
 import {
+  memo,
   useCallback,
   useEffect,
   useLayoutEffect,
@@ -7,11 +8,12 @@ import {
   useState,
   type ReactElement,
   type ReactNode,
+  type RefObject,
 } from "react";
-import { CodeView, type CodeViewHandle } from "@pierre/diffs/react";
+import { CodeView, type CodeViewHandle, type CodeViewProps } from "@pierre/diffs/react";
 import type {
+  CodeViewItem,
   CodeViewLayout,
-  CodeViewLineSelection,
   CodeViewOptions,
   DiffLineAnnotation,
   FileDiffContentsLoader,
@@ -46,7 +48,7 @@ import { expansionOptions } from "@/lib/diff/expand-context";
 import { activeDiffThemePair } from "@/lib/diff/highlight-warmup";
 import { capturesScroll } from "@/lib/layers";
 import { createScrollCapture, planScrollRestore } from "@/lib/scroll";
-import type { DiffStyle } from "@/stores/review";
+import { selectActiveSlice, useReviewStore, type DiffStyle } from "@/stores/review";
 import type { Comment } from "../../../shared/review";
 import { useEffectiveDark, useThemeStore } from "@/stores/theme";
 
@@ -127,6 +129,27 @@ const DIFF_UNSAFE_CSS = `
 // padding stay at Pierre's default 8px.
 const DIFF_LAYOUT: CodeViewLayout = { paddingTop: 0, paddingBottom: 8, gap: 8 };
 
+// Pierre memoizes its portal host (`SlotPortals`, CodeView.js) on a shallow compare of the
+// render props, and one failed compare re-renders EVERY visible file's slots — both header
+// buttons, the gutter `+`, and every comment card, tooltip trees included. An inline arrow
+// fails that compare on every DiffView render, so none of them is written inline: the two
+// that close over nothing are module constants, the two that need this view's data are
+// `useCallback`s keyed on that data alone, and every slot's contents are a `memo` leaf, so a
+// portal re-render that does happen repaints only the file whose slot actually changed.
+type DiffCodeViewProps = CodeViewProps<CommentSlot>;
+type HeaderSlotRenderer = NonNullable<DiffCodeViewProps["renderHeaderPrefix"]>;
+type GutterUtilityRenderer = NonNullable<DiffCodeViewProps["renderGutterUtility"]>;
+
+// The file's own disclosure, at the head of its header band: a folded file is
+// still a file in the diff, and the twisty is what says so. It leads the name
+// for the same reason a tree's does — the thing that opens a row goes before
+// the row's name, not after everything else on it.
+const renderHeaderPrefix: HeaderSlotRenderer = (item) => <FileFoldToggle path={item.id} />;
+
+// The read control alone at the outer edge — the band's most-reached-for
+// corner, and where every reviewer's hand already goes for it.
+const renderHeaderMetadata: HeaderSlotRenderer = (item) => <FileReadToggle path={item.id} />;
+
 /** The Pierre diff surface, untouched: themes, gutters, and bands come from
  * pierre-light/pierre-dark inside the component's shadow root; shell tokens stop here.
  * Comments ride Pierre's own annotation API (a React subtree in an annotation slot,
@@ -161,16 +184,12 @@ export function DiffView({
   // re-renders its slots when the version changes.
   const [editingId, setEditingId] = useState<string | null>(null);
   const [draft, setDraft] = useState<CommentDraft | null>(null);
-  // A mirror of Pierre's active line selection (uncontrolled — Pierre still owns
-  // it; this only observes) so the gutter `+` can name its action honestly: a
-  // deliberate multi-line drag makes it a range add, an ordinary hover a line add.
-  const [selection, setSelection] = useState<CodeViewLineSelection | null>(null);
 
   // Find-in-diff. The surface is virtualized, so off-screen lines never enter the
   // DOM and the browser's native find is blind to them; this searches the parsed
   // patch and navigates by driving the same handle used for file jumps. It
-  // highlights the active match through Pierre's line selection (written
-  // notify:false, so it never reaches `setSelection` above or the comment `+`).
+  // highlights the active match through Pierre's line selection — a collapsed
+  // single-line one, which the comment `+` reads as no range at all.
   // Folded files stay searchable — the match is in the diff whether or not its body
   // is on screen — so the hook is handed the fold state and the way to undo it.
   const search = useDiffSearch(handleRef, files, collapsedPaths, onSetFileCollapsed);
@@ -299,6 +318,32 @@ export function DiffView({
     [openEdit, onAddComment, onEditComment, onDiscardComment],
   );
 
+  // Copying the path belongs to the name, not to the band's trailing controls: it acts on
+  // the text it sits beside, so it follows the name directly rather than travelling to the
+  // far corner where the read control lives. Keyed on `binaryPaths` alone — which is
+  // memoized on `files`, so this identity survives every other state change this view
+  // holds, and the one thing that does move it (a new file list) rebuilds the items and
+  // re-renders the portals regardless.
+  const renderHeaderFilenameSuffix = useCallback<HeaderSlotRenderer>(
+    (item) => <FileNameSuffix path={item.id} binary={binaryPaths.has(item.id)} />,
+    [binaryPaths],
+  );
+
+  // The gutter add affordance. Nothing about the live line selection is threaded through
+  // here: the button reads it from the handle when it needs it, so a drag's per-line
+  // deltas never reach React at all.
+  const renderGutterUtility = useCallback<GutterUtilityRenderer>(
+    (getHoveredLine, item) => (
+      <GutterAddButton
+        getHoveredLine={getHoveredLine}
+        item={item}
+        handleRef={handleRef}
+        onOpenDraft={openDraft}
+      />
+    ),
+    [openDraft],
+  );
+
   // The one scroll owner on activation. The empty deps make this a mount-once
   // snapshot of the persisted position — a mount IS an activation (the view is
   // keyed per session), and later changes to those props are this view's own
@@ -307,6 +352,7 @@ export function DiffView({
   // action, never animated. Position restore stays correct through virtualized
   // measurement: CodeView re-anchors the settled scroll as item heights resolve,
   // so no second call is needed.
+  // oxlint-disable react-hooks/exhaustive-deps -- the empty deps are the design stated above: a mount-once activation snapshot, not a subscription to the props it reads
   useLayoutEffect(() => {
     const handle = handleRef.current;
     if (handle === null) {
@@ -319,6 +365,7 @@ export function DiffView({
       handle.scrollTo({ type: "item", id: restore.filePath, align: "start", behavior: "instant" });
     }
   }, []);
+  // oxlint-enable react-hooks/exhaustive-deps
 
   // Post-activation file jumps (tree click, j/k). Gated on an actual change of the
   // focused file from the last one jumped to — seeded with the activation snapshot,
@@ -332,6 +379,9 @@ export function DiffView({
   // header — so its file is brought to the top instead. Pure viewport: it touches no
   // store state, which is what lets the stepper's counter re-run it as a re-centre
   // after the reader has scrolled off, without re-triggering the focus effect below.
+  // The scroll target is the entry's host `path`, never `comment.file`: an anchor
+  // authored before a rename names a path no item carries, and the item is keyed by the
+  // file's current one — the same resolution that placed the annotation.
   const scrollToComment = useCallback((entry: CommentNavEntry): void => {
     const handle = handleRef.current;
     if (handle === null) {
@@ -340,7 +390,7 @@ export function DiffView({
     if (entry.status === "placed" && entry.line !== null) {
       handle.scrollTo({
         type: "line",
-        id: entry.comment.file,
+        id: entry.path,
         lineNumber: entry.line,
         side: entry.comment.side,
         align: "center",
@@ -349,7 +399,7 @@ export function DiffView({
     } else {
       handle.scrollTo({
         type: "item",
-        id: entry.comment.file,
+        id: entry.path,
         align: "start",
         behavior: "instant",
       });
@@ -381,7 +431,8 @@ export function DiffView({
       return;
     }
     // Claim the jump so the file-jump effect (next) doesn't also scroll to the file.
-    lastJumpedPath.current = entry.comment.file;
+    // The host path, matching what `focusComment` put in `selectedFilePath`.
+    lastJumpedPath.current = entry.path;
     scrollToComment(entry);
   }, [activeCommentId, files, comments, frozen, scrollToComment]);
 
@@ -489,111 +540,37 @@ export function DiffView({
             capture.notify(scrollTop);
           }
         }}
-        className="h-full overflow-y-auto outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
-        onSelectedLinesChange={setSelection}
         // The focus ring is inset: the surface is flush against the pane's edges, so an
         // outset ring would be clipped on three sides and read as a stray line on the fourth.
-        // The file's own disclosure, at the head of its header band: a folded file is
-        // still a file in the diff, and the twisty is what says so. It leads the name
-        // for the same reason a tree's does — the thing that opens a row goes before
-        // the row's name, not after everything else on it.
-        renderHeaderPrefix={(item) => (
-          <FileFoldToggle
-            path={item.id}
-            collapsed={collapsedPaths.has(item.id)}
-            onToggle={onSetFileCollapsed}
-          />
-        )}
-        // Copying the path belongs to the name, not to the band's trailing controls:
-        // it acts on the text it sits beside, so it follows the name directly rather
-        // than travelling to the far corner where the read control lives.
-        renderHeaderFilenameSuffix={(item) => (
-          <span className="flex items-center gap-1">
-            <CopyPathButton path={item.id} />
-            {binaryPaths.has(item.id) ? (
-              <span className="text-xs text-text-muted">binary</span>
-            ) : null}
-          </span>
-        )}
-        // The read control alone at the outer edge — the band's most-reached-for
-        // corner, and where every reviewer's hand already goes for it.
-        renderHeaderMetadata={(item) => <FileReadToggle path={item.id} />}
+        className="h-full overflow-y-auto outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
+        renderHeaderPrefix={renderHeaderPrefix}
+        renderHeaderFilenameSuffix={renderHeaderFilenameSuffix}
+        renderHeaderMetadata={renderHeaderMetadata}
         renderAnnotation={renderAnnotation}
-        renderGutterUtility={(getHoveredLine, item) => (
-          // size-6 (24px) meets the hit-target floor; the glyph stays 12px so
-          // the affordance still reads as a gutter micro-control. Accent is the add
-          // trigger (only one shows at a time, on the hovered line). The label names
-          // the real action: a range when a deliberate multi-line drag covers this
-          // file, a single line otherwise — and the hint says the same, because a bare
-          // `+` in a gutter is the one glyph here that could plausibly mean expand.
-          <TooltipHint
-            side="right"
-            align="center"
-            content={
-              selectionRange(selection, item.id) === null
-                ? "Comment on this line"
-                : "Comment on the selected lines"
-            }
-          >
-            <Button
-              type="button"
-              size="icon-xs"
-              // Keep the primary fill solid on hover: the default variant's
-              // `hover:bg-primary/80` reads as the add affordance dimming, not lifting.
-              className="hover:bg-primary"
-              aria-label={
-                selectionRange(selection, item.id) === null
-                  ? "Add a comment on this line"
-                  : "Add a comment on the selected lines"
-              }
-              // Replacing Pierre's default `[data-utility-button]` drops the
-              // stacking lift and gutter offset it carried (z-index + a negative
-              // right margin in the gutter's own lh/ch metric); without them our
-              // composite paints under, and sits inside, the line-number column.
-              // Restore Pierre's exact values so the affordance clears the numbers.
-              style={{ position: "relative", zIndex: 4, marginRight: "calc(-1lh + 1ch)" }}
-              onClick={() => {
-                const handle = handleRef.current;
-                const raw = getHoveredLine();
-                // Narrow Pierre's file|diff hovered union to an anchor-side line, or
-                // null (a file-mode row with no side, never a diff gutter).
-                let hovered: HoveredLine | null = null;
-                if (raw !== undefined && "side" in raw) {
-                  const side = raw.side;
-                  if (side === "additions" || side === "deletions") {
-                    hovered = { lineNumber: raw.lineNumber, side };
-                  }
-                }
-                // A deliberate multi-line drag that covers this `+` commits its range;
-                // otherwise the single hovered line. Clear the selection either way so
-                // its highlight does not linger under the opened editor.
-                const anchor = pickAddAnchor(item.id, hovered, handle?.getSelectedLines() ?? null);
-                if (anchor !== null) {
-                  openDraft(item.id, anchor);
-                  handle?.clearSelectedLines();
-                }
-              }}
-            >
-              <Plus />
-            </Button>
-          </TooltipHint>
-        )}
+        renderGutterUtility={renderGutterUtility}
       />
     </div>
   );
 }
 
-type FileFoldToggleProps = {
-  path: string;
-  collapsed: boolean;
-  onToggle: (path: string, collapsed: boolean) => void;
-};
+type FileFoldToggleProps = { path: string };
 
 /** The file's disclosure twisty. Folding is the reader's own — any file can be put away,
  * read or not — but it is also the tail of marking a file read: a file you are done with
  * stops spending pane height, and the ones still owed rise to meet you. The header stays,
- * so a folded file is one click from being read again. */
-function FileFoldToggle({ path, collapsed, onToggle }: FileFoldToggleProps): ReactElement {
+ * so a folded file is one click from being read again.
+ *
+ * Reads the fold state from the store rather than taking it as a prop, for the same reason
+ * `FileReadToggle` beside it does: a header slot that closes over one of DiffView's props
+ * cannot have a stable render-prop identity, and without that Pierre re-renders every
+ * visible file's slots on every DiffView render. Its own subscription repaints the one
+ * twisty that changed, and the folded body follows separately through the item's `version`.
+ * Safe because exactly one DiffView is mounted — the active session's (`key=`). */
+const FileFoldToggle = memo(function FileFoldToggle({ path }: FileFoldToggleProps): ReactElement {
+  const collapsed = useReviewStore(
+    (state) => selectActiveSlice(state)?.collapsedFiles.has(path) ?? false,
+  );
+  const setFileCollapsed = useReviewStore((state) => state.setFileCollapsed);
   return (
     // The path is already the loudest thing on the band, so the hint names the verb alone
     // rather than repeating it back — unlike the aria-label, which has no band to lean on.
@@ -604,13 +581,30 @@ function FileFoldToggle({ path, collapsed, onToggle }: FileFoldToggleProps): Rea
         aria-expanded={!collapsed}
         aria-label={collapsed ? `Expand ${path}` : `Collapse ${path}`}
         className="text-text-muted"
-        onClick={() => onToggle(path, !collapsed)}
+        onClick={() => setFileCollapsed(path, !collapsed)}
       >
         {collapsed ? <ChevronRight /> : <ChevronDown />}
       </Button>
     </TooltipHint>
   );
-}
+});
+
+type FileNameSuffixProps = { path: string; binary: boolean };
+
+/** What follows the file's name on the band: the copy affordance, and — on a binary
+ * change — the word that says which of the two header-only shapes this is (a binary
+ * change and a pure rename both render zero hunks). */
+const FileNameSuffix = memo(function FileNameSuffix({
+  path,
+  binary,
+}: FileNameSuffixProps): ReactElement {
+  return (
+    <span className="flex items-center gap-1">
+      <CopyPathButton path={path} />
+      {binary ? <span className="text-xs text-text-muted">binary</span> : null}
+    </span>
+  );
+});
 
 type CopyPathButtonProps = { path: string };
 
@@ -645,7 +639,7 @@ function CopyPathButton({ path }: CopyPathButtonProps): ReactElement {
             () => setCopied(true),
             // A denied/failed write only skips the feedback; there is no state to roll
             // back, and the header band is no place for an error surface.
-            () => undefined,
+            () => {},
           );
         }}
       >
@@ -654,6 +648,109 @@ function CopyPathButton({ path }: CopyPathButtonProps): ReactElement {
     </TooltipHint>
   );
 }
+
+type GutterAddButtonProps = {
+  getHoveredLine: Parameters<GutterUtilityRenderer>[0];
+  item: CodeViewItem<CommentSlot>;
+  handleRef: RefObject<CodeViewHandle<CommentSlot> | null>;
+  onOpenDraft: (fileId: string, anchor: ReviewAnchor) => void;
+};
+
+/** The gutter `+`: the one deliberate gesture that opens the comment editor, on the
+ * hovered line or on a deliberate multi-line drag.
+ *
+ * Pierre's line selection is never mirrored into React. It fires a change on every line
+ * delta of a gutter drag, so a mirror would cost a DiffView render — and, through the
+ * portal host, a re-render of every visible file's slots — per line dragged over. The
+ * anchor has always been read imperatively at click time; the label is read the same way,
+ * on the way in to the button. It cannot be read at render time instead: Pierre renders
+ * this slot once per item and then moves it between gutter rows, so a render-time read
+ * would freeze the label at whatever was selected when the file was first painted. */
+const GutterAddButton = memo(function GutterAddButton({
+  getHoveredLine,
+  item,
+  handleRef,
+  onOpenDraft,
+}: GutterAddButtonProps): ReactElement {
+  // True while a deliberate multi-line drag covers this file. Re-read on every way the
+  // button can be reached, each of which lands before the hint's 700 ms delay elapses or
+  // the accessible name is announced. All four are needed and none is redundant: `enter`
+  // for the button materializing under a resting pointer (Pierre places it in response to
+  // the hover, so the move that caused the hover was dispatched to the line number, not to
+  // a button that did not exist yet — the browser then re-fires only the boundary events);
+  // `move` for a selection that changes while the pointer is already inside; `down` for
+  // touch and pen, which can tap without ever having hovered; `focus` for the keyboard.
+  // Repeats are free: React bails out of a setState that does not change the value.
+  const [ranged, setRanged] = useState(false);
+  const syncRanged = useCallback((): void => {
+    setRanged(selectionRange(handleRef.current?.getSelectedLines() ?? null, item.id) !== null);
+  }, [handleRef, item.id]);
+
+  return (
+    // size-6 (24px) meets the hit-target floor; the glyph stays 12px so
+    // the affordance still reads as a gutter micro-control. Accent is the add
+    // trigger (only one shows at a time, on the hovered line). The label names
+    // the real action: a range when a deliberate multi-line drag covers this
+    // file, a single line otherwise — and the hint says the same, because a bare
+    // `+` in a gutter is the one glyph here that could plausibly mean expand.
+    <TooltipHint
+      side="right"
+      align="center"
+      content={ranged ? "Comment on the selected lines" : "Comment on this line"}
+    >
+      <Button
+        type="button"
+        size="icon-xs"
+        // Keep the primary fill solid on hover: the default variant's
+        // `hover:bg-primary/80` reads as the add affordance dimming, not lifting.
+        className="hover:bg-primary"
+        aria-label={ranged ? "Add a comment on the selected lines" : "Add a comment on this line"}
+        onPointerEnter={syncRanged}
+        onPointerMove={syncRanged}
+        onPointerDown={syncRanged}
+        onFocus={syncRanged}
+        // Replacing Pierre's default `[data-utility-button]` drops the
+        // stacking lift and gutter offset it carried (z-index + a negative
+        // right margin in the gutter's own lh/ch metric); without them our
+        // composite paints under, and sits inside, the line-number column.
+        // Restore Pierre's exact values so the affordance clears the numbers.
+        style={{ position: "relative", zIndex: 4, marginRight: "calc(-1lh + 1ch)" }}
+        onClick={() => {
+          const handle = handleRef.current;
+          const raw = getHoveredLine();
+          // Narrow Pierre's file|diff hovered union to an anchor-side line, or
+          // null (a file-mode row with no side, never a diff gutter).
+          let hovered: HoveredLine | null = null;
+          if (raw !== undefined && "side" in raw) {
+            const side = raw.side;
+            if (side === "additions" || side === "deletions") {
+              hovered = { lineNumber: raw.lineNumber, side };
+            }
+          }
+          // A deliberate multi-line drag that covers this `+` commits its range,
+          // clamped to the hunk it was committed from — hunks render contiguously,
+          // so a drag across the separator would otherwise anchor across collapsed
+          // context no hunk covers. Otherwise the single hovered line. Clear the
+          // selection either way so its highlight does not linger under the opened
+          // editor.
+          const anchor = pickAddAnchor(
+            item.id,
+            hovered,
+            handle?.getSelectedLines() ?? null,
+            item.type === "diff" ? item.fileDiff.hunks : [],
+          );
+          if (anchor !== null) {
+            onOpenDraft(item.id, anchor);
+            handle?.clearSelectedLines();
+            setRanged(false);
+          }
+        }}
+      >
+        <Plus />
+      </Button>
+    </TooltipHint>
+  );
+});
 
 type CommentAnnotationFrameProps = { twoColumn: boolean; children: ReactNode };
 

@@ -7,7 +7,7 @@ import { Button } from "@/components/ui/button";
 import { GLASS_PRIMARY } from "@/components/Glass";
 import { ReadRing } from "@/components/ReadRing";
 import { OverviewLayerSection, layerSectionDomId } from "@/components/OverviewLayerSection";
-import { ReviewProse } from "@/components/ReviewProse";
+import { Markdown } from "@/components/Markdown";
 import { cn } from "@/lib/utils";
 import { selectActiveSlice, useReviewStore } from "@/stores/review";
 
@@ -164,10 +164,9 @@ export function OverviewScreen(): ReactElement | null {
             </div>
           )}
 
-          <ReviewProse
+          <Markdown
             text={overview.body}
-            filePaths={filePaths}
-            onSelectFile={(path) => selectFile(path)}
+            links={{ paths: filePaths, onSelect: selectFile }}
             className="mt-5 space-y-3 text-base leading-relaxed text-foreground"
           />
 
@@ -252,16 +251,7 @@ export function OverviewScreen(): ReactElement | null {
               glass already says "this is a control, above the page"; the label only has to
               be legible, so the weight comes from ink at 500 and hover is a wash faint
               enough to read as glass catching light. */}
-          {resumeLayerId !== null ? (
-            <Button
-              variant="ghost"
-              className={cn("rounded-full", GLASS_PRIMARY)}
-              onClick={() => setActiveLayer(resumeLayerId)}
-            >
-              {model.read.read === 0 ? "Start reviewing" : "Continue reviewing"}
-              <ArrowRight aria-hidden="true" data-icon="inline-end" />
-            </Button>
-          ) : (
+          {resumeLayerId === null ? (
             firstLayerId !== null && (
               <Button
                 variant="ghost"
@@ -272,6 +262,15 @@ export function OverviewScreen(): ReactElement | null {
                 <ArrowRight aria-hidden="true" data-icon="inline-end" />
               </Button>
             )
+          ) : (
+            <Button
+              variant="ghost"
+              className={cn("rounded-full", GLASS_PRIMARY)}
+              onClick={() => setActiveLayer(resumeLayerId)}
+            >
+              {model.read.read === 0 ? "Start reviewing" : "Continue reviewing"}
+              <ArrowRight aria-hidden="true" data-icon="inline-end" />
+            </Button>
           )}
         </div>
       </div>

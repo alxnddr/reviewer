@@ -32,7 +32,7 @@ export type SearchQuery = { text: string; caseSensitive: boolean };
  * every line but the last, so matching would otherwise anchor `$`-like queries
  * inconsistently and a highlight would read past the visible glyphs. */
 function stripEol(line: string): string {
-  return line.replace(/\r?\n$/, "");
+  return line.replace(/\r?\n$/u, "");
 }
 
 /** Append a file's hunk lines to `index` in rendered order. Line numbers are

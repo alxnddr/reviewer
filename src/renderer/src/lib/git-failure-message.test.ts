@@ -28,7 +28,7 @@ describe("gitFailureMessage", () => {
 
   it("throws on an unknown code", () => {
     expect(() => gitFailureMessage({ code: "nonsense" } as unknown as GitFailure)).toThrow(
-      /Unhandled variant/,
+      /Unhandled variant/u,
     );
   });
 });

@@ -6,7 +6,7 @@
  * "src/components/Button.tsx". Whitespace in the query is ignored so fragments
  * can be typed apart; a blank query matches everything. */
 export function fuzzyMatches(query: string, text: string): boolean {
-  const needle = query.replace(/\s/g, "").toLowerCase();
+  const needle = query.replaceAll(/\s/gu, "").toLowerCase();
   if (needle.length === 0) {
     return true;
   }

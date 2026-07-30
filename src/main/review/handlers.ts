@@ -10,6 +10,8 @@ import {
   type ReviewOpenFailure,
 } from "../../shared/review-open";
 import type { Session } from "../../shared/session";
+import { validateRepo } from "../git/ops";
+import type { GitRunner } from "../git/runner";
 import { registerIpcHandler } from "../ipc-registry";
 import type { SessionStore } from "../sessions";
 import { importReviewFromPath } from "./guard";
@@ -31,22 +33,38 @@ type ImportSessionResult =
   | { ok: false; failure: ReviewOpenFailure };
 
 /** Guard a path, and on success create the active session. The one place a
- * validated review becomes a session — shared by all three entries. */
-async function importSession(store: SessionStore, rawPath: string): Promise<ImportSessionResult> {
+ * validated review becomes a session — shared by all three entries.
+ *
+ * The artifact's author picked its `repo`, so a parsed artifact is not yet a
+ * trusted session source: `RepoPath` only proves the string is absolute, and the
+ * session's path is what later feeds `git:file-contents` (and its `worktree` arm's
+ * disk reads). Validating here refuses a review pointing at any directory that is
+ * not a git work tree — `/Users/you/.ssh` never becomes something the viewer can
+ * render — and, as on the dialog path, normalizes to the work-tree toplevel. */
+async function importSession(
+  runner: GitRunner,
+  store: SessionStore,
+  rawPath: string,
+): Promise<ImportSessionResult> {
   const result = await importReviewFromPath(rawPath, reviewStamp());
   if (!result.ok) {
     return result;
   }
-  return { ok: true, session: store.createFromReview(result.review) };
+  const repo = await validateRepo(runner, result.review.repo.path);
+  if (!repo.ok) {
+    return { ok: false, failure: { code: "repoUnavailable", reason: repo.failure } };
+  }
+  return { ok: true, session: store.createFromReview({ ...result.review, repo: repo.value }) };
 }
 
 /** The drop path, and the tail of the dialog path: guard `rawPath` → session →
  * invoke outcome carrying the new session id (or the typed failure). */
 export async function openReviewFromPath(
+  runner: GitRunner,
   store: SessionStore,
   rawPath: string,
 ): Promise<ReviewOpenResponse> {
-  const result = await importSession(store, rawPath);
+  const result = await importSession(runner, store, rawPath);
   return result.ok
     ? { ok: true, value: { kind: "opened", sessionId: result.session.id } }
     : { ok: false, failure: result.failure };
@@ -54,7 +72,10 @@ export async function openReviewFromPath(
 
 /** File → Open Review…: the native picker (parented → a window-modal sheet, like
  * the repo dialog), then the shared guard. A dismiss is `canceled`, not a failure. */
-async function openReviewViaDialog(store: SessionStore): Promise<ReviewOpenResponse> {
+async function openReviewViaDialog(
+  runner: GitRunner,
+  store: SessionStore,
+): Promise<ReviewOpenResponse> {
   const options = {
     title: "Open Review",
     properties: ["openFile" as const],
@@ -71,20 +92,20 @@ async function openReviewViaDialog(store: SessionStore): Promise<ReviewOpenRespo
   if (picked.canceled || file === undefined) {
     return { ok: true, value: { kind: "canceled" } };
   }
-  return openReviewFromPath(store, file);
+  return openReviewFromPath(runner, store, file);
 }
 
-export function registerReviewIpcHandlers(store: SessionStore): void {
+export function registerReviewIpcHandlers(runner: GitRunner, store: SessionStore): void {
   registerIpcHandler(
     IpcChannel.reviewOpen,
     { request: z.void(), response: ReviewOpenResponse },
-    () => openReviewViaDialog(store),
+    () => openReviewViaDialog(runner, store),
   );
 
   registerIpcHandler(
     IpcChannel.reviewOpenPath,
     { request: ReviewOpenPathRequest, response: ReviewOpenResponse },
-    ({ path }) => openReviewFromPath(store, path),
+    ({ path }) => openReviewFromPath(runner, store, path),
   );
 
   registerIpcHandler(
@@ -98,10 +119,11 @@ export function registerReviewIpcHandlers(store: SessionStore): void {
  * so the caller can notify/create a window. A bad launch arg logs and returns
  * null — never a throw, never a spawn. */
 export async function importReviewSessionFromArg(
+  runner: GitRunner,
   store: SessionStore,
   rawPath: string,
 ): Promise<Session | null> {
-  const result = await importSession(store, rawPath);
+  const result = await importSession(runner, store, rawPath);
   if (!result.ok) {
     console.error(`Open review from launch arg failed: ${result.failure.code}`);
     return null;

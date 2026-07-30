@@ -508,6 +508,31 @@ describe("rvw emit — the draft", () => {
         ok: false,
         error: { code: "draftUnreadable" },
       });
+
+      // `--draft -` is the *documented* way to ask for stdin, so it is the same read that
+      // can never complete and must produce the same guidance — not a wait for an EOF the
+      // terminal will never send.
+      const explicitStdin = await runCli([
+        "emit",
+        "--repo",
+        repo,
+        "--draft",
+        "-",
+        "--no-open",
+        "--json",
+      ]);
+      expect(explicitStdin.code).toBe(2);
+      expect(JSON.parse(explicitStdin.stdout)).toMatchObject({
+        ok: false,
+        // The same sentence, not merely the same code: a read that reaches fd 0 fails
+        // `draftUnreadable` too, but on whatever fd 0 happened to be (an EAGAIN, or bytes
+        // that are not JSON) — none of which tells a caller whose terminal simply never
+        // sent anything what to do next.
+        error: {
+          code: "draftUnreadable",
+          message: "no draft: pass --draft <file>, or pipe the draft JSON on stdin",
+        },
+      });
     } finally {
       Object.defineProperty(process.stdin, "isTTY", { value: previousTty, configurable: true });
     }

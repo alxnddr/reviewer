@@ -1,0 +1,40 @@
+{
+  "$schema": "./node_modules/oxlint/configuration_schema.json",
+  "plugins": ["typescript", "unicorn", "oxc", "react"],
+  "categories": {
+    "correctness": "error",
+    "suspicious": "error",
+    "pedantic": "error"
+  },
+  "rules": {
+    // React 17+ automatic JSX runtime (`jsx: "react-jsx"` in tsconfig.web.json): no React import is needed.
+    "react/react-in-jsx-scope": "off",
+    // Arbitrary size metrics. This codebase deliberately keeps long, single-purpose reducers/components together.
+    "eslint/max-lines": "off",
+    "eslint/max-lines-per-function": "off",
+    // The codebase documents intent with trailing comments on purpose; see the module headers throughout.
+    "eslint/no-inline-comments": "off",
+    // Fires on Zod's `.catch()` (11 of 13 hits are `z.…nullable().catch(null)`), which is not a promise.
+    "unicorn/prefer-top-level-await": "off",
+    // 16 of the 20 hits are `describe`-scoped test helpers, which deliberately sit next to their
+    // only caller; a `describe` body runs once, so the "recreated on every call" premise is moot.
+    "unicorn/consistent-function-scoping": "off",
+    // `x?.field != null` is the nullish test the store selectors want: `?.` yields `undefined`
+    // for an absent slice, so `!== null` alone would read it as present. Everything else stays strict.
+    "eslint/eqeqeq": ["error", "always", { "null": "ignore" }],
+    // Kept for `return undefined` / `let x = undefined`, but not for arguments: the rule is
+    // type-blind, and a `request: void` parameter (preload's `invoke`) must still be passed.
+    "unicorn/no-useless-undefined": ["error", { "checkArguments": false }],
+    // Ids here are data (a layer id like `reviewer:uncovered`, a session uuid), and an id is not
+    // a selector: `querySelector("#" + id)` needs CSS.escape or it throws SyntaxError on `:`/`.`.
+    // `getElementById` takes the id verbatim, which is the only correct lookup for these.
+    "unicorn/prefer-query-selector": "off",
+    // `fileURLToPath(import.meta.url)` is deliberate: it is what Vite's esbuild config fallback and
+    // `bun build` rewrite when they relocate a module. See the comments in cli/fixtures.ts and
+    // vite.preview.config.mts — `import.meta.dirname` carries no such guarantee.
+    "unicorn/prefer-import-meta-properties": "off"
+  },
+  "env": {
+    "builtin": true
+  }
+}

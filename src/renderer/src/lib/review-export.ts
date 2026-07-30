@@ -12,7 +12,7 @@ import {
 import { assertNever } from "../../../shared/assert";
 import type { CommitSha, DiffSelection, RepoInfo, ReviewRef } from "../../../shared/git";
 import { resolveAnchor } from "./diff/anchor";
-import type { PatchFile } from "./diff/patch";
+import { filesByAnchorPath, type PatchFile } from "./diff/patch";
 import { layerOwning } from "./layers";
 
 // The two review exports, both pure and headless so they snapshot and round-trip in
@@ -164,13 +164,17 @@ export type MarkdownReview = {
 /** Project the in-app comments to Markdown comments, resolving each against the
  * loaded diff for its outdated flag exactly as the line annotations do
  * (comment-annotations.ts): a frozen embedded patch places every anchor; a
- * re-derived diff flags a comment whose range no same-side hunk still covers. */
+ * re-derived diff flags a comment whose range no same-side hunk still covers.
+ * "Exactly as" includes the rename lookup — a file answers to both its names
+ * (`filesByAnchorPath`), or the export would call a comment the app shows placed
+ * outdated. The exported `file` stays the *authored* path, which is the anchor the
+ * artifact round-trips on; only the resolution reads through the rename. */
 export function markdownCommentsFrom(
   comments: readonly Comment[],
   files: readonly PatchFile[],
   frozen: boolean,
 ): MarkdownComment[] {
-  const byPath = new Map(files.map((file) => [file.path, file]));
+  const byPath = filesByAnchorPath(files);
   return comments.map((comment) => {
     const file = byPath.get(comment.file) ?? null;
     const resolution = resolveAnchor(
@@ -273,9 +277,9 @@ export function reviewToMarkdown(review: MarkdownReview): string {
     if (layer.summary !== undefined) {
       lines.push("", layer.summary);
     }
-    const covered = (byLayer[index] ?? []).slice().sort(compareComments);
+    const covered = (byLayer[index] ?? []).toSorted(compareComments);
     if (covered.length > 0) {
-      lines.push("", ...covered.map(commentBullet));
+      lines.push("", ...covered.map((comment) => commentBullet(comment)));
     }
   });
 
@@ -284,7 +288,7 @@ export function reviewToMarkdown(review: MarkdownReview): string {
       "",
       "## Other comments",
       "",
-      ...other.slice().sort(compareComments).map(commentBullet),
+      ...other.toSorted(compareComments).map((comment) => commentBullet(comment)),
     );
   }
 

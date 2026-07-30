@@ -40,7 +40,7 @@ function runPlain(command: string): Promise<boolean> {
 
 /** One admin prompt (Touch ID / password) via AppleScript, as Xcode and VS Code do. */
 function runElevated(command: string): Promise<boolean> {
-  const escaped = command.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+  const escaped = command.replaceAll("\\", "\\\\").replaceAll('"', '\\"');
   return new Promise((resolve) => {
     execFile(
       "osascript",

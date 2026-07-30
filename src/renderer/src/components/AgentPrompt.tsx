@@ -52,7 +52,7 @@ export function AgentPromptBlock({ note }: { note?: ReactNode }): ReactElement {
               () => setCopied(true),
               // A refused clipboard only costs the check glyph; the text is selectable right
               // there, and a card of instructions is no place for an error surface.
-              () => undefined,
+              () => {},
             );
           }}
         >

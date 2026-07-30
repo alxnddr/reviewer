@@ -90,12 +90,12 @@ export function BranchField({
         filteredItems={filtered}
         value={value}
         onValueChange={(branch) => {
-          if (branch !== null) {
-            onChange(branch);
-          } else {
+          if (branch === null) {
             // Base UI clears to null; only a field that offers clearing means anything
             // by it, so the rest ignore it rather than reporting an empty pick.
             onClear?.();
+          } else {
+            onChange(branch);
           }
         }}
         onInputValueChange={setQuery}

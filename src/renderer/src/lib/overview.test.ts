@@ -203,6 +203,24 @@ describe("buildOverview", () => {
     expect(model.chapters.map((chapter) => chapter.depth)).toEqual([0, 0, 1, 2, 0, 0]);
   });
 
+  it("infers no chapter for a review with no layers at all", () => {
+    // The coverage core reads a layer-less diff as entirely uncovered, but there is no
+    // walkthrough here for anything to be missing from — the doc is chapter-less, not one
+    // chapter naming the whole diff.
+    const model = buildOverview({
+      layers: [],
+      files: FILES,
+      comments: [comment("src/foo.ts", 11, 11, "c1")],
+      frozen: false,
+      readFiles: NO_READ_FILES,
+    });
+
+    expect(model.chapters).toEqual([]);
+    // The headline is still measured against the whole diff.
+    expect(model.files).toBe(3);
+    expect(model.comments).toBe(1);
+  });
+
   it("reads without a diff: the chapters and their files survive, the counts stand down", () => {
     const model = buildOverview({
       layers: [FOO],

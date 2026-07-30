@@ -52,7 +52,7 @@ export function listSkills(root: string): SkillsResult {
   }
 
   const skills: SkillSummary[] = [];
-  for (const entry of entries.sort()) {
+  for (const entry of entries.toSorted()) {
     const path = join(root, entry, SKILL_FILE);
     let bytes: string;
     try {

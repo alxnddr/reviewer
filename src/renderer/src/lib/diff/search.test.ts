@@ -99,7 +99,7 @@ describe("findMatches", () => {
     const matches = findMatches(index, { text: "e", caseSensitive: false });
     const fileOrder = matches.map((match) => match.fileId);
     // Files appear in patch order and never interleave.
-    expect(fileOrder).toEqual([...fileOrder].sort(stableByFirstAppearance(fileOrder)));
+    expect(fileOrder).toEqual([...fileOrder].toSorted(stableByFirstAppearance(fileOrder)));
   });
 });
 

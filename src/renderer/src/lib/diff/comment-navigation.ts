@@ -1,5 +1,5 @@
 import type { Comment } from "../../../../shared/review";
-import type { PatchFile } from "./patch";
+import { filesByAnchorPath, type PatchFile } from "./patch";
 import { resolveAnchor } from "./anchor";
 
 // The navigation view over a session's comments: every comment resolved to where
@@ -13,9 +13,14 @@ import { resolveAnchor } from "./anchor";
 
 /** A comment resolved for navigation. `line` is the placed line for a `placed`
  * entry; null for `outdated` (renders at the file header) and `unplaceable` (no
- * host line at all). */
+ * host line at all). `path` is the file it actually hosts on, under the name the
+ * loaded diff carries — the diff item's id, which is what a scroll target and a
+ * group heading need. It differs from `comment.file` only for a comment authored
+ * before its file was renamed; an unplaceable comment hosts nowhere, so it keeps
+ * its authored path. */
 export type CommentNavEntry = {
   comment: Comment;
+  path: string;
   status: "placed" | "outdated" | "unplaceable";
   line: number | null;
 };
@@ -26,17 +31,18 @@ export type CommentNavEntry = {
  * matching the top-to-bottom order a reader scrolls past. Comments whose file is
  * absent from the diff are unplaceable: they have no line to scroll to, so they
  * trail the list (grouped by path) for the panel to show and the keyboard walk to
- * skip. A frozen review places every anchor on its authored line (the diff cannot
- * have drifted); otherwise placement is positional against the re-derived diff. */
+ * skip — a renamed file is not absent, since it answers to its old path too, so its
+ * comments stay in the walk. A frozen review places every anchor on its authored
+ * line (the diff cannot have drifted); otherwise placement is positional against the
+ * re-derived diff. */
 export function orderedComments(
   files: readonly PatchFile[],
   comments: readonly Comment[],
   frozen: boolean,
 ): CommentNavEntry[] {
-  const fileByPath = new Map<string, PatchFile>();
+  const fileByPath = filesByAnchorPath(files);
   const fileIndex = new Map<string, number>();
   files.forEach((file, index) => {
-    fileByPath.set(file.path, file);
     fileIndex.set(file.path, index);
   });
 
@@ -45,7 +51,7 @@ export function orderedComments(
   for (const comment of comments) {
     const file = fileByPath.get(comment.file);
     if (file === undefined) {
-      unplaceable.push({ comment, status: "unplaceable", line: null });
+      unplaceable.push({ comment, path: comment.file, status: "unplaceable", line: null });
       continue;
     }
     const resolution = resolveAnchor(
@@ -54,16 +60,18 @@ export function orderedComments(
     );
     placeable.push(
       resolution.status === "placed"
-        ? { comment, status: "placed", line: resolution.line }
-        : { comment, status: "outdated", line: null },
+        ? { comment, path: file.path, status: "placed", line: resolution.line }
+        : { comment, path: file.path, status: "outdated", line: null },
     );
   }
 
-  // Within a file the header-pinned outdated comments lead (rank 0), then placed by
-  // resolved line; startLine tie-breaks a stack sharing one line so the order is
-  // stable across renders.
+  // By the *host* file's diff position, not the authored path's — a comment written
+  // before a rename names a path the diff no longer lists, and taking its order from
+  // that path would sort it as though it led the diff. Within a file the header-pinned
+  // outdated comments lead (rank 0), then placed by resolved line; startLine tie-breaks
+  // a stack sharing one line so the order is stable across renders.
   placeable.sort((a, b) => {
-    const fileDelta = (fileIndex.get(a.comment.file) ?? 0) - (fileIndex.get(b.comment.file) ?? 0);
+    const fileDelta = (fileIndex.get(a.path) ?? 0) - (fileIndex.get(b.path) ?? 0);
     if (fileDelta !== 0) return fileDelta;
     const rankDelta = (a.status === "outdated" ? 0 : 1) - (b.status === "outdated" ? 0 : 1);
     if (rankDelta !== 0) return rankDelta;
@@ -97,13 +105,20 @@ export function indexOfComment(entries: readonly CommentNavEntry[], commentId: s
   return entries.findIndex((entry) => entry.comment.id === commentId);
 }
 
-/** How many comments each file carries, for the tree's per-file count badges.
- * Keyed by the authored `comment.file`, so a stranded comment still counts against
- * the file it belonged to. */
-export function commentCountsByFile(comments: readonly Comment[]): Map<string, number> {
+/** How many comments each file carries, for the tree's per-file count badges — keyed
+ * the way the tree keys its rows, by the path the loaded diff carries the file under.
+ * A comment authored before a rename counts against the renamed file, which is the row
+ * its card is on; one whose file is in the diff under neither name falls back to its
+ * authored path, so a stranded comment still counts against the file it belonged to. */
+export function commentCountsByFile(
+  files: readonly PatchFile[],
+  comments: readonly Comment[],
+): Map<string, number> {
+  const fileByPath = filesByAnchorPath(files);
   const counts = new Map<string, number>();
   for (const comment of comments) {
-    counts.set(comment.file, (counts.get(comment.file) ?? 0) + 1);
+    const path = fileByPath.get(comment.file)?.path ?? comment.file;
+    counts.set(path, (counts.get(path) ?? 0) + 1);
   }
   return counts;
 }

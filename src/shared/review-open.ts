@@ -1,4 +1,5 @@
 import * as z from "zod";
+import { GitFailure } from "./git";
 import { SessionId } from "./session";
 
 // The open-a-review IPC contract: the three entry points (dialog,
@@ -8,15 +9,19 @@ import { SessionId } from "./session";
 // Kept apart from `review.ts` so the outcome can name a `SessionId` without
 // `review.ts` importing `session.ts` (which imports `review.ts` in turn).
 
-/** Why a path could not become an open review. Ordered as the guard checks them:
- * extension → existence/kind → size → readability → content. Each is a distinct
- * visible state, never a crash. */
+/** Why a path could not become an open review. Ordered as the open path checks
+ * them: extension → existence/kind → size → readability → content → the repo the
+ * artifact names. Each is a distinct visible state, never a crash. */
 export const ReviewOpenFailure = z.discriminatedUnion("code", [
   z.object({ code: z.literal("wrongExtension") }),
   z.object({ code: z.literal("fileNotFound") }),
   z.object({ code: z.literal("tooLarge") }),
   z.object({ code: z.literal("unreadable") }),
   z.object({ code: z.literal("invalidContent") }),
+  /** The artifact parsed, but the repo *it* chose is not a git work tree this
+   * machine can open. Carries the git layer's own reason so the banner can say
+   * which path was refused instead of a generic "could not open". */
+  z.object({ code: z.literal("repoUnavailable"), reason: GitFailure }),
 ]);
 export type ReviewOpenFailure = z.infer<typeof ReviewOpenFailure>;
 

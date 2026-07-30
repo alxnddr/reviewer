@@ -1,16 +1,8 @@
-import {
-  useCallback,
-  useEffect,
-  useMemo,
-  useState,
-  type ReactElement,
-  type ReactNode,
-} from "react";
+import { useCallback, useMemo, useState, type ReactElement, type ReactNode } from "react";
 import { assertNever } from "../../../shared/assert";
 import type { DiffSelection } from "../../../shared/git";
 import type { Comment, ReviewAnchor, ReviewLayer } from "../../../shared/review";
-import { emptySoloReason, findLayer, layerOutline, soloFiles } from "@/lib/layers";
-import { effectiveLayers } from "@/lib/coverage";
+import { emptySoloReason, layerOutline } from "@/lib/layers";
 import { useFitToContent } from "@/lib/fit-panel";
 import { unplaceableComments } from "@/lib/diff/comment-annotations";
 import { isComplete, NO_COLLAPSED_FILES, NO_READ_FILES, tallyRead } from "@/lib/read-progress";
@@ -22,84 +14,12 @@ import { GitFailureText } from "@/components/GitFailureText";
 import { Button } from "@/components/ui/button";
 import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from "@/components/ui/resizable";
 import { Skeleton } from "@/components/ui/skeleton";
-import { selectActiveSlice, useReviewStore } from "@/stores/review";
+import { selectActiveSlice, selectSoloedDiff, useReviewStore } from "@/stores/review";
 
 // A stable empty array: a fresh [] per render would make the comments selector
 // return a new reference each time and re-render the screen in a loop.
 const EMPTY_COMMENTS: Comment[] = [];
 const EMPTY_LAYERS: ReviewLayer[] = [];
-
-function isEditable(target: EventTarget | null): boolean {
-  return (
-    target instanceof HTMLElement &&
-    (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable)
-  );
-}
-
-/** j/k step through changed files; the tree keeps its own arrow-key navigation. */
-function useFileStepShortcuts(): void {
-  const selectAdjacentFile = useReviewStore((state) => state.selectAdjacentFile);
-
-  useEffect(() => {
-    const onKeyDown = (event: KeyboardEvent): void => {
-      if (event.metaKey || event.ctrlKey || event.altKey || isEditable(event.target)) {
-        return;
-      }
-      if (event.key === "j" || event.key === "k") {
-        event.preventDefault();
-        selectAdjacentFile(event.key === "j" ? 1 : -1);
-      }
-    };
-    window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
-  }, [selectAdjacentFile]);
-}
-
-/** n/p walk the comments (next/previous), Escape dismisses the walk. Sibling of the
- * j/k file stepper, with the same editable-target and modifier guards so it never
- * fires inside the comment editor or a filter field. */
-function useCommentStepShortcuts(): void {
-  const stepComment = useReviewStore((state) => state.stepComment);
-  const clearActiveComment = useReviewStore((state) => state.clearActiveComment);
-
-  useEffect(() => {
-    const onKeyDown = (event: KeyboardEvent): void => {
-      if (event.metaKey || event.ctrlKey || event.altKey || isEditable(event.target)) {
-        return;
-      }
-      if (event.key === "n" || event.key === "p") {
-        event.preventDefault();
-        stepComment(event.key === "n" ? 1 : -1);
-      } else if (event.key === "Escape") {
-        clearActiveComment();
-      }
-    };
-    window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
-  }, [stepComment, clearActiveComment]);
-}
-
-/** `r` marks the focused file read or unread — the keyboard half of the header control,
- * and the sibling of j/k (files) and n/p (comments). Deliberately does not move: a reader
- * who marks the file they are looking at is still looking at it, and a surface that jumped
- * out from under that click would make the whole gesture something to be careful with. */
-function useReadShortcut(): void {
-  const toggleFileRead = useReviewStore((state) => state.toggleFileRead);
-
-  useEffect(() => {
-    const onKeyDown = (event: KeyboardEvent): void => {
-      if (event.metaKey || event.ctrlKey || event.altKey || isEditable(event.target)) {
-        return;
-      }
-      if (event.key === "r") {
-        event.preventDefault();
-        toggleFileRead();
-      }
-    };
-    window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
-  }, [toggleFileRead]);
-}
 
 function LoadingState(): ReactElement {
   return (
@@ -175,6 +95,12 @@ export function DiffScreen(): ReactElement | null {
   const activeCommentId = useReviewStore(
     (state) => selectActiveSlice(state)?.activeCommentId ?? null,
   );
+  // Solo: the active layer restricts the diff to its files across both the code view and
+  // the tree. One derivation for the whole app (`lib/soloed-diff.ts`), read here as a
+  // subscription — the rail reads the same object, so there is no second definition of the
+  // layer's file set to drift, and the stable subset identity keeps DiffView from
+  // rebuilding its items every render.
+  const soloed = useReviewStore(selectSoloedDiff);
   // Whether this review carries a tour doc: the chapter band then shows the breadcrumb
   // back to it, and stepping back off the first chapter lands there.
   const hasOverview = useReviewStore((state) => selectActiveSlice(state)?.overview != null);
@@ -207,9 +133,6 @@ export function DiffScreen(): ReactElement | null {
   // Collapsing the prose drops the resize panel entirely (nothing to size), so the
   // parent — not LayerIntro — owns this.
   const [layerIntroCollapsed, setLayerIntroCollapsed] = useState(false);
-  useFileStepShortcuts();
-  useCommentStepShortcuts();
-  useReadShortcut();
 
   // Bound to the active id (which is DiffView's mount key), so it stays stable for
   // the mounted view and captures land only in the session that scrolled.
@@ -272,9 +195,6 @@ export function DiffScreen(): ReactElement | null {
     }
   }, [resetReviewSubrange, activeSessionId]);
 
-  // Solo: the active layer restricts the diff to its files across both the code
-  // view and the tree. Derived from the full loaded files, memoised so a
-  // stable subset identity keeps DiffView from rebuilding its items every render.
   const loadedFiles = diff !== null && diff.phase === "loaded" ? diff.files : null;
   // Comments the re-derived diff has no line to host: kept in state, shown
   // nowhere on the surface — the count bar makes them discoverable. Resolved
@@ -284,37 +204,22 @@ export function DiffScreen(): ReactElement | null {
     () => unplaceableComments(loadedFiles ?? [], comments),
     [loadedFiles, comments],
   );
-  // The authored layers plus the inferred "not covered by layers" layer, so soloing that
-  // synthetic row restricts the code view to the skipped files just like an authored one.
-  const effLayers = useMemo(
-    () => effectiveLayers(loadedFiles ?? [], layers),
-    [loadedFiles, layers],
-  );
-  const activeLayer = useMemo(
-    () => findLayer(effLayers, activeLayerId),
-    [effLayers, activeLayerId],
-  );
+  // The authored layers plus the inferred "not covered by layers" layer (so soloing that
+  // synthetic row restricts the code view to the skipped files just like an authored one),
+  // the active one resolved against that list, and the subset it leaves on screen — empty
+  // for every diff phase that has no files.
+  const { layers: effLayers, activeLayer, files: visibleFiles } = soloed;
   // What each authored layer is and the number it wears — the same outline the rail and
   // the doc read, so the band's number and breadcrumb can never disagree with theirs.
   const outline = useMemo(() => layerOutline(layers), [layers]);
-  const visibleFiles = useMemo(
-    () => (loadedFiles === null ? null : soloFiles(loadedFiles, activeLayer, effLayers)),
-    [loadedFiles, activeLayer, effLayers],
-  );
   // The soloed chapter's own progress. `visibleFiles` IS the layer's extent whenever one
   // is soloed, so the band's ring counts exactly what the band's chapter put on screen —
   // no second definition of "this layer's files" to fall out of step with the rail's.
-  const layerTally = useMemo(
-    () => tallyRead(visibleFiles ?? [], readFiles),
-    [visibleFiles, readFiles],
-  );
+  const layerTally = useMemo(() => tallyRead(visibleFiles, readFiles), [visibleFiles, readFiles]);
   // The intro's file-link resolution + navigation set. Memoised on the stable
   // subset so LayerIntro's own derived state (the diff-file Set, the parsed
   // description) holds across renders instead of rebuilding every time.
-  const visibleFilePaths = useMemo(
-    () => (visibleFiles ?? loadedFiles ?? []).map((file) => file.path),
-    [visibleFiles, loadedFiles],
-  );
+  const visibleFilePaths = useMemo(() => visibleFiles.map((file) => file.path), [visibleFiles]);
   // Context expansion: a loader only when a live repo backs a two-ref
   // selection, else null so the expander is absent and no git read can fire. Stable
   // across expands (Pierre hydrates the diff in place), so the diff never rebuilds
@@ -381,7 +286,7 @@ export function DiffScreen(): ReactElement | null {
       );
     case "loaded": {
       // Soloed to the active layer's subset when one is active; the full diff otherwise.
-      const layerFiles = visibleFiles ?? diff.files;
+      const layerFiles = visibleFiles;
       // Sits directly above the diff — below the chapter band, not above it — in
       // every loaded layout, so a stranded comment reads as belonging to the code it
       // drifted off, not to the layer heading; null (absent) when none.
@@ -456,7 +361,7 @@ export function DiffScreen(): ReactElement | null {
       // apart so the copy never reads an empty layer as a broken one. Either way, name the
       // state and offer the escape back to the full diff; the layer stays listed and
       // steppable in the panel, never dropped.
-      if (activeLayer !== null && visibleFiles !== null && visibleFiles.length === 0) {
+      if (activeLayer !== null && visibleFiles.length === 0) {
         const reason = emptySoloReason(activeLayer, effLayers);
         return (
           <div className="flex h-full flex-col">

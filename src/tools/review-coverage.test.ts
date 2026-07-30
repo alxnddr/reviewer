@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { ReviewAnchor, ReviewArtifact, ReviewLayerInput } from "../shared/review";
 import {
   changedLineUniverse,
@@ -78,8 +78,8 @@ function reportOf(result: CoverageResult) {
  * scores the fixture's embedded patch directly through the shared `coverageOfPatch` core.
  * The authored tree is walked flat first, exactly as the CLI does: a nested layer's ranges
  * count for the diff the same as a top-level one's. */
-function coverageForArtifact(artifact: ReviewArtifact): CoverageResult {
-  return coverageOfPatch(artifact.patch ?? "", layerExtentsOf(artifact.layers));
+function coverageForArtifact(review: ReviewArtifact): CoverageResult {
+  return coverageOfPatch(review.patch ?? "", layerExtentsOf(review.layers));
 }
 
 describe("coverage over an artifact's diff", () => {
@@ -303,6 +303,32 @@ describe("coverage over an artifact's diff", () => {
     expect(report.files).toEqual([
       { file: "run.sh", status: "nonCoverable", reason: "noChangedLines" },
     ]);
+  });
+
+  it("scores a binary the same whether or not a stray file break desyncs the parsed file count", () => {
+    // Regression: binary detection used to zip raw per-file segments against parsed files by
+    // index, so one extra file break anywhere in the patch — here a message line the parser
+    // breaks on and a `diff --git ` header scan does not — flipped *every* file's `isBinary`
+    // to false and moved the report a coverage audit is read from.
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const binary = [
+      "diff --git a/logo.png b/logo.png",
+      "index 1111111..2222222 100644",
+      "Binary files a/logo.png and b/logo.png differ",
+    ];
+    const strayBreak = ["diff --gitignore rules moved too", "---"];
+    const clean = reportOf(coverageOfPatch(patch(binary, FOO_HUNK), []));
+    const desynced = reportOf(coverageOfPatch(patch(strayBreak, binary, FOO_HUNK), []));
+    expect(clean.files).toContainEqual({
+      file: "logo.png",
+      status: "nonCoverable",
+      reason: "binary",
+    });
+    expect(desynced.headline).toEqual(clean.headline);
+    // The stray break itself parses as one nameless extra file; drop it and the two reports
+    // must describe the same diff, down to why the binary is out of the universe.
+    expect(desynced.files.filter((file) => file.file !== "")).toEqual(clean.files);
+    errorSpy.mockRestore();
   });
 });
 

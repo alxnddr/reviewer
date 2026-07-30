@@ -52,11 +52,14 @@ function mapRunFailure(runFailure: GitRunFailure, repoPath: string): GitFailure 
       return { code: "timeout" };
     case "exited": {
       console.error(`git exited with ${runFailure.exitCode ?? "signal"}: ${runFailure.stderr}`);
-      if (/not a git repository/i.test(runFailure.stderr)) {
+      // The second phrasing is git's answer inside a `.git` directory or a bare
+      // repo: a real git dir, but no work tree — which is exactly as unusable to
+      // us as a plain directory, and reads better than `unexpected`.
+      if (/not a git repository|must be run in a work tree/iu.test(runFailure.stderr)) {
         return { code: "notARepo", path: repoPath };
       }
       if (
-        /unknown revision|bad revision|ambiguous argument|not a valid (?:commit|object) name/i.test(
+        /unknown revision|bad revision|ambiguous argument|not a valid (?:commit|object) name/iu.test(
           runFailure.stderr,
         )
       ) {
@@ -132,7 +135,7 @@ async function detectDefaultBranch(
     args: ["symbolic-ref", "--quiet", "refs/remotes/origin/HEAD"],
   });
   if (originHead.ok) {
-    const name = originHead.stdout.trim().replace(/^refs\/remotes\/origin\//, "");
+    const name = originHead.stdout.trim().replace(/^refs\/remotes\/origin\//u, "");
     const local = branches.find((branch) => branch === name);
     if (local !== undefined) return local;
   }
@@ -168,6 +171,10 @@ export async function getCommitLog(
     // history is the list — a branch the reviewer wants to read rather than compare.
     logArgs.push(range.base === null ? range.head : `${range.base}..${range.head}`);
   }
+  // The same trailing separator every diff carries (`committedDiffArgs`): it tells git the
+  // walk names revisions and nothing else, so a repo holding a file named like the branch
+  // lists that branch's history instead of failing with "ambiguous argument".
+  logArgs.push("--");
   const logResult = await runner.run({ cwd: repoPath, args: logArgs });
 
   let commits: LogEntry[];
@@ -183,7 +190,7 @@ export async function getCommitLog(
     }
   } else if (
     logResult.failure.code === "exited" &&
-    /does not have any commits yet/i.test(logResult.failure.stderr)
+    /does not have any commits yet/iu.test(logResult.failure.stderr)
   ) {
     // Unborn HEAD (fresh `git init`): an empty log, not an error — uncommitted
     // changes are still selectable.
@@ -246,7 +253,7 @@ export async function getDiff(
  * existed in the tree, and one that exists in the work tree but not in this commit
  * (the added-file old side). Both are a normal typed absence, not a failure. */
 function isPathAbsentAtRef(stderr: string): boolean {
-  return /does not exist in|exists on disk, but not in/i.test(stderr);
+  return /does not exist in|exists on disk, but not in/iu.test(stderr);
 }
 
 /** The rev a `git show <rev>:<path>` source reads its blob at. `worktree` has no rev

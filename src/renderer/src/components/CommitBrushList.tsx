@@ -213,7 +213,7 @@ export function CommitBrushList({
         const rendered = defaultRangeExtractor(range);
         return currentIndex === null || rendered.includes(currentIndex)
           ? rendered
-          : [...rendered, currentIndex].sort((a, b) => a - b);
+          : [...rendered, currentIndex].toSorted((a, b) => a - b);
       },
       [currentIndex],
     ),

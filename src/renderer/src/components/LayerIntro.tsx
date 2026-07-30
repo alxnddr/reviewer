@@ -6,7 +6,7 @@ import { isComplete, type ReadTally } from "@/lib/read-progress";
 import { Button } from "@/components/ui/button";
 import { TooltipHint } from "@/components/ui/tooltip";
 import { ReadRing, readLabel } from "@/components/ReadRing";
-import { ReviewProse } from "@/components/ReviewProse";
+import { Markdown } from "@/components/Markdown";
 import { cn } from "@/lib/utils";
 import { useReviewStore } from "@/stores/review";
 
@@ -202,11 +202,10 @@ export function LayerIntro({
             ref={fit?.viewportRef}
             className={cn("overflow-y-auto pb-3", fill ? "min-h-0 flex-1" : "max-h-48")}
           >
-            <ReviewProse
+            <Markdown
               ref={fit?.contentRef}
               text={content}
-              filePaths={filePaths}
-              onSelectFile={(file) => selectFile(file)}
+              links={{ paths: filePaths, onSelect: selectFile }}
               className="max-w-3xl space-y-2 px-6 text-base leading-relaxed text-foreground select-text"
             />
           </div>

@@ -12,7 +12,7 @@ function region(...children: Stub[]): HTMLElement {
   const stub: Stub = { children };
   return {
     ...stub,
-    contains: (node: Element | null) => children.some((child) => (child as unknown) === node),
+    contains: (node: Element | null) => children.some((member) => (member as unknown) === node),
   } as unknown as HTMLElement;
 }
 

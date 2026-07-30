@@ -61,9 +61,11 @@ const FIXTURE_BRANCHES: BranchList = {
 
 const FIXTURE_SESSION_ID = "00000000-0000-4000-8000-000000000000";
 
-/** Fixture comments over MULTI_STATUS_PATCH: two placed on covered lines (one
- * with an inline `code` ref, to show the sans/mono split) and one whose range
- * drifted off the diff, pinned outdated to its file header. */
+/** Fixture comments over MULTI_STATUS_PATCH: two placed on covered lines (one an
+ * inline `code` ref for the sans/mono split, one a markdown body — a bold lead, a
+ * list, a fenced snippet — since an agent-authored comment is prose, not a line of
+ * plain text) and one whose range drifted off the diff, pinned outdated to its file
+ * header. */
 function fixtureComments(): Comment[] {
   return [
     {
@@ -79,7 +81,17 @@ function fixtureComments(): Comment[] {
       side: "additions",
       startLine: 1,
       endLine: 1,
-      body: "Give this file a header comment so its purpose is obvious.",
+      body: [
+        "**[BUG]** the header is written before the file is opened, so a failed open leaves a *half-written* file behind.",
+        "",
+        "- move the write under the open",
+        "- drop the partial on the error path",
+        "",
+        "```ts",
+        "const handle = await open(path);",
+        "await handle.write(HEADER);",
+        "```",
+      ].join("\n"),
       id: "c0000000-0000-4000-8000-000000000002",
     },
     {
@@ -113,7 +125,10 @@ function manyFixtureComments(): Comment[] {
       "src/renderer/src/components/CommentsPanel.tsx",
       4,
       9,
-      "`bodyPreview` folds every run of whitespace, so a body that opens with a fenced block loses the fence and reads as prose. Worth keeping the first line only.",
+      // Markdown as an agent writes it: a bold tag, then the finding. What the rail row
+      // has to strip back to words, since `**[BUG]**` spends a narrow row's opening
+      // characters on punctuation.
+      "**[BUG]** the preview renders the body verbatim, so a `**[BUG]**` lead reads as punctuation in the rail.\n\n- strip the markup for the row\n- keep the mono runs",
     ],
     ["src/renderer/src/components/CommentsPanel.tsx", 14, 14, "Name this."],
     [

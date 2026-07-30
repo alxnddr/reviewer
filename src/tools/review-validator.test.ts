@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { ReviewArtifact, ReviewLayerDraft } from "../shared/review";
+import { RENAMES_PATCH, TWO_HUNKS_PATCH } from "../renderer/src/lib/diff/fixtures";
 import {
   parseReviewArtifact,
   validatePlacement,
@@ -114,6 +115,66 @@ describe("parseReviewArtifact + validatePlacement", () => {
       kind: "commentFileAbsent",
       anchor: { file: "src/gone.ts", side: "additions", startLine: 1, endLine: 1 },
     });
+  });
+
+  it("agrees with the app that a range across a hunk boundary does not place, but each half does", () => {
+    // Both sides of one rule: the gate runs the app's own `resolveAnchor`, so a range
+    // spanning the collapsed context between two hunks — the range the surface's `+`
+    // clamps away rather than author — is refused here too, while the two halves it
+    // clamps to place. An agent hears about it before handing the review over, instead
+    // of the reader finding the comment pinned to the file header.
+    const artifact = validArtifact({
+      patch: TWO_HUNKS_PATCH,
+      comments: [
+        { file: "src/two-hunks.txt", side: "additions", startLine: 5, endLine: 28, body: "note" },
+      ],
+      layers: [
+        {
+          label: "Both hunks",
+          summary: "one range per hunk",
+          ranges: [
+            { file: "src/two-hunks.txt", side: "additions", startLine: 5, endLine: 6 },
+            { file: "src/two-hunks.txt", side: "additions", startLine: 27, endLine: 28 },
+          ],
+        },
+      ],
+    });
+
+    const report = validate(JSON.stringify(artifact));
+    expect(report.ok).toBe(false);
+    if (report.ok) return;
+    expect(report.problems).toEqual([
+      {
+        kind: "commentAnchorOutdated",
+        anchor: { file: "src/two-hunks.txt", side: "additions", startLine: 5, endLine: 28 },
+      },
+    ]);
+  });
+
+  it("places a comment authored before a rename, and still fails a layer range on the old path", () => {
+    // The app hosts the comment on the renamed file (deletions are old-file
+    // coordinates, so the anchor is untouched by the rename) — the gate must agree.
+    // A layer range on the same old path is a different story: the app's layer scroll
+    // only finds a file by its current path, so passing it would green-light a
+    // walkthrough stop the reader cannot reach.
+    const artifact = validArtifact({
+      patch: RENAMES_PATCH,
+      comments: [
+        { file: "src/old-edit.txt", side: "deletions", startLine: 2, endLine: 2, body: "note" },
+      ],
+      layers: [
+        {
+          label: "Rename",
+          summary: "moved it",
+          ranges: [{ file: "src/old-edit.txt", side: "deletions", startLine: 2, endLine: 2 }],
+        },
+      ],
+    });
+
+    const report = validate(JSON.stringify(artifact));
+    expect(report.ok).toBe(false);
+    if (report.ok) return;
+    expect(kinds(report.problems)).toEqual(["layerRangeOutdated"]);
   });
 
   it("flags an unresolved description link by ordinal, leaving a parent rollup's empty ranges valid", () => {

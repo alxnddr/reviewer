@@ -66,7 +66,7 @@ export function nextRegion(
   }
   const index = activeRegionIndex(regions, active);
   if (index === -1) {
-    return (direction === 1 ? regions[0] : regions[regions.length - 1]) ?? null;
+    return (direction === 1 ? regions[0] : regions.at(-1)) ?? null;
   }
   return regions[(index + direction + regions.length) % regions.length] ?? null;
 }

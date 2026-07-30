@@ -53,11 +53,15 @@ export const ReviewAnchor = z
 export type ReviewAnchor = z.infer<typeof ReviewAnchor>;
 
 /** A comment as written in the artifact — minimal on the wire; the app stamps
- * identity on import (mirrors `SessionId`, never renderer-chosen). */
+ * identity on import (mirrors `SessionId`, never renderer-chosen). `body` is prose in
+ * the same markdown the overview and a layer description take — the app renders one
+ * grammar everywhere — though a comment is usually a sentence, not a document. */
 export const ReviewComment = z
   .object({ ...anchorShape, body: z.string().min(1) })
   .refine(rangeIsAscending, rangeError)
-  .meta({ description: `${anchorDescription} \`body\` says why, never what.` });
+  .meta({
+    description: `${anchorDescription} \`body\` says why, never what, and is markdown (CommonMark + GFM).`,
+  });
 export type ReviewComment = z.infer<typeof ReviewComment>;
 
 /** The in-app comment: the authored shape plus the app-assigned `id` stamped by
@@ -78,8 +82,8 @@ export type Comment = z.infer<typeof Comment>;
  * to point back at it, no document order to hand-maintain. `label` is the row's name; the
  * optional `summary` is the one-line deck under it; the optional `description` is the
  * long-form prose the app reads both as this layer's section of the overview doc and above
- * the diff — the artifact's small markdown tier, resolved to clickable file links at
- * render, absent on a layer that carries only a label.
+ * the diff — markdown (CommonMark + GFM), with a path reference resolved to a clickable
+ * file link at render, absent on a layer that carries only a label.
  *
  * A layer's **extent** is its own ranges plus every range under it. One rule, at every
  * level: a parent is not a different kind of node, it is a layer that happens to contain
@@ -166,11 +170,10 @@ export function walkLayerInputs(layers: readonly ReviewLayerInput[]): LayerInput
 /** The review's front matter — the tour doc the app opens on, before any diff.
  * `title` names the change the way its author would say it out loud; `body` is the
  * long-form "what this does, why it is shaped this way", written in the *same*
- * markdown grammar a layer `description` uses (paragraphs, headings, lists, quotes,
- * fences; `` `code` `` and `[label](path)` links resolved against the diff, strong
- * and emphasis) — one prose tier for the whole
- * artifact, so the parser, the link gate, and the renderer are shared rather than
- * forked. The walkthrough itself is never authored here: the app derives the chapter
+ * markdown a layer `description` and a comment take — CommonMark + GFM, parsed by
+ * remark, with `` `code` `` and `[label](path)` naming a diff file resolved to a
+ * clickable reference — one prose tier for the whole artifact, so the parser, the link
+ * gate, and the renderer are shared rather than forked. The walkthrough itself is never authored here: the app derives the chapter
  * list, its files, and its counts from `layers` and the loaded diff, so the doc can
  * never drift from the layers it introduces. Optional — an artifact without one opens
  * straight onto the diff. */
@@ -206,7 +209,13 @@ export const ReviewArtifact = z.strictObject({
   /** The tour doc the review opens on; absent on an artifact that has none. */
   overview: ReviewOverview.optional(),
   comments: z.array(ReviewComment).default([]),
-  layers: z.array(ReviewLayerInput).default([]),
+  layers: z
+    .array(ReviewLayerInput)
+    .meta({
+      description:
+        "The reading order the review is toured in — the diff cut into ordered chapters. Optional in shape only: write layers unless the review was asked for as comments alone.",
+    })
+    .default([]),
 });
 export type ReviewArtifact = z.infer<typeof ReviewArtifact>;
 
@@ -294,7 +303,7 @@ export type ReviewStamp = {
  * absolute path, so the last non-empty segment is the name (and `/` stands for itself). */
 function repoNameOf(path: string): string {
   const segments = path.split("/").filter((segment) => segment.length > 0);
-  return segments[segments.length - 1] ?? path;
+  return segments.at(-1) ?? path;
 }
 
 /** The authored tree flattened into the array every surface reads: depth-first over

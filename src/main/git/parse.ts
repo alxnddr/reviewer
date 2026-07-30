@@ -3,7 +3,7 @@
 // separators survive newlines in commit subjects.
 
 /** Matches `LOG_FORMAT` in ops.ts: fields joined by `%x1f`, records by `-z`'s NUL. */
-export const LOG_FIELD_SEPARATOR = "\u001f";
+export const LOG_FIELD_SEPARATOR = "\u001F";
 
 export type ParsedCommit = {
   sha: string;

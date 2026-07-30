@@ -3,7 +3,7 @@
 // stays verbatim. Shared so the sidebar label and the review selector abbreviate
 // endpoints the same way.
 
-const HEX_SHA = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/;
+const HEX_SHA = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/u;
 
 export function shortSha(sha: string): string {
   return sha.slice(0, 7);

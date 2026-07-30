@@ -77,7 +77,7 @@ export function CliBanner(): ReactElement | null {
           onClick={() => void installCli()}
         >
           {installing && <LoaderCircle aria-hidden="true" className="animate-spin" />}
-          {problem !== null ? "Try again" : shadowed ? "Fix" : "Install"}
+          {problem === null ? (shadowed ? "Fix" : "Install") : "Try again"}
         </Button>
         <TooltipHint content="Not now" side="bottom" align="end">
           <Button

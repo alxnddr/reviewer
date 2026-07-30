@@ -174,6 +174,6 @@ export function expansionOptions(loadDiffFiles: FileDiffContentsLoader | null): 
   return {
     expandUnchanged: false,
     expansionLineCount: EXPANSION_LINE_COUNT,
-    ...(loadDiffFiles !== null ? { loadDiffFiles } : {}),
+    ...(loadDiffFiles === null ? {} : { loadDiffFiles }),
   };
 }

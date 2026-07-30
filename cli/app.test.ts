@@ -467,7 +467,7 @@ describe("rvw skills", () => {
   it("prints one skill's path when named, so an agent can open it", async () => {
     const result = await runCli(["skills", "present-review"]);
     expect(result.code).toBe(0);
-    expect(result.stdout.trim()).toMatch(/\/skills\/present-review\/SKILL\.md$/);
+    expect(result.stdout.trim()).toMatch(/\/skills\/present-review\/SKILL\.md$/u);
   });
 
   it("exits 2 and names the known skills when asked for one that does not exist", async () => {

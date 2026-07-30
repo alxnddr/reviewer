@@ -4,7 +4,7 @@ import type { ReviewLayer } from "../../../shared/review";
 import type { PatchFile } from "@/lib/diff/patch";
 import type { FitToContentRefs } from "@/lib/fit-panel";
 import { layerOutline, resolveLayerScroll } from "@/lib/layers";
-import { coverageSummary } from "@/lib/coverage";
+import { coverageFor } from "@/lib/soloed-diff";
 import { layerTally, NO_READ_FILES, type ReadTally } from "@/lib/read-progress";
 import { RAIL_ACTIVE_ITEM, RAIL_GLYPH, RAIL_LIST, RailRow, RailSection } from "@/components/rail";
 import { cn } from "@/lib/utils";
@@ -229,7 +229,9 @@ export function LayerList({
   // The computed coverage of the loaded diff by these layers — same core the `rvw
   // coverage` CLI reports, so the header number and the CLI never disagree. `uncovered`
   // is the inferred remainder, present only when a coverable file sits in no layer at all.
-  const summary = useMemo(() => coverageSummary(files, layers), [files, layers]);
+  // Through the shared derivation, so the header shares the walk the solo already paid for
+  // rather than scanning the diff a second time for the same report.
+  const summary = useMemo(() => coverageFor(files, layers), [files, layers]);
   // With no authored layers there is nothing for a file to be missing from, so the
   // inferred row is suppressed — the section is then just the tour doc's own row.
   const uncovered = layers.length === 0 ? null : summary.uncoveredLayer;
@@ -462,7 +464,7 @@ export function LayerList({
       }
       case "End": {
         event.preventDefault();
-        const last = visible[visible.length - 1];
+        const last = visible.at(-1);
         if (last !== undefined) {
           select(last.id);
         }

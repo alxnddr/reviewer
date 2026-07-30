@@ -210,7 +210,7 @@ describe("live-range refusals (exit 2, clean message)", () => {
 });
 
 describe("capture ↔ frozen-artifact parity", () => {
-  it("captured patch coverage equals resolving a frozen artifact's diff and running the coverage core", async () => {
+  it("captured patch coverage equals resolving a frozen artifact's diff and running the coverage core", () => {
     const captured = capturePatch(repo, baseSha, headSha);
     if (!captured.ok) throw new Error(captured.message);
 

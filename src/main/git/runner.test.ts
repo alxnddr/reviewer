@@ -68,4 +68,13 @@ describe("createGitRunner", () => {
     const result = await runner.run({ cwd: gone, args: ["--version"] });
     expect(result).toEqual({ ok: false, failure: { code: "cwdMissing", cwd: gone } });
   });
+
+  it("reports a cwd that is a file as cwdMissing, never a synchronous throw", async () => {
+    // spawn throws ENOTDIR *synchronously* for this one, which would escape the
+    // promise contract every caller relies on.
+    const filePath = join(workDir, "not-a-dir.txt");
+    writeFileSync(filePath, "contents\n");
+    const result = await runner.run({ cwd: filePath, args: ["--version"] });
+    expect(result).toEqual({ ok: false, failure: { code: "cwdMissing", cwd: filePath } });
+  });
 });

@@ -53,7 +53,7 @@ export type RangeResult =
 // revision grammar uses is left alone — `rev-parse --verify` is the authority on whether the
 // expression names a commit, and it answers before any diff is captured.
 // oxlint-disable-next-line no-control-regex -- rejecting control bytes is the point of this deny-list
-const REVISION_FORBIDDEN = /[\x00-\x20\x7f]/;
+const REVISION_FORBIDDEN = /[\u0000-\u0020\u007F]/u;
 
 /** The two spellings of "wherever HEAD happens to point". Resolved to a sha unconditionally,
  * never stored as written: they are the one input whose meaning is guaranteed to change. */

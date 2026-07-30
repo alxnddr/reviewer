@@ -1,14 +1,24 @@
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { cpSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { installBundle, minimalRepo, rvw, type InstalledCli, type RvwResult } from "./fixtures";
+import {
+  installBundle,
+  minimalRepo,
+  REPO_ROOT,
+  rvw,
+  type InstalledCli,
+  type RvwResult,
+} from "./fixtures";
 
 // The load-bearing claim: `rvw` is the *agent's* tool, runnable in any repo — not a
 // Reviewer-repo dev script. Asserting that requires actually leaving the repo, so this suite
 // drives the distributed bundle from a throwaway install directory and a throwaway git repo,
-// neither of which has a `node_modules` anywhere above it. Nothing here reaches back into the
-// checkout: if the bundle silently resolved `@pierre/diffs` from Reviewer's own
-// `node_modules`, the copy would break and these tests would fail — which is the point.
+// neither of which has a `node_modules` anywhere above it. Nothing the bundle *runs* under
+// reaches back into the checkout: if it silently resolved `@pierre/diffs` from Reviewer's own
+// `node_modules`, the copy would break and these tests would fail — which is the point. The one
+// deliberate exception is `extraResources()` below, which reads `electron-builder.yml` as a
+// document rather than running anything from it.
 //
 // It also pins the shebang bug that made this necessary: `bun build` stamps a
 // `#!/usr/bin/env bun` entrypoint as bun-only, and the emitted bundle then throws inside
@@ -31,6 +41,37 @@ function repo(): ReturnType<typeof minimalRepo> {
 function output(result: RvwResult): string {
   return `${result.stdout}${result.stderr}`;
 }
+
+/** `electron-builder.yml`'s `extraResources` copy list, as `from → to`. Read by hand rather
+ * than through a YAML parser: the repo depends on none of its own (electron-builder's is not
+ * ours to import), and the block is a flat list of two-key mappings. Only *that* block is
+ * read — `extraFiles` takes entries of the identical shape but lands them beside
+ * `Contents/Resources` rather than inside it, so a list moved there must not still read as
+ * shipped. A block rewritten into a shape this cannot read yields no entries and fails the
+ * assertions below — the right outcome, since the whole point is that a change to what ships
+ * gets looked at. */
+function extraResources(): Record<string, string> {
+  const config = readFileSync(join(REPO_ROOT, "electron-builder.yml"), "utf8");
+  // From the key to the next top-level one: the block's own lines are indented, sequence
+  // dashes, comments, or blank.
+  const block = /^extraResources:[ \t]*\n((?:[ \t#-].*\n|[ \t]*\n)*)/mu.exec(config)?.[1] ?? "";
+  const copies: Record<string, string> = {};
+  for (const [, from, to] of block.matchAll(
+    /^\s*- from: "?([^"\s]+)"?\n\s+to: "?([^"\s]+)"?$/gmu,
+  )) {
+    if (from !== undefined && to !== undefined) {
+      copies[from] = to;
+    }
+  }
+  return copies;
+}
+
+// The interpreter the manifest exists for is one that predates module detection (< 20.19 /
+// < 22.7), which the machine running this suite is unlikely to have — so a modern Node is asked
+// to stop guessing instead. The flag is only understood from 20.10 on; where it is not, the test
+// that uses it is skipped rather than fabricating a pass.
+const NO_DETECT = "--no-experimental-detect-module";
+const detectionCanBeDisabled = spawnSync("node", [NO_DETECT, "-e", ""]).status === 0;
 
 beforeAll(() => {
   cli = installBundle();
@@ -57,6 +98,39 @@ describe("the distributed bundle declares what it is", () => {
       readFileSync(join(dirname(cli.bundle), "package.json"), "utf8"),
     );
     expect(manifest).toEqual({ type: "module" });
+  });
+
+  it("packages that manifest into the app, not only into this suite's install", () => {
+    // The claim above was for one release true of the harness alone: `extraResources` copied
+    // `rvw.js` and nothing beside it, so a shipped `Reviewer.app/Contents/Resources/cli/` held a
+    // bundle with no manifest while this suite stayed green against a layout it synthesized
+    // itself. Building a real app here would cost minutes a run, so the copy list is what is
+    // read — the one place that drift happens. Both entries name `cli/` because that is the
+    // directory `src/main/cli-install.ts` resolves the bundle in, and the manifest only counts
+    // when it lands beside it.
+    const copies = extraResources();
+    expect(copies["dist/rvw.js"]).toBe("cli/rvw.js");
+    expect(copies["dist/package.json"]).toBe("cli/package.json");
+  });
+
+  it.runIf(detectionCanBeDisabled)("runs on a Node that refuses to guess for it", () => {
+    // Declared: with detection off, the bundle is still ESM — because the manifest beside it
+    // says so, which is the whole job the manifest has.
+    const declared = spawnSync("node", [NO_DETECT, cli.bundle, "schema", "--json"], {
+      encoding: "utf8",
+    });
+    expect(declared.status, declared.stderr).toBe(0);
+
+    // Undeclared: the same bundle, the same interpreter, no manifest above it — the packaged
+    // failure mode reproduced rather than argued about. The copy goes one level above the
+    // install's `dist/`, which is the nearest directory with no `package.json` standing over it.
+    const orphan = join(cli.root, "rvw.js");
+    cpSync(cli.bundle, orphan);
+    const guessed = spawnSync("node", [NO_DETECT, orphan, "schema", "--json"], {
+      encoding: "utf8",
+    });
+    expect(guessed.status, guessed.stdout).toBe(1);
+    expect(guessed.stderr).toContain("Cannot use import statement outside a module");
   });
 
   it("carries a node shebang, not bun's", () => {

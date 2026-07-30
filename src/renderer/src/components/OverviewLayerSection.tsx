@@ -7,7 +7,7 @@ import { Button } from "@/components/ui/button";
 import { TooltipHint } from "@/components/ui/tooltip";
 import { FileTypeIcon } from "@/components/FileTypeIcon";
 import { ReadRing } from "@/components/ReadRing";
-import { ReviewProse } from "@/components/ReviewProse";
+import { Markdown } from "@/components/Markdown";
 
 // One layer as a section of the overview document: its number and title, its own prose in
 // full, the files it covers, and the way into the diff. The doc is read top to bottom, so
@@ -213,10 +213,9 @@ export function OverviewLayerSection({
         <p className="mt-1.5 text-sm text-text-muted">{layer.summary}</p>
       )}
       {layer.description !== undefined && (
-        <ReviewProse
+        <Markdown
           text={layer.description}
-          filePaths={filePaths}
-          onSelectFile={onSelectFile}
+          links={{ paths: filePaths, onSelect: onSelectFile }}
           className="mt-3 space-y-3 text-base leading-relaxed text-foreground"
         />
       )}

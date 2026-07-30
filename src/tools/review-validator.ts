@@ -5,13 +5,13 @@ import {
   type ReviewSide,
 } from "../shared/review";
 import { resolveAnchor } from "../renderer/src/lib/diff/anchor";
-import { parsePatch } from "../renderer/src/lib/diff/patch";
-import { blockInlineRuns, parseLayerDescription } from "../renderer/src/lib/layer-description";
+import { filesByAnchorPath, parsePatch } from "../renderer/src/lib/diff/patch";
+import { fileReferences } from "../renderer/src/lib/markdown";
 import { MAX_LAYER_DEPTH } from "../renderer/src/lib/layers";
 
 // The pre-handoff check an agent runs on a `.reviewer.json` before giving it over. It reuses
 // the review domain rather than re-deriving it: the *same* `resolveAnchor`/`parsePatch`/
-// `parseLayerDescription` the app anchors and renders with — run in **derived** mode against
+// `parseMarkdown` the app anchors and renders with — run in **derived** mode against
 // the review's diff, so a pass provably implies "it opens in Reviewer with zero manual
 // fixing"; a re-implemented checker would drift and break that guarantee. Split into two pure
 // steps: `parseReviewArtifact` turns untrusted bytes into a typed artifact (or schema
@@ -158,17 +158,27 @@ export function validatePlacement(artifact: ReviewArtifact, patch: string): Vali
   // layer description — it is the same markdown tier, rendered by the same
   // component, so a link the app would render dead fails the gate here too.
   if (artifact.overview !== undefined) {
-    for (const block of parseLayerDescription(artifact.overview.body, diffFiles)) {
-      for (const run of blockInlineRuns(block)) {
-        if (run.kind === "link" && run.file === null) {
-          problems.push({ kind: "overviewUnresolvedLink", label: run.label, path: run.path });
-        }
+    for (const reference of fileReferences(artifact.overview.body)) {
+      if (!diffFiles.has(reference.path)) {
+        problems.push({
+          kind: "overviewUnresolvedLink",
+          label: reference.label,
+          path: reference.path,
+        });
       }
     }
   }
 
+  // A comment places the way the app's comment surface places it, and there a file
+  // answers to both of its names (`filesByAnchorPath`): an anchor authored before a
+  // rename hosts on the renamed file, so calling its file absent would fail a review
+  // the app renders correctly. Only the comments read through it — a layer range on a
+  // pre-rename path is still a real failure, because the app's layer scroll finds a
+  // layer's file by its current path alone, and a gate that passed what the app cannot
+  // show would be worse than one that fails what it can.
+  const commentFiles = filesByAnchorPath(files);
   for (const comment of artifact.comments) {
-    const file = byPath.get(comment.file);
+    const file = commentFiles.get(comment.file);
     if (file === undefined) {
       problems.push({ kind: "commentFileAbsent", anchor: anchorOf(comment) });
       continue;
@@ -195,9 +205,10 @@ export function validatePlacement(artifact: ReviewArtifact, patch: string): Vali
   return problems;
 }
 
-/** A `[label](path)` link is an explicit navigation target; a path not in the diff
- * renders muted and dead, which the validator promotes to a hard error. A
- * `` `code` `` span is *not* checked: inline code is ordinarily prose (a symbol
+/** A `[label](path)` link whose target is a path is an explicit navigation target; a path
+ * not in the diff renders muted and dead, which the validator promotes to a hard error. A
+ * web link is not a file reference and is left alone — it opens in the browser. A
+ * `` `code` `` span is *not* checked either: inline code is ordinarily prose (a symbol
  * name), and its file-chip promotion is an opt-in nicety — flagging every non-file
  * span would reject legitimate descriptions, breaking the "zero manual fixing" bar. */
 function collectUnresolvedLinks(
@@ -209,11 +220,14 @@ function collectUnresolvedLinks(
   if (description === undefined) {
     return;
   }
-  for (const block of parseLayerDescription(description, diffFiles)) {
-    for (const run of blockInlineRuns(block)) {
-      if (run.kind === "link" && run.file === null) {
-        problems.push({ kind: "unresolvedLink", layer, label: run.label, path: run.path });
-      }
+  for (const reference of fileReferences(description)) {
+    if (!diffFiles.has(reference.path)) {
+      problems.push({
+        kind: "unresolvedLink",
+        layer,
+        label: reference.label,
+        path: reference.path,
+      });
     }
   }
 }

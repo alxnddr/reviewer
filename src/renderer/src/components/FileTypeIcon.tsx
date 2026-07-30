@@ -70,7 +70,7 @@ export function FileTypeIcon({ path, className }: FileTypeIconProps): ReactEleme
       viewBox={icon.viewBox ?? "0 0 16 16"}
       className={cn("size-4 shrink-0", className)}
     >
-      <use href={`#${icon.name.replace(/^#/, "")}`} />
+      <use href={`#${icon.name.replace(/^#/u, "")}`} />
     </svg>
   );
 }

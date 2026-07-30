@@ -16,6 +16,7 @@ import {
 // applied through the imperative API; this is the one place that does it.
 
 function px(value: string): number {
+  // oxlint-disable-next-line unicorn/prefer-number-coercion -- the input is a computed style ("40px"); `Number()` would give NaN where `parseFloat` gives 40
   const parsed = Number.parseFloat(value);
   return Number.isFinite(parsed) ? parsed : 0;
 }

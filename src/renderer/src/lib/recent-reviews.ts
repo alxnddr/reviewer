@@ -72,7 +72,7 @@ export function filterRecents(
 ): readonly RecentReview[] {
   const words = query
     .toLowerCase()
-    .split(/\s+/)
+    .split(/\s+/u)
     .filter((word) => word.length > 0);
   if (words.length === 0) {
     return reviews;

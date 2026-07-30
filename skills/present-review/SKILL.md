@@ -40,9 +40,10 @@ supplies `repo`, `base` and `head`, so never hand-write them.
 }
 ```
 
-`rvw schema --json` is the authority on field rules — read it rather than guessing. Prose takes a
-small markdown set, and every `[label](path)` link must name a file present in the diff or the gate
-refuses the draft.
+`rvw schema --json` is the authority on field rules — read it rather than guessing. Every prose
+field — the overview body, a layer description, a comment body — is markdown (CommonMark + GFM).
+A link to a path is read as a file reference and must name a file present in the diff, or the gate
+refuses the draft; a `https://` link is left alone and opens in the browser.
 
 ## Writing the overview
 
@@ -71,14 +72,20 @@ refuses the draft.
 ## Comments
 
 Anchor to the smallest span that carries the point. `side` is `additions` or `deletions`. The body
-says why, not what — the diff already shows what changed.
+says why, not what — the diff already shows what changed. It is markdown, so a `symbol`, a short
+list, or a fenced snippet of the fix all render — but keep it to the point: a comment is read
+beside the code, and a card that turns into a document stops being a comment.
 
 ## Organizing layers
 
-Layers are optional. A comments-only review is completely valid and needs no `layers` key; add
-layers when a reading order genuinely helps. A layer is `{ label, summary?, description?, ranges?,
-children? }` — nesting is structural, via `children`. Only `label` is required; omit `ranges` on a
-grouping layer whose children carry them, and omit `children` on a leaf.
+**Write layers by default.** They are what makes this a tour instead of a list of comments — the
+diff cut into chapters in an order you chose. `layers` is optional in the schema only: leave it out
+when the user or the project's rules asked for comments alone, or when the change is genuinely one
+thought (a one-file fix, a config bump). Otherwise layer it.
+
+A layer is `{ label, summary?, description?, ranges?, children? }` — nesting is structural, via
+`children`. Only `label` is required; omit `ranges` on a grouping layer whose children carry them,
+and omit `children` on a leaf.
 
 - Treat layers as chapters of a reading order you chose, not a listing of what the diff touched.
 - Group by what changed and why — a capability added, a bug fixed, a migration, a constraint now enforced — never by folder, file type, or filename.
@@ -114,7 +121,9 @@ JSON
 
 The range is auto-detected — the cwd's repo, the current branch, the fork point against its
 upstream or the default branch — and echoed back so you can check it. Pass `--repo`, `--base` or
-`--head` only to override. Any git revision expression works; refs are resolved for you.
+`--head` only to override — and name a branch when a branch is what you mean: a local branch is
+recorded as written and the review follows it, while a tag, `HEAD`, `main~3`, `origin/main` or a
+sha is pinned to the commit it resolved to. Any revision git understands is accepted.
 
 Without `--out` the artifact lands in `~/.rvw/reviews/`, where the app's Recent Reviews picker
 (⇧⌘R) finds it. Pass `--out` only when someone asked for the file somewhere specific.

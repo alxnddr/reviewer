@@ -106,7 +106,25 @@ export function installApplicationMenu(): void {
       ],
     },
     { role: "editMenu" },
-    { role: "viewMenu" },
+    // Spelled out rather than `role: "viewMenu"`, for one item: the stock View menu binds
+    // Force Reload to ⇧⌘R, which is Recent Reviews above. Two items on one accelerator is
+    // resolved by menu order — File comes first, so the picker did win — but that is a
+    // coincidence of template order holding up an advertised shortcut, and the View menu
+    // sat there naming ⇧⌘R as something else. Force Reload is a devtools affordance nobody
+    // reviewing a diff reaches for; plain Reload keeps ⌘R and the collision goes away.
+    {
+      label: "View",
+      submenu: [
+        { role: "reload" },
+        { role: "toggleDevTools" },
+        { type: "separator" },
+        { role: "resetZoom" },
+        { role: "zoomIn" },
+        { role: "zoomOut" },
+        { type: "separator" },
+        { role: "togglefullscreen" },
+      ],
+    },
     {
       label: "Window",
       submenu: [

@@ -143,6 +143,6 @@ describe("bundledSkillsRoot", () => {
     const present = findSkill(result.skills, "present-review");
     expect(present).not.toBeNull();
     expect(present?.description).toContain("Reviewer app");
-    expect(present?.path).toMatch(/\/skills\/present-review\/SKILL\.md$/);
+    expect(present?.path).toMatch(/\/skills\/present-review\/SKILL\.md$/u);
   });
 });

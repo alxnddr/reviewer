@@ -44,6 +44,9 @@ let workRepo: string;
 let cleanRepo: string;
 /** Fresh init, unborn HEAD: one staged file, one untracked file. */
 let unbornRepo: string;
+/** A branch and a tracked file that share a name — the repo where a walk that names the ref
+ * without a `--` separator is refused as ambiguous. */
+let ambiguousRepo: string;
 
 let rootSha: string;
 let extendSha: string;
@@ -95,6 +98,14 @@ beforeAll(() => {
   git(cleanRepo, "add", ".");
   git(cleanRepo, "commit", "-m", "only commit");
 
+  ambiguousRepo = join(root, "ambiguous");
+  mkdirSync(ambiguousRepo);
+  git(ambiguousRepo, "init", "-b", "main");
+  writeFileSync(join(ambiguousRepo, "topic"), "a file named exactly like the branch\n");
+  git(ambiguousRepo, "add", ".");
+  git(ambiguousRepo, "commit", "-m", "add topic");
+  git(ambiguousRepo, "branch", "topic");
+
   unbornRepo = join(root, "unborn");
   mkdirSync(unbornRepo);
   git(unbornRepo, "init", "-b", "main");
@@ -125,6 +136,12 @@ describe("validateRepo", () => {
 
   it("reports notARepo for a path that does not exist", async () => {
     expect(expectFailure(await validateRepo(runner, join(root, "gone"))).code).toBe("notARepo");
+  });
+
+  it("reports notARepo for a git directory, which is a repo but not a work tree", async () => {
+    // git answers "must be run in a work tree" here rather than "not a git
+    // repository"; both mean the same thing to a caller that needs to read files.
+    expect(expectFailure(await validateRepo(runner, join(workRepo, ".git"))).code).toBe("notARepo");
   });
 });
 
@@ -193,6 +210,18 @@ describe("getCommitLog", () => {
     // Still a committed ref, so still no working-tree row — that belongs to HEAD alone.
     expect(log.entries.every((entry) => entry.kind === "commit")).toBe(true);
   });
+
+  it("walks a ref a file of the same name would otherwise make ambiguous", async () => {
+    // Without the trailing `--`, git refuses `log topic` in a repo that also has a file
+    // called `topic` ("ambiguous argument … both revision and filename"), which
+    // `mapRunFailure` reads as `unknownRevision` — so the picker tells the reviewer the
+    // revision no longer exists, about a branch it listed a moment earlier.
+    const log = expectOk(await getCommitLog(runner, ambiguousRepo, { base: null, head: "topic" }));
+    const subjects = log.entries.flatMap((entry) =>
+      entry.kind === "commit" ? [entry.commit.subject] : [],
+    );
+    expect(subjects).toEqual(["add topic"]);
+  });
 });
 
 describe("getDiff", () => {
@@ -200,7 +229,7 @@ describe("getDiff", () => {
     const { patch } = expectOk(
       await getDiff(runner, workRepo, { kind: "branches", base: "main", head: "feature/delta" }),
     );
-    expect(patch).toMatch(/^diff --git a\/delta\.txt b\/delta\.txt/);
+    expect(patch).toMatch(/^diff --git a\/delta\.txt b\/delta\.txt/u);
     expect(patch).toContain("+delta content");
     expect(patch).not.toContain("alpha");
   });
@@ -286,7 +315,7 @@ describe("getDiff", () => {
 
   it("uncommitted: shows tracked modifications and untracked files as new-file patches", async () => {
     const { patch } = expectOk(await getDiff(runner, workRepo, { kind: "uncommitted" }));
-    expect(patch).toMatch(/^diff --git a\/alpha\.txt b\/alpha\.txt/);
+    expect(patch).toMatch(/^diff --git a\/alpha\.txt b\/alpha\.txt/u);
     expect(patch).toContain("+alpha dirty");
     expect(patch).toContain("diff --git a/epsilon.txt b/epsilon.txt");
     expect(patch).toContain("new file mode");

@@ -89,7 +89,7 @@ describe("reviewArtifactJsonSchema", () => {
 
   it("is derived from the contract, not hand-written: every artifact key appears in the schema", () => {
     const properties = reviewArtifactJsonSchema().properties ?? {};
-    expect(Object.keys(properties).sort()).toEqual([
+    expect(Object.keys(properties).toSorted()).toEqual([
       "base",
       "comments",
       "head",

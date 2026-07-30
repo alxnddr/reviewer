@@ -50,7 +50,7 @@ describe("parseCommitLog", () => {
   });
 
   it("throws on a record with missing fields", () => {
-    expect(() => parseCommitLog(`${SHA}${LOG_FIELD_SEPARATOR}fffffff`)).toThrow(/Malformed/);
+    expect(() => parseCommitLog(`${SHA}${LOG_FIELD_SEPARATOR}fffffff`)).toThrow(/Malformed/u);
   });
 });
 

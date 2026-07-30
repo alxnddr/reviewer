@@ -4,8 +4,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
-// The exit-code contract on the *real* process: Stricli's `run` leaves a code in
-// `process.exitCode`, and index.ts collapses it to 0/1/2 and calls `process.exit`.
+// The exit-code contract on the *real* process: Stricli's `run` leaves a code in the context,
+// and index.ts collapses it to 0/1/2 and leaves that in `process.exitCode`.
 // The in-process suite (app.test.ts) proves the routing; this proves the wiring — that
 // the shipped entrypoint, invoked as an agent invokes it, actually exits with those
 // codes, including the negative Stricli failure codes normalized to 2.

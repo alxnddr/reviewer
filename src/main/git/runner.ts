@@ -1,5 +1,6 @@
-import { spawn, type ChildProcess } from "node:child_process";
-import { existsSync } from "node:fs";
+import { spawn, type ChildProcess, type ChildProcessByStdio } from "node:child_process";
+import { statSync } from "node:fs";
+import type { Readable } from "node:stream";
 import { MAX_PATCH_BYTES } from "../../shared/git-diff";
 
 // Spawn wrapper for the system git binary: argument arrays only (never a shell),
@@ -53,6 +54,15 @@ function isMissingBinaryError(error: NodeJS.ErrnoException): boolean {
   return error.code === "ENOENT";
 }
 
+/** Symlinks are followed on purpose — a link to a work tree is a usable cwd. */
+function isDirectory(path: string): boolean {
+  try {
+    return statSync(path).isDirectory();
+  } catch {
+    return false;
+  }
+}
+
 export function createGitRunner(defaults: GitRunnerDefaults = {}): GitRunner {
   const gitBinary = defaults.gitBinary ?? "git";
   const defaultMaxOutputBytes = defaults.maxOutputBytes ?? DEFAULT_MAX_OUTPUT_BYTES;
@@ -64,8 +74,10 @@ export function createGitRunner(defaults: GitRunnerDefaults = {}): GitRunner {
     const okExitCodes = request.okExitCodes ?? [0];
 
     // A vanished cwd also surfaces as spawn ENOENT; without this check a deleted
-    // repo would be misdiagnosed as a missing git binary.
-    if (!existsSync(request.cwd)) {
+    // repo would be misdiagnosed as a missing git binary. A path that exists but
+    // is not a directory is refused by the same gate: spawn rejects it with a
+    // *synchronous* throw (ENOTDIR), which would escape the promise contract.
+    if (!isDirectory(request.cwd)) {
       return Promise.resolve({ ok: false, failure: { code: "cwdMissing", cwd: request.cwd } });
     }
 
@@ -85,11 +97,23 @@ export function createGitRunner(defaults: GitRunnerDefaults = {}): GitRunner {
     delete env.GIT_INDEX_FILE;
 
     return new Promise((resolve) => {
-      const child = spawn(gitBinary, request.args, {
-        cwd: request.cwd,
-        stdio: ["ignore", "pipe", "pipe"],
-        env,
-      });
+      // The stdio triple above: no stdin, piped stdout/stderr.
+      let child: ChildProcessByStdio<null, Readable, Readable>;
+      try {
+        child = spawn(gitBinary, request.args, {
+          cwd: request.cwd,
+          stdio: ["ignore", "pipe", "pipe"],
+          env,
+        });
+      } catch (error) {
+        // The directory gate above covers the known synchronous throw; this keeps
+        // the "resolves, never rejects" contract if the cwd changes underneath it.
+        // Logged rather than swallowed: the gate already ruled out every cause we
+        // know of, so anything landing here is worth seeing in the main-process log.
+        console.error("git spawn threw synchronously:", error);
+        resolve({ ok: false, failure: { code: "cwdMissing", cwd: request.cwd } });
+        return;
+      }
       children.add(child);
 
       const stdoutChunks: Buffer[] = [];

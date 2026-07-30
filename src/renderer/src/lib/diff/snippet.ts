@@ -29,7 +29,7 @@ export type DiffSnippet = {
 /** Pierre's line arrays keep each line's own terminator; a preview row renders one line,
  * so the terminator is stripped here rather than leaked into every consumer's markup. */
 function lineText(raw: string | undefined): string {
-  return (raw ?? "").replace(/\r?\n$/, "");
+  return (raw ?? "").replace(/\r?\n$/u, "");
 }
 
 /** Walk one side of a file's hunks, calling `visit` with each line's number and text in
@@ -45,15 +45,27 @@ function walkSide(
 ): void {
   const additions = side === "additions";
   const texts = additions ? file.additionLines : file.deletionLines;
+  /** One block's run of lines, in file coordinates. False the moment `visit` asks to stop. */
+  const emitRun = (
+    kind: SnippetLine["kind"],
+    from: number,
+    start: number,
+    count: number,
+  ): boolean => {
+    for (let i = 0; i < count; i += 1) {
+      if (!visit({ kind, line: from + i, text: lineText(texts[start + i]) })) {
+        return false;
+      }
+    }
+    return true;
+  };
   for (const hunk of file.hunks) {
     let line = additions ? hunk.additionStart : hunk.deletionStart;
     for (const block of hunk.hunkContent) {
       if (block.type === "context") {
         const start = additions ? block.additionLineIndex : block.deletionLineIndex;
-        for (let i = 0; i < block.lines; i += 1) {
-          if (!visit({ kind: "context", line: line + i, text: lineText(texts[start + i]) })) {
-            return;
-          }
+        if (!emitRun("context", line, start, block.lines)) {
+          return;
         }
         line += block.lines;
       } else if (block.type === "change") {
@@ -61,11 +73,8 @@ function walkSide(
         // other side's lines live at their own numbers and are not part of this walk.
         const count = additions ? block.additions : block.deletions;
         const start = additions ? block.additionLineIndex : block.deletionLineIndex;
-        for (let i = 0; i < count; i += 1) {
-          const kind = additions ? "addition" : "deletion";
-          if (!visit({ kind, line: line + i, text: lineText(texts[start + i]) })) {
-            return;
-          }
+        if (!emitRun(additions ? "addition" : "deletion", line, start, count)) {
+          return;
         }
         line += count;
       } else {
