@@ -3,6 +3,7 @@ import { join } from "node:path";
 import { optimizer } from "@electron-toolkit/utils";
 import appIcon from "../../build/icon.png?asset";
 import { IpcEvent } from "../shared/ipc";
+import { crashLogPath, installCrashHandlers } from "./crash";
 import { createGitRunner } from "./git/runner";
 import { registerIpcHandlers } from "./ipc";
 import { installApplicationMenu } from "./menu";
@@ -13,7 +14,7 @@ import { createProgressStore } from "./review/progress";
 import { createSessionStore } from "./sessions";
 import { flushSessionsThenTerminateGit } from "./shutdown";
 import { applyPersistedTheme } from "./theme";
-import { createMainWindow } from "./window";
+import { createMainWindow, whenPageLoaded } from "./window";
 
 // Pin the product name imperatively so an unpackaged run matches the packaged app
 // (electron-builder's `productName`). Without it Electron falls back to package.json `name`
@@ -22,6 +23,11 @@ import { createMainWindow } from "./window";
 // session store key off "Reviewer". (The dock *tooltip* still reads "Electron" in dev — that
 // is the Electron.app bundle's own identity, and only becomes "Reviewer" once packaged.)
 app.setName("Reviewer");
+
+// Before anything that can throw, including the lock: from here on an escaped throw or
+// rejection is logged where it can be retrieved instead of vanishing. `crashLogPath` reads
+// `app.getPath`, which is why this sits below `setName` and not above it.
+installCrashHandlers(crashLogPath());
 
 if (app.requestSingleInstanceLock()) {
   const gitRunner = createGitRunner();
@@ -48,6 +54,15 @@ if (app.requestSingleInstanceLock()) {
       if (existing !== undefined) {
         if (existing.isMinimized()) existing.restore();
         existing.focus();
+      }
+    },
+    whenWindowReady: async () => {
+      // The window exists from the moment `createMainWindow` returns, but its page does not:
+      // a `send` before the load finishes is dropped without a trace. On a cold start the
+      // import can win that race, so the push waits here for the page it is meant for.
+      const target = BrowserWindow.getAllWindows()[0];
+      if (target !== undefined) {
+        await whenPageLoaded(target);
       }
     },
     notifySessionsChanged: () => {

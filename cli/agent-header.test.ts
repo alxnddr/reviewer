@@ -1,17 +1,16 @@
 import { describe, expect, it } from "vitest";
 import { AGENT_HEADER, wantsAgentHeader, writeAgentHeader } from "./agent-header";
 import type { LocalContext } from "./context";
+import { testContext } from "./fixtures";
 
 function capturing(): { context: LocalContext; written: () => string } {
   let out = "";
   return {
-    context: {
-      process: {
-        stdout: { write: (chunk: string) => void (out += chunk) },
-        stderr: { write: () => {} },
-        exitCode: null,
-      } as unknown as LocalContext["process"],
-    },
+    context: testContext({
+      stdout: { write: (chunk: string) => void (out += chunk) },
+      stderr: { write: () => {} },
+      exitCode: null,
+    } as unknown as LocalContext["process"]),
     written: () => out,
   };
 }

@@ -11,11 +11,14 @@ import {
 import { Dialog as DialogPrimitive } from "@base-ui/react/dialog";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { Search } from "lucide-react";
-import type { RecentReview } from "../../../shared/recent-reviews";
+import type { RecentReview } from "../../../shared/review-ipc";
+import { countLabel } from "../../../shared/plural";
 import { RecentReviewLines } from "@/components/RecentReviewLines";
+import { Dialog, DialogContent } from "@/components/ui/dialog";
 import { Kbd } from "@/components/ui/kbd";
 import { cn } from "@/lib/utils";
 import { filterRecents } from "@/lib/recent-reviews";
+import { shortcut, shortcutLabel, type ShortcutId } from "@/lib/shortcuts";
 import { useCoarseNow } from "@/lib/use-coarse-now";
 import { useRecentReviewsStore } from "@/stores/recent-reviews";
 import { useReviewStore } from "@/stores/review";
@@ -53,12 +56,23 @@ const OVERSCAN = 6;
  * what the key is actually for. */
 const PAGE_ROWS = 8;
 
+/** The three the footer names, out of the five the panel answers to. Paging and Home/End are
+ * on the shortcut sheet and not down here: a footer is a reminder of the moves a first visit
+ * needs — step, open, leave — and the two jumps past them would make a 12px strip into a list
+ * nobody reads. Their keys and their one-word labels come from the registry, so the strip
+ * cannot drift from the sheet. */
+const FOOTER_KEYS = [
+  "recents.step",
+  "recents.openReview",
+  "recents.close",
+] as const satisfies readonly ShortcutId[];
+
 export function RecentReviews(): ReactElement {
   const open = useRecentReviewsStore((state) => state.open);
   const close = useRecentReviewsStore((state) => state.close);
 
   return (
-    <DialogPrimitive.Root
+    <Dialog
       open={open}
       onOpenChange={(next) => {
         if (!next) {
@@ -66,22 +80,18 @@ export function RecentReviews(): ReactElement {
         }
       }}
     >
-      <DialogPrimitive.Portal>
-        {/* Dimmer than the kit's backdrop and blurred a little harder: this panel is itself
-            translucent, and over an un-dimmed diff the two layers of code — the real one
-            behind and the rows in front — compete at the same contrast. */}
-        <DialogPrimitive.Backdrop className="fixed inset-0 z-50 bg-black/15 duration-150 supports-backdrop-filter:backdrop-blur-sm data-closed:animate-out data-closed:fade-out-0 data-open:animate-in data-open:fade-in-0" />
-        {/* Held above centre rather than in it. A list that grows downward from a fixed top
-            edge does not jump as it is filtered, and the reader's eye is already at the top
-            of it, on the field they are typing into. */}
-        <DialogPrimitive.Popup
-          data-glass
-          className="fixed top-[10vh] left-1/2 z-50 flex max-h-[72vh] w-[min(46rem,calc(100%-4rem))] -translate-x-1/2 flex-col overflow-hidden rounded-2xl duration-150 outline-none data-closed:animate-out data-closed:fade-out-0 data-closed:zoom-out-95 data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95"
-        >
-          <RecentReviewsPanel />
-        </DialogPrimitive.Popup>
-      </DialogPrimitive.Portal>
-    </DialogPrimitive.Root>
+      {/* Held above centre rather than in it. A list that grows downward from a fixed top
+          edge does not jump as it is filtered, and the reader's eye is already at the top of
+          it, on the field they are typing into. Esc is the panel's dismissal and the footer
+          says so, so there is no close glyph. */}
+      <DialogContent
+        variant="glass"
+        showCloseButton={false}
+        className="top-[10vh] w-[min(46rem,calc(100%-4rem))]"
+      >
+        <RecentReviewsPanel />
+      </DialogContent>
+    </Dialog>
   );
 }
 
@@ -254,7 +264,7 @@ function RecentReviewsPanel(): ReactElement {
         {phase === "loaded" && total > 0 && (
           <span className="shrink-0 text-xs tabular-nums text-text-faint">
             {reviews.length === total
-              ? `${total} ${total === 1 ? "review" : "reviews"}`
+              ? countLabel(total, "review")
               : `${reviews.length} of ${total}`}
           </span>
         )}
@@ -271,7 +281,11 @@ function RecentReviewsPanel(): ReactElement {
             aria-labelledby={titleId}
             className="min-h-0 flex-1 overflow-y-auto overscroll-contain p-1.5"
           >
-            <div className="relative w-full" style={{ height: `${virtualizer.getTotalSize()}px` }}>
+            <div
+              role="presentation"
+              className="relative w-full"
+              style={{ height: `${virtualizer.getTotalSize()}px` }}
+            >
               {virtualizer.getVirtualItems().map((item) => {
                 const review = reviews[item.index];
                 return review === undefined ? null : (
@@ -308,19 +322,14 @@ function RecentReviewsPanel(): ReactElement {
           {truncated > 0 && ` · ${truncated} older not shown`}
         </span>
         <span className="flex shrink-0 items-center gap-3">
-          <span className="flex items-center gap-1">
-            <Kbd>↑</Kbd>
-            <Kbd>↓</Kbd>
-            move
-          </span>
-          <span className="flex items-center gap-1">
-            <Kbd>⏎</Kbd>
-            open
-          </span>
-          <span className="flex items-center gap-1">
-            <Kbd>esc</Kbd>
-            close
-          </span>
+          {FOOTER_KEYS.map((id) => (
+            <span key={id} className="flex items-center gap-1">
+              {shortcut(id).keys.map((key) => (
+                <Kbd key={key}>{key}</Kbd>
+              ))}
+              {shortcutLabel(id)}
+            </span>
+          ))}
         </span>
       </footer>
     </>

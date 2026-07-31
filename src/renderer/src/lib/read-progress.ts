@@ -1,6 +1,6 @@
 import type { ReviewLayer } from "../../../shared/review";
-import type { PatchFile } from "./diff/patch";
-import { soloFiles } from "./layers";
+import type { PatchFile } from "../../../shared/diff/patch";
+import { soloFiles } from "../../../shared/layers";
 
 // Reading progress: which changed files the reader has been through, and everything the
 // surfaces derive from that.
@@ -16,7 +16,7 @@ import { soloFiles } from "./layers";
 // soloing a layer keeps whole files, the tree lists whole files, and a comment renders
 // inside the file it annotates — so "I have read this file" subsumes "I have seen its
 // findings". A chapter is then read exactly when its extent's files are, which is the same
-// aggregation rule `lib/layers.ts` applies to ranges and counts.
+// aggregation rule `shared/layers.ts` applies to ranges and counts.
 
 /** A file's identity *as content*: what a mark is made against.
  *
@@ -24,7 +24,10 @@ import { soloFiles } from "./layers";
  * that survived a changed file would be the one lie this feature cannot afford. The git
  * blob ids from the patch's `index` line answer it exactly; a patch without them (some
  * generated diffs carry no index line) falls back to the change's shape, which moves
- * whenever the hunks do. */
+ * whenever the hunks do.
+ *
+ * @internal Exported for its own unit test only — every other module reads it through
+ * `isFileRead`, `fileSignatures` or `markFilesRead`. */
 export function fileSignature(file: PatchFile): string {
   const { newObjectId, prevObjectId, hunks } = file.fileDiff;
   const identity = `${file.status}:${file.previousPath ?? ""}`;
@@ -56,6 +59,30 @@ export const NO_READ_FILES: ReadFiles = new Map();
 
 export function isFileRead(readFiles: ReadFiles, file: PatchFile): boolean {
   return readFiles.get(file.path) === fileSignature(file);
+}
+
+/** `fileSignature` of every file in `files`, keyed by path, computed once per `files`
+ * identity and shared by every consumer — the same caching contract `soloed-diff.ts` keeps
+ * for its own derivations: `diff.files` is replaced wholesale on load and on import and
+ * never mutated in place, so identity is the honest cache key.
+ *
+ * What this buys a per-file consumer (a header's read toggle, asked on every store write —
+ * `setScrollTop` fires every 150ms while scrolling): resolving "is this file read" becomes
+ * one `Map.get`, not an O(files) `find` plus a fresh `fileSignature` join, on writes that
+ * touch nothing about this file. */
+const signaturesCache = new WeakMap<readonly PatchFile[], ReadonlyMap<string, string>>();
+
+export function fileSignatures(files: readonly PatchFile[]): ReadonlyMap<string, string> {
+  const cached = signaturesCache.get(files);
+  if (cached !== undefined) {
+    return cached;
+  }
+  const map = new Map<string, string>();
+  for (const file of files) {
+    map.set(file.path, fileSignature(file));
+  }
+  signaturesCache.set(files, map);
+  return map;
 }
 
 /** The read paths among `files`, for the surfaces that only need membership (a tree row,
@@ -97,14 +124,13 @@ export function layerTally(
   return tallyRead(soloFiles(files, layer, layers), readFiles);
 }
 
-export function isComplete(tally: ReadTally): boolean {
+/** Every file in the set marked read. An empty set is not fully read but *empty* — a
+ * chapter whose files left the diff has nothing to have finished, and a filled ring for it
+ * would claim reading that never happened. Named for what it measures because coverage has
+ * its own completeness (`isFullyCovered`, tools/review-coverage.ts) and the two are
+ * different questions about the same review. */
+export function isFullyRead(tally: ReadTally): boolean {
   return tally.total > 0 && tally.read === tally.total;
-}
-
-/** Whole-number share read; an empty set reads 0 rather than NaN. Only ever a *rendering*
- * of a tally — every readout prints the counts, never the percentage alone. */
-export function readPct(tally: ReadTally): number {
-  return tally.total === 0 ? 0 : Math.round((tally.read / tally.total) * 100);
 }
 
 /** Mark (or unmark) a set of files, returning the SAME map when nothing changed so a

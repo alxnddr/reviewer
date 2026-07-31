@@ -1,10 +1,11 @@
 import { statSync } from "node:fs";
 import { resolve } from "node:path";
 import { buildCommand } from "@stricli/core";
-import { REVIEW_EXTENSION } from "../../src/shared/review-file";
+import { REVIEW_EXTENSION } from "../../src/shared/node/reviews-dir";
+import { errorMessage } from "../../src/shared/errors";
 import { launchReviewer } from "../launch";
 import { EXIT_READY, type LocalContext } from "../context";
-import { errorMessage, writeCannotRun } from "../errors";
+import { writeCannotRun, writeJson } from "../errors";
 
 // `rvw open <artifact>` — hand a finished `.reviewer.json` to the installed Reviewer. `rvw
 // emit` already opens what it writes, so this is the verb for everything else: re-opening an
@@ -72,7 +73,10 @@ export const openCommand = buildCommand<OpenFlags, [string], LocalContext>({
       return;
     }
 
-    const path = resolve(artifact);
+    // Absolute, and against the caller's cwd — the same directory their shell resolved the
+    // argument they typed against — because the launcher requires it: an `open` launch does not
+    // control the working directory a relative path would otherwise resolve against.
+    const path = resolve(this.cwd, artifact);
     let stats;
     try {
       stats = statSync(path);
@@ -91,7 +95,7 @@ export const openCommand = buildCommand<OpenFlags, [string], LocalContext>({
       return;
     }
 
-    const launched = launchReviewer(process.platform, path);
+    const launched = launchReviewer(this.platform, path);
     if (!launched.ok) {
       writeCannotRun(this, flags.json, { code: "notInstalled", message: launched.message });
       return;
@@ -99,7 +103,7 @@ export const openCommand = buildCommand<OpenFlags, [string], LocalContext>({
 
     if (flags.json === true) {
       const report: OpenReport = { ok: true, path };
-      this.process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
+      writeJson(this, report);
     } else {
       this.process.stdout.write(`opening ${path} in Reviewer\n`);
     }

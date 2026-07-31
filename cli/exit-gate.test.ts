@@ -10,11 +10,8 @@ import {
   type ReviewStamp,
 } from "../src/shared/review";
 import { importReviewFromPath, reviewPathFromArgv } from "../src/main/review/guard";
-import { parsePatch } from "../src/renderer/src/lib/diff/patch";
-import {
-  buildCommentItems,
-  type CommentUiState,
-} from "../src/renderer/src/lib/diff/comment-annotations";
+import { parsePatch } from "../src/shared/diff/patch";
+import { buildCommentItems, type CommentUiState } from "../src/shared/diff/comment-annotations";
 import type { FileUniverse } from "../src/tools/review-coverage";
 import { artifactDiff } from "./git";
 import type { CheckReport } from "./commands/check";
@@ -263,7 +260,7 @@ describe("exit gate: the agent's toolchain, end to end in a foreign repo", () =>
     expect(printed.status, output(printed)).toBe(0);
 
     emitComplete(ARTIFACT);
-    const gated = artifactDiff(readArtifact(ARTIFACT));
+    const gated = artifactDiff(process.env, readArtifact(ARTIFACT));
     if (!gated.ok) throw new Error(gated.message);
     expect(printed.stdout).toBe(gated.patch);
   });
@@ -492,7 +489,7 @@ describe("exit gate: the agent's toolchain, end to end in a foreign repo", () =>
     expect(diff.kind).toBe("refs");
     expect(review.patch).toBeNull();
 
-    const captured = artifactDiff(readArtifact(ARTIFACT));
+    const captured = artifactDiff(process.env, readArtifact(ARTIFACT));
     if (!captured.ok) throw new Error(captured.message);
     const files = parsePatch(captured.patch, "m6-exit-gate");
 

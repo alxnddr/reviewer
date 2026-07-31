@@ -1,14 +1,8 @@
 import { BrowserWindow, dialog } from "electron";
 import { randomUUID } from "node:crypto";
-import * as z from "zod";
 import { IpcChannel } from "../../shared/ipc";
-import { RecentReviewsResponse } from "../../shared/recent-reviews";
 import type { ReviewStamp } from "../../shared/review";
-import {
-  ReviewOpenPathRequest,
-  ReviewOpenResponse,
-  type ReviewOpenFailure,
-} from "../../shared/review-open";
+import type { ReviewOpenFailure, ReviewOpenResponse } from "../../shared/review-ipc";
 import type { Session } from "../../shared/session";
 import { validateRepo } from "../git/ops";
 import type { GitRunner } from "../git/runner";
@@ -123,23 +117,13 @@ export function registerReviewIpcHandlers(
   store: SessionStore,
   progress: ProgressStore,
 ): void {
-  registerIpcHandler(
-    IpcChannel.reviewOpen,
-    { request: z.void(), response: ReviewOpenResponse },
-    () => openReviewViaDialog(runner, store, progress),
+  registerIpcHandler(IpcChannel.reviewOpen, () => openReviewViaDialog(runner, store, progress));
+
+  registerIpcHandler(IpcChannel.reviewOpenPath, ({ path }) =>
+    openReviewFromPath(runner, store, progress, path),
   );
 
-  registerIpcHandler(
-    IpcChannel.reviewOpenPath,
-    { request: ReviewOpenPathRequest, response: ReviewOpenResponse },
-    ({ path }) => openReviewFromPath(runner, store, progress, path),
-  );
-
-  registerIpcHandler(
-    IpcChannel.reviewsRecent,
-    { request: z.void(), response: RecentReviewsResponse },
-    () => listRecentReviews(progress),
-  );
+  registerIpcHandler(IpcChannel.reviewsRecent, () => listRecentReviews(progress));
 }
 
 /** CLI / `open-file` delivery: guard + create the session in main, returning it

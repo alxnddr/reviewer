@@ -45,6 +45,12 @@ import { selectActiveSlice, useReviewStore } from "@/stores/review";
 // IS a range of commits; brushing the whole range is the comparison and brushing part
 // of it is a narrower diff, which is exactly how a review session's own subrange works
 // (see `planDiff`). One list, one gesture, no flag that can disagree with the screen.
+//
+// Every value on this surface — the refs, the log, the brush, a review's own endpoints —
+// is read from the store here rather than handed in, and has been since there was a
+// picker: `SelectionPanel` takes no props at all, and the bar above it takes only the
+// disclosure the rail owns. That is the rail's data rule, which the three sections below
+// it now follow too (`ReviewRail.tsx` states it).
 
 /** The line the section bar carries: what the diff on screen *is*. Plain text — no
  * mono, no markup — so the bar can hand the same string to its truncation hint.
@@ -231,11 +237,11 @@ function RangeFields(): ReactElement | null {
           base === null ? undefined : (
             <TooltipHint content="Swap the two refs" side="left" align="center">
               <Button
-                variant="ghost"
+                variant="chrome"
                 size="icon-xs"
                 onClick={() => swapBranches()}
                 aria-label="Swap the two refs"
-                className="-my-1 text-text-muted hover:bg-border/60 hover:text-foreground dark:hover:bg-border/60"
+                className="-my-1 text-text-muted"
               >
                 <ArrowUpDown aria-hidden="true" />
               </Button>
@@ -305,9 +311,9 @@ function ReviewCommitsSection(): ReactElement {
         action={
           reviewSubrange === null ? undefined : (
             <Button
-              variant="ghost"
+              variant="chrome"
               size="sm"
-              className="shrink-0 hover:bg-border/60 dark:hover:bg-border/60"
+              className="shrink-0"
               onClick={() => resetReviewSubrange()}
             >
               Full diff

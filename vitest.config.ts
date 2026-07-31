@@ -21,5 +21,18 @@ export default defineConfig({
     // The CLI suites spawn the distributed bundle; one build before any worker starts keeps
     // parallel files from writing and reading `dist/rvw.js` at the same time.
     globalSetup: ["./cli/bundle.setup.ts"],
+    // Configured but not enabled: `bun run test:coverage` turns it on. Nothing here fails on the
+    // number — there are no thresholds — so charging every `bun run test` ~15% and a hundred lines
+    // of table, which push the pass/fail summary off the screen, buys a figure nobody acts on.
+    // `include` is the hand-written source: without it v8 reports on every file the run happens to
+    // load, which here means the `dist/rvw.js` bundle the CLI suites spawn. `lcov` writes
+    // coverage/lcov.info for anything that consumes it (CI upload, editor gutters); `text` is the
+    // summary in the terminal.
+    coverage: {
+      provider: "v8",
+      reporter: ["text", "lcov"],
+      include: ["src/**", "cli/**"],
+      exclude: ["**/*.test.ts", "cli/fixtures.ts", "cli/bundle.setup.ts"],
+    },
   },
 });

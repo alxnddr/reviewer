@@ -1,11 +1,12 @@
 import { useCallback, useMemo, useState, type ReactElement, type ReactNode } from "react";
 import { assertNever } from "../../../shared/assert";
 import type { DiffSelection } from "../../../shared/git";
-import type { Comment, ReviewAnchor, ReviewLayer } from "../../../shared/review";
-import { emptySoloReason, layerOutline } from "@/lib/layers";
+import type { Comment, ReviewLayer } from "../../../shared/review";
+import type { SessionId } from "../../../shared/session";
+import { emptySoloReason, layerOutline } from "../../../shared/layers";
 import { useFitToContent } from "@/lib/fit-panel";
-import { unplaceableComments } from "@/lib/diff/comment-annotations";
-import { isComplete, NO_COLLAPSED_FILES, NO_READ_FILES, tallyRead } from "@/lib/read-progress";
+import { unplaceableComments } from "../../../shared/diff/comment-annotations";
+import { isFullyRead, NO_COLLAPSED_FILES, NO_READ_FILES, tallyRead } from "@/lib/read-progress";
 import { resolveExpandLoader } from "@/lib/diff/expand-context";
 import { DiffView } from "@/components/DiffView";
 import { LayerIntro } from "@/components/LayerIntro";
@@ -15,6 +16,7 @@ import { Button } from "@/components/ui/button";
 import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from "@/components/ui/resizable";
 import { Skeleton } from "@/components/ui/skeleton";
 import { selectActiveSlice, selectSoloedDiff, useReviewStore } from "@/stores/review";
+import { useUiPrefsStore } from "@/stores/ui-prefs";
 
 // A stable empty array: a fresh [] per render would make the comments selector
 // return a new reference each time and re-render the screen in a loop.
@@ -62,6 +64,39 @@ function TerminalState({ title, message, withOpenAction }: TerminalStateProps): 
         </Button>
       )}
     </div>
+  );
+}
+
+/** Bind a session action to one session id for as long as that id is the active one.
+ *
+ * Every action in the store already takes an optional trailing `sessionId` and defaults to
+ * the active session, so this is not about *reaching* a slice — it is about *when* the
+ * slice is chosen. Captured here at render time, a callback handed to `DiffView` acts on
+ * the session that view was mounted for, which is the same id the view is keyed on: a
+ * scroll or a comment that lands after a tab switch (the debounced scroll report is the
+ * routine case) writes to the session it came from rather than to whatever is on screen
+ * when it arrives. Resolving at call time — passing the action straight through — would
+ * silently move those writes to the new tab.
+ *
+ * Sessionless, the callback is inert: there is no session for the gesture to be about, and
+ * every one of these comes from a surface that only exists inside one.
+ *
+ * The id goes on the end of whatever the callback is *called* with, so a bound action must
+ * be invoked rather than handed over: `onClick={onClose}` passes React's event as the first
+ * argument, which on a zero-argument action lands in the `sessionId` slot and the write is
+ * swallowed by `withSlice`. Every surface below wraps (`() => onStepComment(-1)`), which is
+ * also how the store's actions are called everywhere they are read directly. */
+function useSessionBound<A extends unknown[]>(
+  fn: (...args: [...A, SessionId]) => void,
+  sessionId: SessionId | null,
+): (...args: A) => void {
+  return useCallback(
+    (...args: A) => {
+      if (sessionId !== null) {
+        fn(...args, sessionId);
+      }
+    },
+    [fn, sessionId],
   );
 }
 
@@ -122,7 +157,9 @@ export function DiffScreen(): ReactElement | null {
   const setLayerRead = useReviewStore((state) => state.setLayerRead);
   const setFileCollapsed = useReviewStore((state) => state.setFileCollapsed);
   const resetReviewSubrange = useReviewStore((state) => state.resetReviewSubrange);
-  const diffStyle = useReviewStore((state) => state.diffStyle);
+  // An app-wide preference, so it comes from the prefs store rather than the review store —
+  // it outlives every session here and is persisted on its own (stores/ui-prefs).
+  const diffStyle = useUiPrefsStore((state) => state.diffStyle);
   const setScrollTop = useReviewStore((state) => state.setScrollTop);
   const addComment = useReviewStore((state) => state.addComment);
   const editComment = useReviewStore((state) => state.editComment);
@@ -130,70 +167,27 @@ export function DiffScreen(): ReactElement | null {
   const stepComment = useReviewStore((state) => state.stepComment);
   const clearActiveComment = useReviewStore((state) => state.clearActiveComment);
   const setActiveLayer = useReviewStore((state) => state.setActiveLayer);
+  // The chapter band's own two verbs, resolved here rather than there: the band is a
+  // presentational band like `DiffView` beside it, and this screen is what reads the store
+  // for both of them (the data rule, `ReviewRail.tsx`).
+  const stepLayer = useReviewStore((state) => state.stepLayer);
+  const selectFile = useReviewStore((state) => state.selectFile);
   // Collapsing the prose drops the resize panel entirely (nothing to size), so the
   // parent — not LayerIntro — owns this.
   const [layerIntroCollapsed, setLayerIntroCollapsed] = useState(false);
 
-  // Bound to the active id (which is DiffView's mount key), so it stays stable for
-  // the mounted view and captures land only in the session that scrolled.
-  const onScrollTop = useCallback(
-    (top: number) => {
-      if (activeSessionId !== null) {
-        setScrollTop(top, activeSessionId);
-      }
-    },
-    [setScrollTop, activeSessionId],
-  );
-  const onAddComment = useCallback(
-    (anchor: ReviewAnchor, body: string) => {
-      if (activeSessionId !== null) {
-        addComment(anchor, body, activeSessionId);
-      }
-    },
-    [addComment, activeSessionId],
-  );
-  const onEditComment = useCallback(
-    (commentId: string, body: string) => {
-      if (activeSessionId !== null) {
-        editComment(commentId, body, activeSessionId);
-      }
-    },
-    [editComment, activeSessionId],
-  );
-  const onDiscardComment = useCallback(
-    (commentId: string) => {
-      if (activeSessionId !== null) {
-        discardComment(commentId, activeSessionId);
-      }
-    },
-    [discardComment, activeSessionId],
-  );
-  const onStepComment = useCallback(
-    (direction: 1 | -1) => {
-      if (activeSessionId !== null) {
-        stepComment(direction, activeSessionId);
-      }
-    },
-    [stepComment, activeSessionId],
-  );
-  const onClearActiveComment = useCallback(() => {
-    if (activeSessionId !== null) {
-      clearActiveComment(activeSessionId);
-    }
-  }, [clearActiveComment, activeSessionId]);
-  const onSetFileCollapsed = useCallback(
-    (path: string, collapsed: boolean) => {
-      if (activeSessionId !== null) {
-        setFileCollapsed(path, collapsed, activeSessionId);
-      }
-    },
-    [setFileCollapsed, activeSessionId],
-  );
-  const onResetReviewSubrange = useCallback(() => {
-    if (activeSessionId !== null) {
-      resetReviewSubrange(activeSessionId);
-    }
-  }, [resetReviewSubrange, activeSessionId]);
+  // Everything the diff surface can do, bound to the active id — which is also DiffView's
+  // mount key, so each stays stable for the mounted view and its writes land in the session
+  // the gesture was made in (see `useSessionBound` above for why that is not the same as
+  // letting the action default to the active session).
+  const onScrollTop = useSessionBound(setScrollTop, activeSessionId);
+  const onAddComment = useSessionBound(addComment, activeSessionId);
+  const onEditComment = useSessionBound(editComment, activeSessionId);
+  const onDiscardComment = useSessionBound(discardComment, activeSessionId);
+  const onStepComment = useSessionBound(stepComment, activeSessionId);
+  const onClearActiveComment = useSessionBound(clearActiveComment, activeSessionId);
+  const onSetFileCollapsed = useSessionBound(setFileCollapsed, activeSessionId);
+  const onResetReviewSubrange = useSessionBound(resetReviewSubrange, activeSessionId);
 
   const loadedFiles = diff !== null && diff.phase === "loaded" ? diff.files : null;
   // Comments the re-derived diff has no line to host: kept in state, shown
@@ -346,9 +340,11 @@ export function DiffScreen(): ReactElement | null {
             // review's real first stop — so the chevron only dead-ends without one.
             hasPrev={index > 0 || (hasOverview && index === 0)}
             hasNext={index >= 0 && index < effLayers.length - 1}
+            onStepLayer={stepLayer}
             readTally={layerTally}
-            onToggleRead={() => setLayerRead(activeLayer.id, !isComplete(layerTally))}
+            onToggleRead={() => setLayerRead(activeLayer.id, !isFullyRead(layerTally))}
             filePaths={visibleFilePaths}
+            onSelectFile={selectFile}
             collapsed={layerIntroCollapsed}
             onToggleCollapsed={() => setLayerIntroCollapsed((value) => !value)}
             fill={fill}

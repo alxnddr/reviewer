@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { renameSync } from "node:fs";
 import Store from "electron-store";
 import * as z from "zod";
+import { createDebouncer } from "../shared/debounce";
 import { BranchName, CommitSelection } from "../shared/git";
 import {
   Comment,
@@ -243,10 +244,7 @@ export function createSessionStore(options: SessionStoreOptions = {}): SessionSt
     state = EMPTY_STORE;
   }
 
-  let pendingWrite: ReturnType<typeof setTimeout> | null = null;
-
   function persistNow(): void {
-    pendingWrite = null;
     try {
       disk.store = state;
     } catch (error) {
@@ -254,14 +252,16 @@ export function createSessionStore(options: SessionStoreOptions = {}): SessionSt
     }
   }
 
+  // unref: the timer must never hold the process open — quit durability comes
+  // from the will-quit flush, not from this best-effort background write.
+  const writeDebouncer = createDebouncer({
+    delayMs: writeDebounceMs,
+    onFire: persistNow,
+    unref: true,
+  });
+
   function schedulePersist(): void {
-    if (pendingWrite !== null) {
-      return;
-    }
-    // unref: the timer must never hold the process open — quit durability comes
-    // from the will-quit flush, not from this best-effort background write.
-    pendingWrite = setTimeout(persistNow, writeDebounceMs);
-    pendingWrite.unref();
+    writeDebouncer.notify();
   }
 
   // A newly opened project/review is what the user is looking at — insertion
@@ -359,12 +359,6 @@ export function createSessionStore(options: SessionStoreOptions = {}): SessionSt
       schedulePersist();
     },
 
-    flush: () => {
-      if (pendingWrite === null) {
-        return;
-      }
-      clearTimeout(pendingWrite);
-      persistNow();
-    },
+    flush: () => writeDebouncer.flush(),
   };
 }

@@ -1,7 +1,7 @@
 import { BrowserWindow, dialog, type FileFilter } from "electron";
 import { writeFile } from "node:fs/promises";
 import { IpcChannel } from "../../shared/ipc";
-import { ReviewSaveRequest, ReviewSaveResponse } from "../../shared/review-save";
+import type { ReviewSaveRequest, ReviewSaveResponse } from "../../shared/review-ipc";
 import { registerIpcHandler } from "../ipc-registry";
 
 // The one native-save seam for review export: main owns the save sheet and the
@@ -52,14 +52,6 @@ export function saveReviewMarkdown(request: ReviewSaveRequest): Promise<ReviewSa
 }
 
 export function registerReviewSaveHandlers(): void {
-  registerIpcHandler(
-    IpcChannel.reviewSaveJson,
-    { request: ReviewSaveRequest, response: ReviewSaveResponse },
-    saveReviewJson,
-  );
-  registerIpcHandler(
-    IpcChannel.reviewSaveMarkdown,
-    { request: ReviewSaveRequest, response: ReviewSaveResponse },
-    saveReviewMarkdown,
-  );
+  registerIpcHandler(IpcChannel.reviewSaveJson, saveReviewJson);
+  registerIpcHandler(IpcChannel.reviewSaveMarkdown, saveReviewMarkdown);
 }

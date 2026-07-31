@@ -1,14 +1,16 @@
-import { memo, useEffect, useMemo, type ReactElement } from "react";
+import { memo, useMemo, type ReactElement } from "react";
 import { History, MapPinOff, MessageSquare } from "lucide-react";
 import type { Comment } from "../../../shared/review";
-import type { PatchFile } from "@/lib/diff/patch";
+import { countLabel } from "../../../shared/plural";
+import type { PatchFile } from "../../../shared/diff/patch";
 import type { FitToContentRefs } from "@/lib/fit-panel";
 import { orderedComments, type CommentNavEntry } from "@/lib/diff/comment-navigation";
 import { CopyAllCommentsPromptButton } from "@/components/CopyPromptButton";
 import { FileTypeIcon } from "@/components/FileTypeIcon";
 import { TooltipHint } from "@/components/ui/tooltip";
 import { commentLocation } from "@/lib/comment-location";
-import { flattenMarkdown } from "@/lib/markdown";
+import { useScrollIntoViewById } from "@/lib/use-scroll-into-view";
+import { flattenMarkdown } from "../../../shared/markdown";
 import {
   RAIL_GLYPH,
   RailCaption,
@@ -17,17 +19,15 @@ import {
   RailSection,
 } from "@/components/rail";
 import { cn } from "@/lib/utils";
+import { selectActiveSlice, useReviewStore } from "@/stores/review";
+
+/** Stable empty arrays, so a session with none of either — and an unloaded diff — hands
+ * the selectors below one constant reference rather than a fresh [] per tick. */
+const EMPTY_COMMENTS: Comment[] = [];
+const EMPTY_FILES: PatchFile[] = [];
 
 type CommentsPanelProps = {
-  /** The full loaded diff (not a soloed subset): the panel is the whole-review
-   * overview, so it lists every comment and lets a click into a soloed-out file
-   * clear the solo. */
-  files: readonly PatchFile[];
-  comments: Comment[];
-  frozen: boolean;
-  activeCommentId: string | null;
-  onFocusComment: (commentId: string) => void;
-  /** Disclosure is owned by the parent (SidebarNav) so it can host the expanded
+  /** Disclosure is owned by the rail (`ReviewRail`) so it can host the expanded
    * list in a resizable panel and fall back to a plain bar when collapsed — the
    * same split DiffScreen makes for the layer intro. */
   expanded: boolean;
@@ -124,18 +124,31 @@ function groupByFile(
  * rail above it: a file heading, then one row per comment — the body's first
  * line, elided. Nobody reads a review in a 256px rail, so the row spends its width
  * on the only question it can answer at a glance ("which comment is this?") and
- * leaves the rest to the card in the diff, one click away, or to the hover hint. */
+ * leaves the rest to the card in the diff, one click away, or to the hover hint.
+ *
+ * A section, so it reads its own state (the rail's rule, `ReviewRail.tsx`); what it takes
+ * from the rail is the disclosure and the panel it is fitted through. */
 export function CommentsPanel({
-  files,
-  comments,
-  frozen,
-  activeCommentId,
-  onFocusComment,
   expanded,
   onToggleExpanded,
   fill,
   fit,
 }: CommentsPanelProps): ReactElement | null {
+  // The full loaded diff, never the soloed subset: the panel is the whole-review overview,
+  // so it lists every comment and a click into a soloed-out file clears the solo (which is
+  // `focusComment`'s own doing, in the store).
+  const files = useReviewStore((state) => {
+    const diff = selectActiveSlice(state)?.diff;
+    return diff !== undefined && diff.phase === "loaded" ? diff.files : EMPTY_FILES;
+  });
+  const comments = useReviewStore((state) => selectActiveSlice(state)?.comments ?? EMPTY_COMMENTS);
+  const frozen = useReviewStore(
+    (state) => selectActiveSlice(state)?.reviewDiff?.kind === "frozenPatch",
+  );
+  const activeCommentId = useReviewStore(
+    (state) => selectActiveSlice(state)?.activeCommentId ?? null,
+  );
+  const focusComment = useReviewStore((state) => state.focusComment);
   const entries = useMemo(
     () => orderedComments(files, comments, frozen),
     [files, comments, frozen],
@@ -154,11 +167,11 @@ export function CommentsPanel({
   // The rail is where the reader tracks which comment they are on, so a selection
   // walked off screen with `n`/`p` is brought back — the same rule the layer tree
   // applies to its soloed row. Inert while collapsed: no row is mounted to find.
-  useEffect(() => {
-    if (activeCommentId !== null) {
-      document.getElementById(rowDomId(activeCommentId))?.scrollIntoView({ block: "nearest" });
-    }
-  }, [activeCommentId, expanded]);
+  useScrollIntoViewById(
+    activeCommentId === null ? null : rowDomId(activeCommentId),
+    { block: "nearest" },
+    [activeCommentId, expanded],
+  );
 
   if (comments.length === 0) {
     return null;
@@ -178,7 +191,7 @@ export function CommentsPanel({
               <CommentRow
                 entry={entry}
                 active={entry.comment.id === activeCommentId}
-                onFocus={onFocusComment}
+                onFocus={focusComment}
               />
             </li>
           ))}
@@ -213,7 +226,7 @@ export function CommentsPanel({
             keeping it permanent is also what stops the heading from renaming itself the
             instant you click to fold it. Open, the rows below happen to add up to it; that
             is a reason to trust it, not a reason to take it away. */}
-        {count === 1 ? "1 comment" : `${count} comments`}
+        {countLabel(count, "comment")}
       </RailSection>
       {expanded && (
         <div

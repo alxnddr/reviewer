@@ -1,9 +1,21 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type RefObject } from "react";
 import type { CodeViewHandle } from "@pierre/diffs/react";
-import type { CommentSlot } from "./comment-annotations";
-import type { PatchFile } from "./patch";
-import { buildSearchIndex, findMatches, type DiffLineRef } from "./search";
+import type { CommentSlot } from "../../../../shared/diff/comment-annotations";
+import type { PatchFile } from "../../../../shared/diff/patch";
+import { clamp } from "../../../../shared/clamp";
+import {
+  buildSearchIndex,
+  findMatches,
+  partialSignature,
+  type DiffLineRef,
+  type SearchIndexLine,
+} from "./search";
 import { modalOpen } from "@/lib/shortcut-guard";
+
+/** The unopened-search index: a stable empty array, so the bar going unused never pays for
+ * `buildSearchIndex`'s walk of every hunk line (and its per-line `lowerText` allocation) —
+ * on the repo's `preview:huge` scenario alone that is 100k objects nobody asked for. */
+const EMPTY_INDEX: readonly SearchIndexLine[] = [];
 
 /** Find-in-diff, wired to CodeView's own scroll + selection API — the only way to
  * reach a virtualized surface, where off-screen lines are absent from the DOM and
@@ -49,7 +61,23 @@ export function useDiffSearch(
   const [activeIndex, setActiveIndex] = useState(0);
   const [focusNonce, setFocusNonce] = useState(0);
 
-  const index = useMemo(() => buildSearchIndex(files), [files]);
+  // `files` keeps its identity across a context expansion — Pierre hydrates the affected
+  // `fileDiff` in place (see `partialSignature`'s doc in `search.ts`) — so `files` alone is
+  // not a sufficient memo key: an expanded file's newly-revealed lines would otherwise stay
+  // permanently unfound because the index that omits them never rebuilds. Building itself
+  // stays gated on `open` — the walk of every hunk line only has to run once the bar exists
+  // to want it.
+  const filesPartialSignature = partialSignature(files);
+  // `buildSearchIndex` never reads the signature itself — it walks `files`, whose
+  // *content* the signature stands in for — but it has to be a dependency so the memo
+  // reacts to the in-place hydration the comment above describes.
+  // oxlint-disable react-hooks/exhaustive-deps -- filesPartialSignature is a deliberate
+  // rebuild trigger, not a value the callback body needs to read
+  const index = useMemo(
+    () => (open ? buildSearchIndex(files) : EMPTY_INDEX),
+    [open, files, filesPartialSignature],
+  );
+  // oxlint-enable react-hooks/exhaustive-deps
   const matches = useMemo(
     () => findMatches(index, { text: query, caseSensitive }),
     [index, query, caseSensitive],
@@ -74,7 +102,7 @@ export function useDiffSearch(
       handle.clearSelectedLines();
       return;
     }
-    const clamped = Math.min(Math.max(activeIndex, 0), matches.length - 1);
+    const clamped = clamp(activeIndex, 0, matches.length - 1);
     if (clamped !== activeIndex) {
       setActiveIndex(clamped);
       return; // Re-runs with the corrected index; the paint happens then.

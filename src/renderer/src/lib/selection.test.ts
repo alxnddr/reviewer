@@ -91,6 +91,15 @@ describe("brushReducer", () => {
     expect(brushReducer(null, { type: "set", index: -5 }, 4)).toEqual({ anchor: 0, focus: 0 });
   });
 
+  it("hands back the same range when the action moved nothing", () => {
+    // Identity, not just equality: every caller checks "did the brush move?" by reference.
+    const range: BrushRange = { anchor: 2, focus: 0 };
+    expect(brushReducer(range, { type: "step", direction: -1, extend: true }, 4)).toBe(range);
+    expect(brushReducer(range, { type: "extend", index: 0 }, 4)).toBe(range);
+    const collapsed: BrushRange = { anchor: 1, focus: 1 };
+    expect(brushReducer(collapsed, { type: "set", index: 1 }, 4)).toBe(collapsed);
+  });
+
   it("collapses to null when there is nothing to select", () => {
     expect(brushReducer({ anchor: 0, focus: 1 }, { type: "set", index: 0 }, 0)).toBeNull();
   });

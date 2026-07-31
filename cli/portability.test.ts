@@ -211,6 +211,22 @@ describe("rvw runs from a repo that is not the Reviewer checkout", () => {
     expect(JSON.parse(schema.stdout)).toMatchObject({ title: ".reviewer.json" });
   });
 
+  it("reports its version and the file it is running out of, with no package.json anywhere near it", () => {
+    // The build-time half of `--version`, which only a run outside the checkout can prove: the
+    // foreign repo has no `package.json`, the install root has none above the bundle, and the
+    // number still arrives — because it was inlined when the bundle was built, exactly as it has
+    // to be inside `Reviewer.app`, where the installed shim runs a lone `rvw.js` and nothing else.
+    // The path is the installed bundle rather than this checkout's `cli/`, which is the answer
+    // the shadowed-PATH check in `src/main/cli-install.ts` leaves its reader needing.
+    const foreign = repo();
+    const { version } = JSON.parse(readFileSync(join(REPO_ROOT, "package.json"), "utf8")) as {
+      version: string;
+    };
+    const result = rvw(cli, foreign, ["--version"]);
+    expect(result.status, output(result)).toBe(0);
+    expect(result.stdout.trim()).toBe(`${version} (${cli.bundle})`);
+  });
+
   it("keeps the 0/1/2 exit contract across the bundle boundary", () => {
     const foreign = repo();
     expect(rvw(cli, foreign, ["frobnicate"]).status).toBe(2);

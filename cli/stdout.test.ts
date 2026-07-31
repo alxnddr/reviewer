@@ -50,7 +50,9 @@ describe("rvw writes all of stdout, even past the pipe buffer", () => {
     // The oracle is the same `capturePatch` the verb itself calls — a synchronous `spawnSync`
     // capture in this process, so it cannot be truncated by the defect under test — which makes
     // this a stricter comparison than `git diff | wc -c`: identical bytes, not identical counts.
-    const expected = capturePatch(bulky.path, bulky.base, bulky.head);
+    // `process.env` because that is what the spawned bundle inherits: the oracle has to
+    // capture through the same environment the child hardens its own git with.
+    const expected = capturePatch(process.env, bulky.path, bulky.base, bulky.head);
     if (!expected.ok) throw new Error(`fixture capture failed: ${expected.message}`);
     expect(Buffer.byteLength(expected.patch)).toBeGreaterThan(1024 * 1024);
 

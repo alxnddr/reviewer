@@ -1,6 +1,6 @@
 import { nativeTheme } from "electron";
 import { defaultTheme, resolveTheme, type ThemeId } from "../shared/contracts";
-import { THEMES } from "../shared/themes.generated";
+import { THEMES } from "../shared/themes";
 import { readSettings, writeSettings } from "./settings";
 
 // The theme lives in main: nativeTheme.themeSource drives the renderer's prefers-color-scheme AND the
@@ -21,7 +21,7 @@ export function getWindowBackground(): string {
   const { id } = resolveTheme(currentSelection());
   const meta = THEMES.find((theme) => theme.id === id);
   if (meta === undefined) {
-    throw new Error("resolved theme is not in the generated set");
+    throw new Error("resolved theme is not in the curated set");
   }
   return meta.windowBackground;
 }

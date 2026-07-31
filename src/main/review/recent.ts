@@ -1,14 +1,14 @@
 import { readdir, readFile, stat } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { REVIEW_EXTENSION } from "../../shared/review-file";
-import { ReviewArtifact, type ReviewLayerInput } from "../../shared/review";
-import { lastSegment, reviewsDir } from "../../shared/reviews-dir";
+import { parseArtifactBytes, repoDisplayName, type ReviewLayerInput } from "../../shared/review";
+import { REVIEW_EXTENSION, reviewsDir } from "../../shared/node/reviews-dir";
+import { errnoCode } from "../../shared/errors";
 import type {
   RecentReview,
   RecentReviewSummary,
   RecentReviewsResponse,
-} from "../../shared/recent-reviews";
+} from "../../shared/review-ipc";
 import { hasProgress, type ReviewProgressSummary } from "../../shared/review-progress";
 import { REVIEW_MAX_BYTES } from "./guard";
 import { progressFileName, type ProgressStore } from "./progress";
@@ -41,26 +41,21 @@ function countLayers(layers: readonly ReviewLayerInput[]): number {
 }
 
 /** An artifact's bytes → the handful of facts a row shows, or null when those bytes are not an
- * artifact. Pure, and parsed through the same `ReviewArtifact` schema the open path uses: a
+ * artifact. Pure, and read through the same `parseArtifactBytes` seam the open path uses: a
  * file this says is readable is a file that will open, and one it calls unreadable is one the
- * guard would have refused anyway. */
+ * guard would have refused anyway. Why it failed is dropped here on purpose — a row has no
+ * room for it, and the click that follows lands in the open path, which does say. */
 export function summarizeArtifact(bytes: string): RecentReviewSummary | null {
-  let json: unknown;
-  try {
-    json = JSON.parse(bytes);
-  } catch {
+  const parsed = parseArtifactBytes(bytes);
+  if (!parsed.ok) {
     return null;
   }
-  const parsed = ReviewArtifact.safeParse(json);
-  if (!parsed.success) {
-    return null;
-  }
-  const artifact = parsed.data;
+  const artifact = parsed.artifact;
   return {
     repoPath: artifact.repo,
-    // Derived from the path, exactly as `importReview` derives it — the row and the tab it
-    // opens should not disagree about what the repo is called.
-    repoName: lastSegment(artifact.repo) || artifact.repo,
+    // Derived from the path by the same function `importReview` derives it with — the row
+    // and the tab it opens should not disagree about what the repo is called.
+    repoName: repoDisplayName(artifact.repo),
     base: artifact.base,
     head: artifact.head,
     title: artifact.overview?.title ?? null,
@@ -127,7 +122,7 @@ export async function listRecentReviews(
   try {
     names = await readdir(dir);
   } catch (error) {
-    const missing = (error as NodeJS.ErrnoException).code === "ENOENT";
+    const missing = errnoCode(error) === "ENOENT";
     return { dir, reviews: [], truncated: 0, unreadable: !missing };
   }
 

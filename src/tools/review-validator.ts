@@ -1,13 +1,16 @@
+import * as z from "zod";
 import {
-  ReviewArtifact,
+  ARTIFACT_JSON_FORMAT,
+  parseArtifactBytes,
   walkLayerInputs,
+  type AnchorSpan,
+  type ReviewArtifact,
   type ReviewLayerInput,
-  type ReviewSide,
 } from "../shared/review";
-import { resolveAnchor } from "../renderer/src/lib/diff/anchor";
-import { filesByAnchorPath, parsePatch } from "../renderer/src/lib/diff/patch";
-import { fileReferences } from "../renderer/src/lib/markdown";
-import { MAX_LAYER_DEPTH } from "../renderer/src/lib/layers";
+import { resolveAnchor } from "../shared/diff/anchor";
+import { ANALYSIS_CACHE_KEY, filesByAnchorPath, parsePatch } from "../shared/diff/patch";
+import { fileReferences } from "../shared/markdown";
+import { MAX_LAYER_DEPTH } from "../shared/layers";
 
 // The pre-handoff check an agent runs on a `.reviewer.json` before giving it over. It reuses
 // the review domain rather than re-deriving it: the *same* `resolveAnchor`/`parsePatch`/
@@ -32,12 +35,13 @@ export type ValidationProblem =
   | { kind: "invalidJson"; message: string }
   | { kind: "schema"; path: string; message: string }
   | { kind: "missingPatch" }
-  | { kind: "commentAnchorOutdated"; anchor: ProblemAnchor }
-  | { kind: "commentFileAbsent"; anchor: ProblemAnchor }
-  | { kind: "layerRangeOutdated"; layer: string; anchor: ProblemAnchor }
+  | { kind: "commentAnchorOutdated"; anchor: AnchorSpan }
+  | { kind: "commentFileAbsent"; anchor: AnchorSpan }
+  | { kind: "layerRangeOutdated"; layer: string; anchor: AnchorSpan }
   /** What is left of the outline contract once `children` carries the shape: an outline no
    * deeper than the reader can follow, in which every layer reaches some code — its own, or
-   * its children's. */
+   * its children's. A chain past the cap reports once, at its shallowest offender — the one
+   * layer there is to unnest — so `depth` is always exactly one past the cap. */
   | { kind: "nestingTooDeep"; layer: string; depth: number }
   | { kind: "layerWalksNothing"; layer: string }
   | { kind: "unresolvedLink"; layer: string; label: string; path: string }
@@ -45,15 +49,6 @@ export type ValidationProblem =
    * name — a separate variant rather than a nullable `layer`, so neither locator can
    * be built empty. */
   | { kind: "overviewUnresolvedLink"; label: string; path: string };
-
-/** The `file + side + range` locator shared by every anchor-shaped problem, so a
- * report points at the exact spot. */
-export type ProblemAnchor = {
-  file: string;
-  side: ReviewSide;
-  startLine: number;
-  endLine: number;
-};
 
 export type ValidationReport = { ok: true } | { ok: false; problems: ValidationProblem[] };
 
@@ -63,46 +58,45 @@ export type ParsedArtifact =
   | { ok: true; artifact: ReviewArtifact }
   | { ok: false; problems: ValidationProblem[] };
 
-// The prefix `parsePatch` requires to key its highlight cache; the validator never
-// renders, so any stable non-empty value works — it just must not be omitted (an
-// absent key collides equally-named files, per patch.ts).
-const CACHE_KEY = "validate";
-
 /** Untrusted artifact bytes → a typed artifact, or every reason it could not parse. Never
  * throws: malformed JSON and schema violations are reported as typed problems (the input is
  * untrusted). Placement is not checked here — the caller supplies the diff to place against
- * (`validatePlacement`), which the CLI re-derives from the artifact's own repo/refs. */
+ * (`validatePlacement`), which the CLI re-derives from the artifact's own repo/refs.
+ *
+ * The parse itself is `parseArtifactBytes` (shared), the same seam the app's open path and the
+ * recents lister read bytes through; this is the only one of the three that keeps every issue,
+ * and projecting them here is what that seam exists for. */
 export function parseReviewArtifact(bytes: string): ParsedArtifact {
-  let json: unknown;
-  try {
-    json = JSON.parse(bytes);
-  } catch (error) {
-    return { ok: false, problems: [{ kind: "invalidJson", message: errorMessage(error) }] };
-  }
-
-  const parsed = ReviewArtifact.safeParse(json);
-  if (!parsed.success) {
-    // Can't anchor an artifact we couldn't parse — report every schema issue and stop.
-    return {
-      ok: false,
-      problems: parsed.error.issues.map((issue) => ({
-        kind: "schema",
-        path: issue.path.map(String).join("."),
-        message: issue.message,
-      })),
-    };
+  const parsed = parseArtifactBytes(bytes);
+  if (!parsed.ok) {
+    // Can't anchor an artifact we couldn't parse — report every issue and stop.
+    return { ok: false, problems: parsed.issues.map(problemOfIssue) };
   }
 
   // Structure is checked here, with the parse: it needs no diff, and an artifact whose
   // layers do not form a legal outline is not ready to hand over however well its anchors
   // place. The app reads a broken outline as flat rather than refusing to open — this is
   // the seam that keeps one from ever being emitted.
-  const structural = validateOutline(parsed.data.layers);
+  const structural = validateOutline(parsed.artifact.layers);
   if (structural.length > 0) {
     return { ok: false, problems: structural };
   }
 
-  return { ok: true, artifact: parsed.data };
+  return { ok: true, artifact: parsed.artifact };
+}
+
+/** One parse issue in the report's own vocabulary. Bytes that were never a JSON document are
+ * their own problem kind — an authoring agent that wrote a trailing comma has nothing to do
+ * with a *path* in a document that does not exist, so it is told that plainly rather than
+ * handed a schema problem rooted at `(root)`.
+ *
+ * The locator is zod's own `toDotPath` rather than a `join(".")`: it brackets array indices
+ * (`comments[0].side`) and escapes a key that contains a dot, so the path an authoring agent
+ * reads back names exactly one place in the document. */
+function problemOfIssue(issue: z.core.$ZodIssue): ValidationProblem {
+  return issue.code === "invalid_format" && issue.format === ARTIFACT_JSON_FORMAT
+    ? { kind: "invalidJson", message: issue.message }
+    : { kind: "schema", path: z.core.toDotPath(issue.path), message: issue.message };
 }
 
 /** What is left of the outline contract once the outline is a real tree on the wire:
@@ -120,21 +114,48 @@ export function parseReviewArtifact(bytes: string): ParsedArtifact {
  * has to arbitrate between the two. */
 export function validateOutline(layers: readonly ReviewLayerInput[]): ValidationProblem[] {
   const problems: ValidationProblem[] = [];
-
-  // Reach: a layer with no ranges of its own must have a descendant that has some.
-  const reaches = (layer: ReviewLayerInput): boolean =>
-    layer.ranges.length > 0 || layer.children.some(reaches);
+  const reaching = reachingLayers(layers);
 
   for (const { layer, ordinal, depth } of walkLayerInputs(layers)) {
-    if (depth > MAX_LAYER_DEPTH) {
+    // Only the *shallowest* layer past the cap, which is always the one at exactly
+    // `MAX_LAYER_DEPTH + 1`: everything below it is too deep only because this one is, so
+    // reporting each would turn one authoring mistake into a problem per layer for an agent
+    // that has a single chain to unnest.
+    if (depth === MAX_LAYER_DEPTH + 1) {
       problems.push({ kind: "nestingTooDeep", layer: ordinal, depth });
     }
-    if (!reaches(layer)) {
+    if (!reaching.has(layer)) {
       problems.push({ kind: "layerWalksNothing", layer: ordinal });
     }
   }
 
   return problems;
+}
+
+/** The layers that reach code — their own ranges, or a descendant's — collected in one
+ * post-order pass, so the answer for a parent is read off the answers its children already
+ * recorded rather than re-walked from it. Asking each node to re-walk its own subtree instead
+ * costs the sum of every subtree's size — one full walk per level of nesting — and the depth
+ * cap is a rule this pass runs to *enforce*, not one it may assume holds, so the outline that
+ * turns that into a quadratic walk is exactly the over-nested one it is here to diagnose. No
+ * short-circuit on the children: every one of them has to be visited to record *its* answer,
+ * which the caller needs too. */
+function reachingLayers(layers: readonly ReviewLayerInput[]): ReadonlySet<ReviewLayerInput> {
+  const reaching = new Set<ReviewLayerInput>();
+  const visit = (layer: ReviewLayerInput): boolean => {
+    let reaches = layer.ranges.length > 0;
+    for (const child of layer.children) {
+      reaches = visit(child) || reaches;
+    }
+    if (reaches) {
+      reaching.add(layer);
+    }
+    return reaches;
+  };
+  for (const layer of layers) {
+    visit(layer);
+  }
+  return reaching;
 }
 
 /** Every reason a parsed artifact's anchors would not place against `patch`, or `[]` when
@@ -145,7 +166,7 @@ export function validateOutline(layers: readonly ReviewLayerInput[]): Validation
  * that was never a diff), so there is nothing to place against — the root `missingPatch`
  * problem, not a silent pass. */
 export function validatePlacement(artifact: ReviewArtifact, patch: string): ValidationProblem[] {
-  const files = parsePatch(patch, CACHE_KEY);
+  const files = parsePatch(patch, ANALYSIS_CACHE_KEY);
   if (files.length === 0) {
     return [{ kind: "missingPatch" }];
   }
@@ -180,11 +201,11 @@ export function validatePlacement(artifact: ReviewArtifact, patch: string): Vali
   for (const comment of artifact.comments) {
     const file = commentFiles.get(comment.file);
     if (file === undefined) {
-      problems.push({ kind: "commentFileAbsent", anchor: anchorOf(comment) });
+      problems.push({ kind: "commentFileAbsent", anchor: pickAnchor(comment) });
       continue;
     }
     if (resolveAnchor(comment, { kind: "derived", file: file.fileDiff }).status === "outdated") {
-      problems.push({ kind: "commentAnchorOutdated", anchor: anchorOf(comment) });
+      problems.push({ kind: "commentAnchorOutdated", anchor: pickAnchor(comment) });
     }
   }
 
@@ -196,7 +217,7 @@ export function validatePlacement(artifact: ReviewArtifact, patch: string): Vali
       const file = byPath.get(range.file) ?? null;
       const resolution = resolveAnchor(range, { kind: "derived", file: file?.fileDiff ?? null });
       if (resolution.status === "outdated") {
-        problems.push({ kind: "layerRangeOutdated", layer: ordinal, anchor: anchorOf(range) });
+        problems.push({ kind: "layerRangeOutdated", layer: ordinal, anchor: pickAnchor(range) });
       }
     }
     collectUnresolvedLinks(ordinal, layer.description, diffFiles, problems);
@@ -232,17 +253,17 @@ function collectUnresolvedLinks(
   }
 }
 
-function anchorOf(source: ProblemAnchor): ProblemAnchor {
+/** The locator alone, picked out of whatever anchor-shaped value carried it: a comment also
+ * carries its `body`, which is prose the report has no business repeating back. A layer range
+ * is already exactly these four fields and goes through it anyway, so a problem's anchor is
+ * the locator and nothing else however the anchor reached here. */
+function pickAnchor(source: AnchorSpan): AnchorSpan {
   return {
     file: source.file,
     side: source.side,
     startLine: source.startLine,
     endLine: source.endLine,
   };
-}
-
-function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
 }
 
 /** A one-line, human-readable rendering of a problem for the CLI's stderr report.
@@ -272,6 +293,6 @@ export function describeProblem(problem: ValidationProblem): string {
   }
 }
 
-function locator(anchor: ProblemAnchor): string {
+function locator(anchor: AnchorSpan): string {
   return `${anchor.file} ${anchor.side} ${anchor.startLine}-${anchor.endLine}`;
 }

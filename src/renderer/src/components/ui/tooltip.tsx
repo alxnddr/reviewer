@@ -1,15 +1,9 @@
 "use client";
 
-import {
-  useEffect,
-  useRef,
-  useState,
-  type ReactElement,
-  type ReactNode,
-  type RefObject,
-} from "react";
+import { useRef, type ReactElement, type ReactNode, type RefObject } from "react";
 import { Tooltip as TooltipPrimitive } from "@base-ui/react/tooltip";
 
+import { useOverflowing } from "@/lib/use-overflowing";
 import { cn } from "@/lib/utils";
 
 /** The one hover delay the whole app uses. Long enough that crossing a dense list
@@ -73,37 +67,6 @@ function TooltipContent({
   );
 }
 
-/** True while the element's content is wider than the box holding it — i.e. while
- * `truncate` is actually eliding something. Re-measures on every resize, which is
- * what a dragged sidebar seam or a resized window produces. Only runs while the
- * caller needs the answer; an always-on hint never pays for an observer. */
-function useOverflowing(
-  ref: RefObject<HTMLElement | null>,
-  enabled: boolean,
-  contentKey: string | null,
-): boolean {
-  const [overflowing, setOverflowing] = useState(false);
-
-  useEffect(() => {
-    if (!enabled) {
-      return;
-    }
-    const element = ref.current;
-    if (element === null) {
-      return;
-    }
-    const measure = (): void => {
-      setOverflowing(element.scrollWidth > element.clientWidth);
-    };
-    measure();
-    const observer = new ResizeObserver(measure);
-    observer.observe(element);
-    return () => observer.disconnect();
-  }, [ref, enabled, contentKey]);
-
-  return overflowing;
-}
-
 type TooltipHintProps = {
   /** What the popup says. Nothing is rendered — not even a trigger — when this is
    * empty, so a row with no overflow text to recover stays inert. */
@@ -145,10 +108,12 @@ function TooltipHint({
   // caller actually supplies — measuring only needs an HTMLElement.
   const triggerRef = useRef<HTMLButtonElement>(null);
   const empty = disabled || content === null || content === undefined || content === "";
+  // Measured only while the hint is one that arms on clipping: an always-on hint has
+  // nothing to gate, so it never pays for an observer.
   const truncated = useOverflowing(
     triggerRef,
-    whenTruncated && !empty,
     typeof content === "string" ? content : null,
+    whenTruncated && !empty,
   );
 
   if (empty) {

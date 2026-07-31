@@ -1,4 +1,5 @@
-import type { PatchFile } from "./patch";
+import type { PatchFile } from "../../../../shared/diff/patch";
+import { walkFileLines } from "../../../../shared/diff/walk";
 
 /** The diff surface is virtualized: off-screen lines are not in the DOM, so the
  * browser's native find never sees them. Search therefore runs against the parsed
@@ -22,8 +23,12 @@ export type DiffLineRef = {
   lineNumber: number;
 };
 
-/** An index entry: a line ref plus the text to match against (newline stripped). */
-export type SearchIndexLine = DiffLineRef & { text: string };
+/** An index entry: a line ref plus the text to match against (newline stripped), and its
+ * lowercase form precomputed at build time. `lowerText` exists purely so the
+ * case-insensitive path of `findMatches` — the default, run on every keystroke — never
+ * allocates a fresh lowercased string per line per character typed; it costs one
+ * `toLowerCase()` per line, done once when the index is built. */
+export type SearchIndexLine = DiffLineRef & { text: string; lowerText: string };
 
 /** A query as the UI holds it. Empty text matches nothing. */
 export type SearchQuery = { text: string; caseSensitive: boolean };
@@ -35,56 +40,33 @@ function stripEol(line: string): string {
   return line.replace(/\r?\n$/u, "");
 }
 
-/** Append a file's hunk lines to `index` in rendered order. Line numbers are
- * walked from each hunk's `additionStart`/`deletionStart`: a context block
- * advances both sides in lockstep (it renders once, filed under `additions`); a
- * change block emits its deletions first, then its additions — the unified reading
- * order — advancing only the side it wrote. Indices into `additionLines`/
- * `deletionLines` come straight from each block, so an out-of-range read (a
- * malformed patch) degrades to an empty string rather than throwing. */
+/** Append a file's hunk lines to `index` in rendered order — the shared hunk walk
+ * (`shared/diff/walk.ts`) supplies the coordinates, in the unified reading order the
+ * index wants (a change block's deletions before its additions). All this adds is what
+ * to keep and what to store: a context line renders once and is filed under `additions`
+ * — its new-file number resolves the same row in unified and split — so the walk's
+ * deletions-side copy of it is dropped here. An out-of-range text read (a malformed
+ * patch) degrades to an empty string rather than throwing. */
 function appendFileLines(
   index: SearchIndexLine[],
   fileId: string,
   fileDiff: PatchFile["fileDiff"],
 ): void {
   const { additionLines, deletionLines } = fileDiff;
-  for (const hunk of fileDiff.hunks) {
-    let additionLine = hunk.additionStart;
-    let deletionLine = hunk.deletionStart;
-    for (const block of hunk.hunkContent) {
-      if (block.type === "context") {
-        for (let offset = 0; offset < block.lines; offset += 1) {
-          index.push({
-            fileId,
-            side: "additions",
-            lineNumber: additionLine,
-            text: stripEol(additionLines[block.additionLineIndex + offset] ?? ""),
-          });
-          additionLine += 1;
-          deletionLine += 1;
-        }
-      } else {
-        for (let offset = 0; offset < block.deletions; offset += 1) {
-          index.push({
-            fileId,
-            side: "deletions",
-            lineNumber: deletionLine,
-            text: stripEol(deletionLines[block.deletionLineIndex + offset] ?? ""),
-          });
-          deletionLine += 1;
-        }
-        for (let offset = 0; offset < block.additions; offset += 1) {
-          index.push({
-            fileId,
-            side: "additions",
-            lineNumber: additionLine,
-            text: stripEol(additionLines[block.additionLineIndex + offset] ?? ""),
-          });
-          additionLine += 1;
-        }
-      }
+  walkFileLines(fileDiff, (line) => {
+    if (line.kind === "context" && line.side === "deletions") {
+      return;
     }
-  }
+    const lines = line.side === "additions" ? additionLines : deletionLines;
+    const text = stripEol(lines[line.index] ?? "");
+    index.push({
+      fileId,
+      side: line.side,
+      lineNumber: line.lineNumber,
+      text,
+      lowerText: text.toLowerCase(),
+    });
+  });
 }
 
 /** The loaded diff → a flat, ordered index of every hunk line across all files.
@@ -99,11 +81,26 @@ export function buildSearchIndex(files: readonly PatchFile[]): SearchIndexLine[]
   return index;
 }
 
+/** One character per file, `"1"` where `fileDiff.isPartial` is set — a cache key for
+ * "does the index need to see this file's lines again". `files` keeps its own identity
+ * across a context expansion: Pierre hydrates the affected `fileDiff` *in place*
+ * (`isPartial` flips to `false`, `additionLines` grows to the full file) rather than
+ * handing back a new array, so a memo keyed on `files` alone never rebuilds and the
+ * newly-revealed lines stay unfound. This string changes exactly when that hydration
+ * lands, so a consumer can add it to its own memo key without re-walking every hunk line
+ * itself just to notice. */
+export function partialSignature(files: readonly PatchFile[]): string {
+  return files.map((file) => (file.fileDiff.isPartial ? "1" : "0")).join("");
+}
+
 /** The lines that contain the query, in index order — one ref per matching line.
  * Match granularity is the line, not the occurrence: the highlight is a whole
  * selected line (the only per-line paint the virtualized surface can carry), so a
  * line with two hits is one result, and "next" never lands on the row it left. An
- * empty query matches nothing. */
+ * empty query matches nothing. The case-insensitive path (the default) reads each
+ * line's precomputed `lowerText` rather than lowercasing `text` per line per call, so
+ * this runs allocation-free on every keystroke; only the needle is lowercased here,
+ * once per call. */
 export function findMatches(index: readonly SearchIndexLine[], query: SearchQuery): DiffLineRef[] {
   const needle = query.caseSensitive ? query.text : query.text.toLowerCase();
   if (needle.length === 0) {
@@ -111,7 +108,7 @@ export function findMatches(index: readonly SearchIndexLine[], query: SearchQuer
   }
   const matches: DiffLineRef[] = [];
   for (const line of index) {
-    const haystack = query.caseSensitive ? line.text : line.text.toLowerCase();
+    const haystack = query.caseSensitive ? line.text : line.lowerText;
     if (haystack.includes(needle)) {
       matches.push({ fileId: line.fileId, side: line.side, lineNumber: line.lineNumber });
     }

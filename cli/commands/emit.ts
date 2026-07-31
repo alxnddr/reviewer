@@ -1,16 +1,15 @@
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { buildCommand } from "@stricli/core";
-import { REVIEW_EXTENSION } from "../../src/shared/review-file";
+import { errorMessage } from "../../src/shared/errors";
 import { emitReviewArtifact } from "../../src/tools/review-emit";
 import { describeProblem, type ValidationProblem } from "../../src/tools/review-validator";
 import { capturePatch } from "../git";
 import { launchReviewer } from "../launch";
-import { resolveRange } from "../range";
-import { reviewFileName, reviewsDir } from "../../src/shared/reviews-dir";
+import { resolveRange, type ResolvedRange } from "../range";
+import { REVIEW_EXTENSION, reviewFileName, reviewsDir } from "../../src/shared/node/reviews-dir";
 import { EXIT_PROBLEMS, EXIT_READY, type LocalContext } from "../context";
-import { errorMessage, writeCannotRun, type CliError } from "../errors";
+import { writeCannotRun, writeJson, type CliError } from "../errors";
 
 // `rvw emit` — the one authoring verb, and the whole of "present this review". The calling
 // agent has already done the review; everything this command asks of it beyond the findings
@@ -174,32 +173,26 @@ export const emitCommand = buildCommand<EmitFlags, [], LocalContext>({
 
     // The draft is read before git runs, because "you gave me nothing to present" is a fact
     // about the call and costs no spawn to establish.
-    const draft = readDraft(flags.draft);
+    const draft = readDraft(this, flags.draft);
     if (!draft.ok) {
       writeCannotRun(this, flags.json, draft.error);
       return;
     }
 
-    const resolved = resolveRange(flags, process.cwd());
+    const resolved = resolveRange(this.env, flags, this.cwd);
     if (!resolved.ok) {
       writeCannotRun(this, flags.json, resolved.error);
       return;
     }
     const { repoPath, base, head } = resolved.range;
 
-    const capture = capturePatch(repoPath, base, head);
+    const capture = capturePatch(this.env, repoPath, base, head);
     if (!capture.ok) {
       writeCannotRun(this, flags.json, { code: "gitFailed", message: capture.message });
       return;
     }
 
-    // The destination: the given --out, or a unique name in rvw's managed reviews dir when none
-    // was given. Resolved absolute because that is what the launcher requires — an `open`
-    // launch does not control the working directory a relative path would resolve against.
-    const out = resolve(
-      flags.out ??
-        join(reviewsDir(process.env, homedir()), reviewFileName(repoPath, base, head, Date.now())),
-    );
+    const out = outPathFor(this, flags.out, resolved.range, Date.now());
 
     const result = emitReviewArtifact({
       repo: repoPath,
@@ -215,7 +208,7 @@ export const emitCommand = buildCommand<EmitFlags, [], LocalContext>({
     if (!result.ok) {
       if (flags.json === true) {
         const outcome: EmitOutcome = { ok: false, problems: result.problems };
-        this.process.stdout.write(`${JSON.stringify(outcome, null, 2)}\n`);
+        writeJson(this, outcome);
       } else {
         // Name the *draft*. The output path is not a candidate here — nothing was written, and
         // an earlier version of this message printed a timestamped path that never existed,
@@ -250,7 +243,7 @@ export const emitCommand = buildCommand<EmitFlags, [], LocalContext>({
     // that fails is reported and then let go: the review is on disk and `rvw open` can retry it.
     let opened = false;
     if (flags.open) {
-      const launched = launchReviewer(process.platform, out);
+      const launched = launchReviewer(this.platform, out);
       if (launched.ok) {
         opened = true;
       } else {
@@ -273,7 +266,7 @@ export const emitCommand = buildCommand<EmitFlags, [], LocalContext>({
         opened,
         embedded,
       };
-      this.process.stdout.write(`${JSON.stringify(outcome, null, 2)}\n`);
+      writeJson(this, outcome);
     } else {
       // The range first: it is the one thing this command may have decided on the caller's
       // behalf, so a defaulted `--base` is never a surprise discovered later in the app.
@@ -289,6 +282,29 @@ export const emitCommand = buildCommand<EmitFlags, [], LocalContext>({
     this.process.exitCode = EXIT_READY;
   },
 });
+
+/** Where the artifact lands: the given `--out`, or a unique name in rvw's managed reviews dir
+ * when none was given. Resolved absolute — against the caller's cwd, the same directory their
+ * shell would have resolved a relative `--out` against — because that is what the launcher
+ * requires: an `open` launch does not control the working directory a relative path would
+ * resolve against. The default's two halves are the context's too (`$RVW_HOME`, else
+ * `~/.rvw/reviews` under `home`) and `stamp` is the command's `Date.now()`, so where an
+ * `--out`-less emit writes is proven without a repo to emit from. */
+export function outPathFor(
+  context: LocalContext,
+  out: string | undefined,
+  range: ResolvedRange,
+  stamp: number,
+): string {
+  return resolve(
+    context.cwd,
+    out ??
+      join(
+        reviewsDir(context.env, context.home),
+        reviewFileName(range.repoPath, range.base, range.head, stamp),
+      ),
+  );
+}
 
 /** A draft that parsed, with the label an error message should call it by — the file's path,
  * or `stdin`, so a refusal names what the caller actually handed over. */
@@ -306,15 +322,16 @@ function unreadable(message: string): { readonly ok: false; readonly error: CliE
   return { ok: false, error: { code: "draftUnreadable", message } };
 }
 
-/** The draft's bytes, from the file `--draft` names or from stdin when it names none (or names
- * `-`). Reading fd 0 synchronously is what lets this stay a plain function in a synchronous
- * command body — the same posture as every other read in the CLI.
+/** The draft's bytes, from the file `--draft` names or from the context's stdin when it names
+ * none (or names `-`).
  *
- * The TTY check is the one guard worth having, and it covers both spellings of stdin — the
- * defaulted one and the explicit `-`: with a terminal on fd 0 the caller has not piped
- * anything and never will, so the command would otherwise hang on a read that can never
- * complete. Naming both ways in is more useful than blocking. */
-function readDraftBytes(source: string | undefined): DraftBytes {
+ * The "nothing was piped" arm is the one guard worth having, and it covers both spellings of
+ * stdin — the defaulted one and the explicit `-`: with a terminal on fd 0 the caller has not
+ * piped anything and never will, so the command would otherwise hang on a read that can never
+ * complete. Naming both ways in is more useful than blocking. It is the reading of fd 0 that
+ * lives in the context (`cli/context.ts`), not this decision: the two failures arrive
+ * distinguished and this is where each becomes the sentence the caller reads. */
+function readDraftBytes(context: LocalContext, source: string | undefined): DraftBytes {
   if (source !== undefined && source !== STDIN) {
     try {
       return { ok: true, bytes: readFileSync(source, "utf8") };
@@ -323,15 +340,15 @@ function readDraftBytes(source: string | undefined): DraftBytes {
     }
   }
 
-  if ((source === undefined || source === STDIN) && process.stdin.isTTY === true) {
-    return unreadable("no draft: pass --draft <file>, or pipe the draft JSON on stdin");
+  const read = context.readStdin();
+  if (read.ok) {
+    return { ok: true, bytes: read.bytes };
   }
-
-  try {
-    return { ok: true, bytes: readFileSync(0, "utf8") };
-  } catch (error) {
-    return unreadable(`cannot read draft from stdin: ${errorMessage(error)}`);
-  }
+  return unreadable(
+    read.reason === "tty"
+      ? "no draft: pass --draft <file>, or pipe the draft JSON on stdin"
+      : `cannot read draft from stdin: ${read.message}`,
+  );
 }
 
 /** Bytes → the three authored keys, or the reason there is no review to present. Two failures
@@ -339,8 +356,8 @@ function readDraftBytes(source: string | undefined): DraftBytes {
  * `draftEmpty` means it parsed perfectly and said nothing — a well-formed `{}` is a caller
  * asking to present a review it did not write, and silently emitting an empty artifact would
  * open a window with nothing in it. */
-function readDraft(source: string | undefined): DraftRead {
-  const read = readDraftBytes(source);
+function readDraft(context: LocalContext, source: string | undefined): DraftRead {
+  const read = readDraftBytes(context, source);
   if (!read.ok) {
     return read;
   }

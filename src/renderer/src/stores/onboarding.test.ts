@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { CliInstallResult, CliStatus } from "../../../shared/cli";
 import type { ReviewerBridge } from "../../../shared/ipc";
+import { stubBridge } from "./__fixtures__/bridge";
 import { cliNoticeShowing, ONBOARDING_STEPS, useOnboardingStore } from "./onboarding";
 
 const MISSING: CliStatus = {
@@ -13,23 +14,16 @@ const PRESENT: CliStatus = { ...MISSING, installed: true };
 
 const INITIAL = useOnboardingStore.getState();
 
-type BridgeStub = Pick<
-  ReviewerBridge,
-  "getOnboarded" | "getCliStatus" | "installCli" | "completeOnboarding"
->;
-
-function stubBridge(overrides: Partial<BridgeStub> = {}): BridgeStub {
-  const bridge: BridgeStub = {
+/** The shared bridge fixture, aimed at a machine that has never run the app: the two answers
+ * this store is about are the ones the fixture cannot default for it, since its own defaults
+ * are the settled case (onboarded, launcher installed). Everything else — `installCli`
+ * succeeding, `completeOnboarding` accepting — is the fixture's. */
+function firstRunBridge(overrides: Partial<ReviewerBridge> = {}): ReviewerBridge {
+  return stubBridge({
     getOnboarded: vi.fn().mockResolvedValue(false),
     getCliStatus: vi.fn().mockResolvedValue(MISSING),
-    installCli: vi
-      .fn()
-      .mockResolvedValue({ status: PRESENT, problem: null } satisfies CliInstallResult),
-    completeOnboarding: vi.fn().mockResolvedValue(undefined),
     ...overrides,
-  };
-  vi.stubGlobal("window", { reviewer: bridge });
-  return bridge;
+  });
 }
 
 afterEach(() => {
@@ -39,7 +33,7 @@ afterEach(() => {
 
 describe("the first-run guide's state", () => {
   it("opens on an install that has never seen it, carrying the launcher's state with it", async () => {
-    stubBridge();
+    firstRunBridge();
 
     await useOnboardingStore.getState().hydrate();
 
@@ -50,7 +44,7 @@ describe("the first-run guide's state", () => {
   it("stays closed once it has run, but still learns where the launcher stands", async () => {
     // The banner outlives the guide and reads the same field, so the status has to arrive
     // even on the launch where nothing is going to open.
-    stubBridge({
+    firstRunBridge({
       getOnboarded: vi.fn().mockResolvedValue(true),
       getCliStatus: vi.fn().mockResolvedValue(PRESENT),
     });
@@ -62,7 +56,7 @@ describe("the first-run guide's state", () => {
   });
 
   it("does not close a guide the reader asked for while main was still answering", async () => {
-    stubBridge({ getOnboarded: vi.fn().mockResolvedValue(true) });
+    firstRunBridge({ getOnboarded: vi.fn().mockResolvedValue(true) });
     useOnboardingStore.getState().show();
 
     await useOnboardingStore.getState().hydrate();
@@ -71,7 +65,7 @@ describe("the first-run guide's state", () => {
   });
 
   it("records completion when it closes, however it was closed", () => {
-    const bridge = stubBridge();
+    const bridge = firstRunBridge();
     useOnboardingStore.setState({ open: true });
 
     useOnboardingStore.getState().finish();
@@ -94,7 +88,7 @@ describe("the first-run guide's state", () => {
   });
 
   it("takes the launcher's state from the install rather than assuming it worked", async () => {
-    stubBridge({
+    firstRunBridge({
       installCli: vi
         .fn()
         .mockResolvedValue({ status: MISSING, problem: "writeFailed" } satisfies CliInstallResult),
@@ -108,7 +102,7 @@ describe("the first-run guide's state", () => {
   });
 
   it("drops a stale complaint once the launcher turns up from somewhere else", async () => {
-    stubBridge({ getCliStatus: vi.fn().mockResolvedValue(PRESENT) });
+    firstRunBridge({ getCliStatus: vi.fn().mockResolvedValue(PRESENT) });
     useOnboardingStore.setState({ cli: MISSING, problem: "writeFailed" });
 
     await useOnboardingStore.getState().refreshCli();

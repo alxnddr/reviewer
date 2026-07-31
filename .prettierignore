@@ -1,4 +1,6 @@
-# Generated design-system artifacts (regenerate from design/design-manifest.json).
+# The design-system files. Three are a generator's output and one (globals.css) started as one
+# and is hand-maintained now; either way the formatter has no say over them. design/README.md
+# says which is which.
 design/globals.css
 design/tokens.json
 design/contrast-report.json

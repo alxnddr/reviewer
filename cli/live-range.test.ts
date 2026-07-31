@@ -1,17 +1,12 @@
-import { execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { Writable } from "node:stream";
-import type { Application, StricliProcess } from "@stricli/core";
-import { run } from "@stricli/core";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { rangeDiffArgs } from "../src/shared/git-diff";
+import { rangeDiffArgs } from "../src/shared/node/git-diff";
 import type { ReviewArtifact, ReviewLayerInput } from "../src/shared/review";
 import { coverageOfPatch, type FileUniverse } from "../src/tools/review-coverage";
 import { artifactDiff, capturePatch, git } from "./git";
-import { app } from "./app";
-import { normalizeExitCode, type LocalContext } from "./context";
+import { FIXTURE_ENV, fixtureGit, runCli } from "./fixtures";
 
 // The live-range surface — `rvw diff` and the range resolution behind it — driven against a
 // real git fixture in a temp dir, the only way to prove the byte-stable capture and the exit-2
@@ -25,48 +20,6 @@ import { normalizeExitCode, type LocalContext } from "./context";
 // config lived in prose that could drift from the code; the parity assertion below is what
 // makes that impossible now.
 
-const FIXTURE_ENV = {
-  ...process.env,
-  GIT_CONFIG_GLOBAL: "/dev/null",
-  GIT_CONFIG_SYSTEM: "/dev/null",
-  GIT_AUTHOR_NAME: "Fixture",
-  GIT_AUTHOR_EMAIL: "fixture@test.local",
-  GIT_COMMITTER_NAME: "Fixture",
-  GIT_COMMITTER_EMAIL: "fixture@test.local",
-};
-
-function gitFixture(cwd: string, ...args: string[]): string {
-  return execFileSync("git", args, { cwd, encoding: "utf8", env: FIXTURE_ENV });
-}
-
-function capture(): { stream: Writable; text: () => string } {
-  const chunks: string[] = [];
-  const stream = new Writable({
-    write(chunk, _encoding, callback) {
-      chunks.push(String(chunk));
-      callback();
-    },
-  });
-  return { stream, text: () => chunks.join("") };
-}
-
-type CliResult = { code: number; stdout: string; stderr: string };
-
-async function runCli(
-  args: readonly string[],
-  application: Application<LocalContext> = app,
-): Promise<CliResult> {
-  const stdout = capture();
-  const stderr = capture();
-  const process: StricliProcess = { stdout: stdout.stream, stderr: stderr.stream, exitCode: null };
-  await run(application, args, { process });
-  return {
-    code: normalizeExitCode(process.exitCode),
-    stdout: stdout.text(),
-    stderr: stderr.text(),
-  };
-}
-
 let root: string;
 let repo: string;
 let baseSha: string;
@@ -76,20 +29,20 @@ beforeAll(() => {
   root = realpathSync(mkdtempSync(join(tmpdir(), "reviewer-live-range-")));
   repo = join(root, "work");
   mkdirSync(repo);
-  gitFixture(repo, "init", "-b", "main");
+  fixtureGit(repo, "init", "-b", "main");
 
   writeFileSync(join(repo, "alpha.ts"), "a1\na2\na3\n");
-  gitFixture(repo, "add", ".");
-  gitFixture(repo, "commit", "-m", "base");
-  baseSha = gitFixture(repo, "rev-parse", "HEAD").trim();
+  fixtureGit(repo, "add", ".");
+  fixtureGit(repo, "commit", "-m", "base");
+  baseSha = fixtureGit(repo, "rev-parse", "HEAD").trim();
 
   // alpha.ts: line 2 rewritten (deletion 2 / addition 2), line 4 appended (addition 4);
   // beta.ts added whole. Two changed files, both coverable.
   writeFileSync(join(repo, "alpha.ts"), "a1\na2 changed\na3\na4\n");
   writeFileSync(join(repo, "beta.ts"), "b1\nb2\n");
-  gitFixture(repo, "add", ".");
-  gitFixture(repo, "commit", "-m", "head");
-  headSha = gitFixture(repo, "rev-parse", "HEAD").trim();
+  fixtureGit(repo, "add", ".");
+  fixtureGit(repo, "commit", "-m", "head");
+  headSha = fixtureGit(repo, "rev-parse", "HEAD").trim();
 });
 
 afterAll(() => {
@@ -112,7 +65,7 @@ describe("rvw diff", () => {
     // The whole point of the verb. `capturePatch` is what `emit` and `check` gate with, so
     // equality here is the guarantee that an anchor authored from this output places: there is
     // one capture, not a documented incantation an agent runs alongside it.
-    const gated = capturePatch(repo, baseSha, headSha);
+    const gated = capturePatch(FIXTURE_ENV, repo, baseSha, headSha);
     if (!gated.ok) throw new Error(gated.message);
 
     const result = await runCli(["diff", ...range()]);
@@ -125,7 +78,7 @@ describe("rvw diff", () => {
   it("captures through the pinned wire format, whatever the ambient git config says", async () => {
     // `rangeDiffArgs` is the shared config the app's runner uses too. A drift between the two
     // would produce a patch whose paths or line numbers no longer match the authored anchors.
-    const direct = git(repo, rangeDiffArgs(baseSha, headSha));
+    const direct = git(FIXTURE_ENV, repo, rangeDiffArgs(baseSha, headSha));
     if (!direct.ok) throw new Error(direct.message);
     const result = await runCli(["diff", ...range()]);
     expect(result.stdout).toBe(direct.stdout);
@@ -148,7 +101,7 @@ describe("rvw diff", () => {
 
     // The spans are exactly what coverage treats as the universe: a draft that covers every
     // listed span reports 100%, none uncovered — the anchor authored from the listing lands.
-    const captured = capturePatch(repo, baseSha, headSha);
+    const captured = capturePatch(FIXTURE_ENV, repo, baseSha, headSha);
     if (!captured.ok) throw new Error(captured.message);
     const scored = coverageOfPatch(captured.patch, [{ ranges: everySpan(files) }]);
     if (!scored.ok) throw new Error("expected a report over the captured patch");
@@ -159,24 +112,20 @@ describe("rvw diff", () => {
   });
 
   it("defaults the whole range to the repo the caller is standing in", async () => {
-    const previous = process.cwd();
-    process.chdir(repo);
-    try {
-      const defaulted = await runCli(["diff"]);
-      expect(defaulted.code).toBe(0);
-      // `main` is checked out and has no upstream, so the base falls back to the repo's default
-      // branch — which is `main` itself, whose merge-base with HEAD is HEAD. An empty diff, and
-      // an honest one: the range says there is nothing between here and where this started.
-      expect(defaulted.stdout).toBe("");
+    // Where the caller is standing is a context field, so this is the repo the run is *given*
+    // rather than a `process.chdir` the whole worker would have shared.
+    const defaulted = await runCli(["diff"], { cwd: repo });
+    expect(defaulted.code).toBe(0);
+    // `main` is checked out and has no upstream, so the base falls back to the repo's default
+    // branch — which is `main` itself, whose merge-base with HEAD is HEAD. An empty diff, and
+    // an honest one: the range says there is nothing between here and where this started.
+    expect(defaulted.stdout).toBe("");
 
-      // Naming only what differs is the ergonomic the defaults exist for.
-      const fromBase = await runCli(["diff", "--base", baseSha]);
-      expect(fromBase.code).toBe(0);
-      expect(fromBase.stdout).toContain("alpha.ts");
-      expect(fromBase.stdout).toContain("beta.ts");
-    } finally {
-      process.chdir(previous);
-    }
+    // Naming only what differs is the ergonomic the defaults exist for.
+    const fromBase = await runCli(["diff", "--base", baseSha], { cwd: repo });
+    expect(fromBase.code).toBe(0);
+    expect(fromBase.stdout).toContain("alpha.ts");
+    expect(fromBase.stdout).toContain("beta.ts");
   });
 });
 
@@ -211,7 +160,7 @@ describe("live-range refusals (exit 2, clean message)", () => {
 
 describe("capture ↔ frozen-artifact parity", () => {
   it("captured patch coverage equals resolving a frozen artifact's diff and running the coverage core", () => {
-    const captured = capturePatch(repo, baseSha, headSha);
+    const captured = capturePatch(FIXTURE_ENV, repo, baseSha, headSha);
     if (!captured.ok) throw new Error(captured.message);
 
     const layers: ReviewLayerInput[] = [
@@ -238,7 +187,7 @@ describe("capture ↔ frozen-artifact parity", () => {
       comments: [],
       layers,
     };
-    const diff = artifactDiff(artifact);
+    const diff = artifactDiff(FIXTURE_ENV, artifact);
     if (!diff.ok) throw new Error(diff.message);
     const frozen = coverageOfPatch(diff.patch, artifact.layers);
     if (!frozen.ok) throw new Error("expected a frozen-artifact report");

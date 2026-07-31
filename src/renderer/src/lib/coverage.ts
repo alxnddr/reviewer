@@ -1,6 +1,7 @@
 import type { ReviewLayer } from "../../../shared/review";
+import { countLabel } from "../../../shared/plural";
 import { coverageOfFiles, type CoverageReport } from "../../../tools/review-coverage";
-import type { PatchFile } from "./diff/patch";
+import type { PatchFile } from "../../../shared/diff/patch";
 
 // Layer coverage for the app, computed — never read from an artifact field. The
 // numbers come from the *same* `coverageOfFiles` core the `rvw check --coverage` CLI uses, run
@@ -129,13 +130,9 @@ export function uncoveredLayerFrom(
     label: "Not covered by layers",
     // The reading-band body (LayerIntro falls back to `summary` since there is no
     // authored `description`): a plain sentence, no file links to resolve.
-    summary: `${count(unwalked.length, "file")} that no layer covers.`,
+    summary: `${countLabel(unwalked.length, "file")} that no layer covers.`,
     ranges,
   };
-}
-
-function count(n: number, noun: string): string {
-  return `${n} ${noun}${n === 1 ? "" : "s"}`;
 }
 
 /** The authored layers plus the inferred remainder — the single ordered list every

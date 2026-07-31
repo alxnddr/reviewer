@@ -2,18 +2,22 @@ import type { ReactElement } from "react";
 import { ChevronLeft, ChevronRight } from "lucide-react";
 import type { ReviewLayer } from "../../../shared/review";
 import type { FitToContentRefs } from "@/lib/fit-panel";
-import { isComplete, type ReadTally } from "@/lib/read-progress";
+import { isFullyRead, type ReadTally } from "@/lib/read-progress";
 import { Button } from "@/components/ui/button";
 import { TooltipHint } from "@/components/ui/tooltip";
 import { ReadRing, readLabel } from "@/components/ReadRing";
 import { Markdown } from "@/components/Markdown";
 import { cn } from "@/lib/utils";
-import { useReviewStore } from "@/stores/review";
 
 // A layer's long-form description read at reading width above the diff, not
 // crammed into the rail. Links resolve against the files actually in the diff
 // (the soloed subset), so a clickable chip always navigates to something on
 // screen and an absent reference is inert.
+//
+// A band, not a section: everything it draws and everything it fires comes from
+// `DiffScreen`, which already resolved which chapter this is and derived its ordinal,
+// tally and file set for the surface as a whole (the data rule, `ReviewRail.tsx`). It is
+// prop-driven for the same reason `DiffView` beside it is.
 
 type LayerIntroProps = {
   layer: ReviewLayer;
@@ -26,6 +30,9 @@ type LayerIntroProps = {
    * than at the last authored layer when an inferred one follows it. */
   hasPrev: boolean;
   hasNext: boolean;
+  /** Walk the effective order one step. The chevrons only ever move within the
+   * walkthrough, so the direction is all this band decides. */
+  onStepLayer: (direction: 1 | -1) => void;
   /** How much of this chapter's extent has been read — measured over exactly the files the
    * band is sitting above, so its ring and the rail's row for the same layer are one
    * number. Empty (`total: 0`) on a chapter whose files drifted out of the diff, which
@@ -36,6 +43,8 @@ type LayerIntroProps = {
   /** The files currently rendered in the diff (the soloed subset): both the link
    * resolution set and the navigation targets. */
   filePaths: string[];
+  /** Where a file link in the prose goes: the same focus move the tree's own rows make. */
+  onSelectFile: (path: string) => void;
   /** Whether the long-form prose is hidden; owned by the parent so it can drop the
    * resize panel when there is nothing to resize. */
   collapsed: boolean;
@@ -55,22 +64,21 @@ export function LayerIntro({
   ordinal,
   hasPrev,
   hasNext,
+  onStepLayer,
   readTally,
   onToggleRead,
   filePaths,
+  onSelectFile,
   collapsed,
   onToggleCollapsed,
   fill,
   fit,
 }: LayerIntroProps): ReactElement {
-  const stepLayer = useReviewStore((state) => state.stepLayer);
-  const selectFile = useReviewStore((state) => state.selectFile);
-
   // Falls back to the one-line summary when a layer carries no long-form prose — the
   // inferred not-covered layer is exactly that shape (coverage.ts). A layer that carries
   // neither is a bare label: the band is then its heading bar and nothing under it.
   const content = layer.description ?? layer.summary ?? null;
-  const complete = isComplete(readTally);
+  const complete = isFullyRead(readTally);
 
   return (
     <section
@@ -140,22 +148,20 @@ export function LayerIntro({
             the same place, in the app's densest row. */}
         <div className="ml-auto flex shrink-0 items-center gap-0.5">
           <Button
-            variant="ghost"
+            variant="chrome"
             size="icon-sm"
             aria-label="Previous layer"
             disabled={!hasPrev}
-            className="hover:bg-border/60 dark:hover:bg-border/60"
-            onClick={() => stepLayer(-1)}
+            onClick={() => onStepLayer(-1)}
           >
             <ChevronLeft aria-hidden="true" />
           </Button>
           <Button
-            variant="ghost"
+            variant="chrome"
             size="icon-sm"
             aria-label="Next layer"
             disabled={!hasNext}
-            className="hover:bg-border/60 dark:hover:bg-border/60"
-            onClick={() => stepLayer(1)}
+            onClick={() => onStepLayer(1)}
           >
             <ChevronRight aria-hidden="true" />
           </Button>
@@ -180,12 +186,11 @@ export function LayerIntro({
               }
             >
               <Button
-                variant="ghost"
+                variant="chrome"
                 size="icon-sm"
                 aria-pressed={complete}
                 aria-label={complete ? "Mark this layer unread" : "Mark this layer read"}
                 onClick={onToggleRead}
-                className="hover:bg-border/60 dark:hover:bg-border/60"
               >
                 <ReadRing tally={readTally} className="size-3.5" />
               </Button>
@@ -205,7 +210,7 @@ export function LayerIntro({
             <Markdown
               ref={fit?.contentRef}
               text={content}
-              links={{ paths: filePaths, onSelect: selectFile }}
+              links={{ paths: filePaths, onSelect: onSelectFile }}
               className="max-w-3xl space-y-2 px-6 text-base leading-relaxed text-foreground select-text"
             />
           </div>

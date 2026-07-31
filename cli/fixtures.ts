@@ -2,8 +2,13 @@ import { spawnSync } from "node:child_process";
 import { cpSync, existsSync, mkdirSync, mkdtempSync, realpathSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
+import { Writable } from "node:stream";
 import { fileURLToPath } from "node:url";
-import { MAX_PATCH_BYTES } from "../src/shared/git-diff";
+import type { Application, StricliProcess } from "@stricli/core";
+import { run } from "@stricli/core";
+import { MAX_PATCH_BYTES } from "../src/shared/node/git-diff";
+import { app } from "./app";
+import { normalizeExitCode, type LocalContext } from "./context";
 
 // The harness for the CLI suites that must run `rvw` the way an agent does: as the
 // distributed bundle, under `node`, from a git repo that is not this checkout and has no
@@ -12,6 +17,14 @@ import { MAX_PATCH_BYTES } from "../src/shared/git-diff";
 // composed in a foreign repo) — so the build-install-spawn harness lives here once rather than
 // being copied into each. Test-support only; nothing in `cli/index.ts`'s import graph reaches
 // it, so it is never bundled.
+//
+// The in-process suites share the other half of it: `FIXTURE_ENV` (the neutralized git
+// environment every fixture repo is built with, and now the environment the CLI itself spawns
+// git into under test), `testContext` (the `LocalContext` those suites drive `run(...)` with),
+// `runCli` (that drive itself, streams and exit code included), and `fixtureGit` (the plain
+// spawn a fixture repo is stamped with). The last two carried a copy per suite until they landed
+// here; the drift a copy invites is a suite quietly asserting against a different environment
+// than the one it built.
 
 // `fileURLToPath`, not `new URL(...).pathname` — the latter is not a filesystem path (it keeps
 // percent-escapes, and on Windows yields `/C:/…`), the same reason `cli/skills.ts` resolves its
@@ -35,10 +48,13 @@ export type RvwResult = {
   readonly stderr: string;
 };
 
-// Fixture repos are built with the developer's git config neutralized: a global
-// `diff.noprefix` or a rename-detection setting would otherwise decide what the patch looks
-// like, and the capture must pin the wire format itself.
-const FIXTURE_ENV = {
+/** Fixture repos are built with the developer's git config neutralized: a global
+ * `diff.noprefix` or a rename-detection setting would otherwise decide what the patch looks
+ * like, and the capture must pin the wire format itself. Exported because it is also the `env`
+ * a `testContext` hands the CLI, so the runs under test spawn git the same way the fixtures
+ * were built — and a suite that captures its own oracle patch (`capturePatch(FIXTURE_ENV, …)`)
+ * compares like with like. */
+export const FIXTURE_ENV = {
   ...process.env,
   GIT_CONFIG_GLOBAL: "/dev/null",
   GIT_CONFIG_SYSTEM: "/dev/null",
@@ -48,7 +64,75 @@ const FIXTURE_ENV = {
   GIT_COMMITTER_EMAIL: "fixture@test.local",
 };
 
-function git(cwd: string, ...args: readonly string[]): string {
+/** The context an in-process suite drives `run(...)` with: the capturing streams it built,
+ * every other seam defaulted to something hermetic, and whichever of them the test is actually
+ * about overridden. The defaults are as load-bearing as the overrides — `cwd` is a directory
+ * that is deliberately *not* a repo, so a verb reaching for a defaulted range fails loudly
+ * instead of quietly reviewing this checkout; `home` likewise points away from the developer's;
+ * `platform` is the one platform Reviewer ships for; and `readStdin` says "a terminal, nothing
+ * piped", so a suite that means to pipe a draft has to say so. */
+export function testContext(
+  process: StricliProcess,
+  overrides: Partial<LocalContext> = {},
+): LocalContext {
+  return {
+    process,
+    cwd: tmpdir(),
+    // `RVW_HOME` dropped rather than inherited: it *overrides* `home` in `reviewsDir`, so a
+    // developer who has it set would otherwise have an `--out`-less emit write into their real
+    // store no matter where `home` points. A suite that is about the override sets it back.
+    env: { ...FIXTURE_ENV, RVW_HOME: undefined },
+    platform: "darwin",
+    home: tmpdir(),
+    readStdin: () => ({ ok: false, reason: "tty" }),
+    ...overrides,
+  };
+}
+
+/** One in-process run's outcome, in the same three parts `RvwResult` reports for a spawned
+ * one: the exit code the entrypoint would have set, and the two channels kept apart, because
+ * "which stream did it say that on" is half of every assertion here. */
+export type CliResult = { code: number; stdout: string; stderr: string };
+
+/** A stream that keeps what was written to it, so a run's output is read back as the bytes a
+ * terminal would have received rather than through a spy on `write`. */
+function capture(): { stream: Writable; text: () => string } {
+  const chunks: string[] = [];
+  const stream = new Writable({
+    write(chunk, _encoding, callback) {
+      chunks.push(String(chunk));
+      callback();
+    },
+  });
+  return { stream, text: () => chunks.join("") };
+}
+
+/** Drive `rvw` the way the shipped entrypoint drives it — Stricli's `run` over a `LocalContext`
+ * — but against capturing streams, so the whole contract (0 ready / 1 problems / 2 cannot-run,
+ * and which channel carried the words) is asserted in-process with no spawn. `overrides` is the
+ * seam the run is about; `application` is only for the suites that stand up a trimmed or
+ * throwing application to prove the wiring *around* a command rather than a command. */
+export async function runCli(
+  args: readonly string[],
+  overrides: Partial<LocalContext> = {},
+  application: Application<LocalContext> = app,
+): Promise<CliResult> {
+  const stdout = capture();
+  const stderr = capture();
+  const process: StricliProcess = { stdout: stdout.stream, stderr: stderr.stream, exitCode: null };
+  await run(application, args, testContext(process, overrides));
+  return {
+    code: normalizeExitCode(process.exitCode),
+    stdout: stdout.text(),
+    stderr: stderr.text(),
+  };
+}
+
+/** Plain `git` in a fixture repo, under `FIXTURE_ENV` and throwing on a non-zero exit — a
+ * fixture that half-built itself must fail where it was built, not later as an assertion about
+ * something else. Named apart from `cli/git.ts`'s `git` on purpose: that one is the hardened
+ * runner under test, this one is the thing that stamps the history it runs against. */
+export function fixtureGit(cwd: string, ...args: readonly string[]): string {
   const result = spawnSync("git", args, { cwd, encoding: "utf8", env: FIXTURE_ENV });
   if (result.status !== 0) {
     throw new Error(`fixture git ${args.join(" ")} failed: ${result.stderr}`);
@@ -126,21 +210,21 @@ export function rvw(
  * a test whose assertions cannot be satisfied by the wrong commit; the *defaults* are what
  * `emit.test.ts` and `live-range.test.ts` drive against a two-branch fixture. */
 function commitPair(root: string, writeHead: (root: string) => void): ForeignRepo {
-  git(root, "add", "-A");
-  git(root, "commit", "-qm", "base");
-  const base = git(root, "rev-parse", "HEAD").trim();
+  fixtureGit(root, "add", "-A");
+  fixtureGit(root, "commit", "-qm", "base");
+  const base = fixtureGit(root, "rev-parse", "HEAD").trim();
 
   writeHead(root);
-  git(root, "add", "-A");
-  git(root, "commit", "-qm", "head");
-  const head = git(root, "rev-parse", "HEAD").trim();
+  fixtureGit(root, "add", "-A");
+  fixtureGit(root, "commit", "-qm", "head");
+  const head = fixtureGit(root, "rev-parse", "HEAD").trim();
 
   return { path: root, base, head };
 }
 
 function initRepo(prefix: string): string {
   const root = tempRoot(prefix);
-  git(root, "init", "-q", "-b", "main", ".");
+  fixtureGit(root, "init", "-q", "-b", "main", ".");
   return root;
 }
 
@@ -219,6 +303,6 @@ export function walkthroughRepo(): ForeignRepo {
     write(head, "docs/CHANGELOG.md", "# Changelog\n\n- the forgotten line\n");
     write(head, "src/engine.ts", `${ENGINE_HEAD}\n`);
     write(head, "src/util.ts", "u1\nu2 changed\nu3\n");
-    git(head, "mv", "src/old-name.ts", "src/new-name.ts");
+    fixtureGit(head, "mv", "src/old-name.ts", "src/new-name.ts");
   });
 }

@@ -49,7 +49,7 @@ export const CopyCommentPromptButton = memo(function CopyCommentPromptButton({
     // `start`, so the popup opens away from the two buttons beside it — the same rule that
     // gives Edit `center` and Discard `end`.
     <TooltipHint
-      content={copied ? "Copied" : <ShortcutHint action="Copy as a prompt" keys="⇧⌘C" />}
+      content={copied ? "Copied" : <ShortcutHint id="comment.copyPrompt" />}
       side="top"
       align="start"
     >
@@ -79,19 +79,17 @@ export function CopyAllCommentsPromptButton(): ReactElement {
 
   return (
     <TooltipHint
-      content={
-        copied ? "Copied" : <ShortcutHint action="Copy all comments as a prompt" keys="⌥⇧⌘C" />
-      }
+      content={copied ? "Copied" : <ShortcutHint id="comment.copyAllPrompts" />}
       side="right"
       align="center"
     >
       <Button
-        variant="ghost"
+        variant="chrome"
         size="icon-xs"
         aria-label={copied ? "All comments copied as a prompt" : "Copy all comments as a prompt"}
         // The ink and hover the Layers bar's own action takes, so the two bars' trailing
         // controls read as one thing in two places rather than as two decisions.
-        className="shrink-0 text-text-muted hover:bg-border/60 hover:text-foreground dark:hover:bg-border/60"
+        className="shrink-0 text-text-muted"
         onClick={() => void copyAllCommentsPrompt()}
       >
         <CopyGlyph copied={copied} />

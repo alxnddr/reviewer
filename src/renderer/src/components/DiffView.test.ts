@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
@@ -19,8 +19,25 @@ import { describe, expect, it } from "vitest";
 //      state is a render per line dragged over — and, through (1), a full portal rebuild
 //      per line. Nothing needs the mirror: the anchor and the `+`'s label are both read
 //      from `handleRef.current.getSelectedLines()` at the moment they are used.
+//
+// (1) is about the view, which is where the render props are written. (2) is about the
+// slots themselves, which live in `components/diff/` — asserting it over `DiffView.tsx`
+// alone would pass on a file that no longer contains a line of selection code. The
+// directory is read rather than listed so a slot module added later is covered without
+// anyone having to remember this file.
 
-const SOURCE = readFileSync(join(__dirname, "DiffView.tsx"), "utf8");
+const VIEW = "DiffView.tsx";
+const SLOT_DIR = "diff";
+
+const sources = new Map<string, string>([
+  [VIEW, readFileSync(join(__dirname, VIEW), "utf8")],
+  ...readdirSync(join(__dirname, SLOT_DIR))
+    .filter((name) => name.endsWith(".tsx"))
+    .map((name): [string, string] => [
+      `${SLOT_DIR}/${name}`,
+      readFileSync(join(__dirname, SLOT_DIR, name), "utf8"),
+    ]),
+]);
 
 /** A `renderSomething={…}` JSX attribute whose value closes on the same line — which a bare
  * identifier does and an inline arrow, opening a body that runs over the lines below, does
@@ -33,13 +50,23 @@ const SLOT_COUNT = 5;
 
 describe("DiffView render props", () => {
   it("passes every CodeView slot renderer by name, never as an inline arrow", () => {
-    const props = [...SOURCE.matchAll(RENDER_PROP)].map((match) => match.groups?.value ?? "");
+    const view = sources.get(VIEW) ?? "";
+    const props = [...view.matchAll(RENDER_PROP)].map((match) => match.groups?.value ?? "");
     expect(props).toHaveLength(SLOT_COUNT);
     // And nothing built on the spot inside the braces either (`{cond ? a : b}`).
     expect(props.filter((value) => !IDENTIFIER.test(value))).toEqual([]);
   });
 
   it("does not mirror Pierre's line selection into React state", () => {
-    expect(SOURCE).not.toContain("onSelectedLinesChange");
+    const mirrors = [...sources]
+      .filter(([, source]) => source.includes("onSelectedLinesChange"))
+      .map(([name]) => name);
+    expect(mirrors).toEqual([]);
+  });
+
+  it("reads the slot sources it asserts over", () => {
+    // The guard above is a `not.toContain`, so it passes on an empty read. The gutter `+`
+    // is the file it exists for: if that module stops being scanned, this fails first.
+    expect([...sources.keys()]).toContain("diff/DiffGutterAdd.tsx");
   });
 });

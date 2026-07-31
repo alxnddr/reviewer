@@ -242,7 +242,10 @@ describe("openReviewFromPath", () => {
 
     const response = await openReviewFromPath(runner, store, emptyProgress(), path);
 
-    expect(response).toEqual({ ok: false, failure: { code: "invalidContent" } });
+    expect(response).toEqual({
+      ok: false,
+      failure: { code: "invalidContent", reason: expect.stringContaining("JSON") },
+    });
     expect(createFromReview).not.toHaveBeenCalled();
   });
 });

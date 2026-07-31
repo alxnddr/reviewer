@@ -1,5 +1,5 @@
 import { assertNever } from "../../../shared/assert";
-import type { ReviewSaveFailure } from "../../../shared/review-save";
+import type { ReviewSaveFailure } from "../../../shared/review-ipc";
 
 /** Why an export did not complete. Two origins the reviewer must be able to tell
  * apart: `write` is main's typed fs failure (the save sheet ran, the disk write

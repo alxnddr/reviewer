@@ -1,8 +1,10 @@
-import { useEffect, useMemo, type ReactElement } from "react";
+import { useMemo, type ReactElement } from "react";
 import { ArrowRight } from "lucide-react";
 import type { Comment, ReviewLayer } from "../../../shared/review";
+import { countLabel } from "../../../shared/plural";
 import { buildOverview } from "@/lib/overview";
 import { NO_READ_FILES } from "@/lib/read-progress";
+import { useScrollIntoViewById } from "@/lib/use-scroll-into-view";
 import { Button } from "@/components/ui/button";
 import { GLASS_PRIMARY } from "@/components/Glass";
 import { ReadRing } from "@/components/ReadRing";
@@ -27,10 +29,6 @@ import { selectActiveSlice, useReviewStore } from "@/stores/review";
 // Stable empties so the selectors return one reference for a session with none.
 const EMPTY_COMMENTS: Comment[] = [];
 const EMPTY_LAYERS: ReviewLayer[] = [];
-
-function countLabel(n: number, noun: string): string {
-  return `${n} ${noun}${n === 1 ? "" : "s"}`;
-}
 
 /** The one `·`-separated fact row under the title — the shape of the change at a glance.
  * Every number is measured against the diff on screen; the ones that need a loaded diff are
@@ -77,16 +75,16 @@ export function OverviewScreen(): ReactElement | null {
   // page: the doc is a hub the reader returns to repeatedly, and re-finding their place
   // every time is the friction that would make them stop coming back. On the first open
   // there is no last layer, so the doc simply starts at its title.
-  useEffect(() => {
-    if (lastChapterId === null) {
-      return;
-    }
-    document.getElementById(layerSectionDomId(lastChapterId))?.scrollIntoView({ block: "start" });
-    // On mount and whenever the target changes — which only ever happens through explicit
-    // navigation (entering a layer, or a rail heading asking for its section), never
-    // through reading. So this lands the reader somewhere they asked to be and then leaves
-    // their scrolling alone.
-  }, [lastChapterId]);
+  //
+  // On mount and whenever the target changes — which only ever happens through explicit
+  // navigation (entering a layer, or a rail heading asking for its section), never through
+  // reading. So this lands the reader somewhere they asked to be and then leaves their
+  // scrolling alone.
+  useScrollIntoViewById(
+    lastChapterId === null ? null : layerSectionDomId(lastChapterId),
+    { block: "start" },
+    [lastChapterId],
+  );
 
   const files = diff !== null && diff.phase === "loaded" ? diff.files : null;
   const model = useMemo(

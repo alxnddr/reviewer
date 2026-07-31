@@ -7,6 +7,8 @@ import type { Session } from "../../shared/session";
 // macOS `open-file` can fire before `ready` on a cold launch, so paths queue and
 // drain exactly once the window and store exist; the drain is serialized so two
 // fast drops each land as their own session rather than racing the shared store.
+// The window existing is not the same as its page being able to hear, so the push
+// waits on that too — two gates, one for the store and one for the renderer.
 // Extracted from index.ts so this ordering is unit-tested without a live app.
 
 export type ReviewOpenQueueDeps = {
@@ -16,6 +18,10 @@ export type ReviewOpenQueueDeps = {
   createWindow: () => void;
   /** Bring the existing window forward (restore if minimized). */
   focusWindow: () => void;
+  /** Resolves once the window's page can receive a push. Awaited before every notify: on a
+   * cold start `hasWindow()` is true the instant the window object exists, and a send to a
+   * page that has not loaded is dropped without a trace. */
+  whenWindowReady: () => Promise<void>;
   /** Payload-free `sessionsChanged` to every window — the one main→renderer push. */
   notifySessionsChanged: () => void;
 };
@@ -43,6 +49,10 @@ export function createReviewOpenQueue(deps: ReviewOpenQueueDeps): ReviewOpenQueu
     deps.focusWindow();
     // A bad path still focuses the app but has nothing to re-list.
     if (session !== null) {
+      // Waited on here rather than at markReady, because the import is what races the page
+      // load: a fast one has to hold its push, a slow one finds the page ready and this
+      // costs a resolved promise.
+      await deps.whenWindowReady();
       deps.notifySessionsChanged();
     }
   }

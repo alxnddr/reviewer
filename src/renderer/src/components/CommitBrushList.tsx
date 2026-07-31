@@ -10,6 +10,7 @@ import {
 } from "react";
 import { defaultRangeExtractor, useVirtualizer } from "@tanstack/react-virtual";
 import type { LogEntry } from "../../../shared/git";
+import { clamp } from "../../../shared/clamp";
 import {
   RAIL_ACTIVE_ITEM,
   RAIL_LIST,
@@ -265,9 +266,9 @@ export function CommitBrushList({
     if (overshoot <= 0) {
       return;
     }
-    const step = Math.min(Math.max(overshoot / 2, 2), 24);
+    const step = clamp(overshoot / 2, 2, 24);
     list.scrollTop += pastTop > 0 ? -step : step;
-    const clampedY = Math.min(Math.max(point.y, rect.top + 4), rect.bottom - 4);
+    const clampedY = clamp(point.y, rect.top + 4, rect.bottom - 4);
     extendAtPoint(point.x, clampedY);
     dragScrollFrameRef.current = requestAnimationFrame(dragScrollStep);
   };

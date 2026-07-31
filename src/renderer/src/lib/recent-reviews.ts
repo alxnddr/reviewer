@@ -1,9 +1,10 @@
-import type { RecentReview } from "../../../shared/recent-reviews";
+import type { RecentReview } from "../../../shared/review-ipc";
+import { clamp } from "../../../shared/clamp";
 import { shortRef } from "./refs";
 
 // The recents list's own vocabulary: what a row is called, what a search runs against, and
 // which rows a query keeps. Pure and headless so the picker's behaviour is proven without
-// mounting it — the same posture as `layers.ts` and `overview.ts`.
+// mounting it — the same posture as `shared/layers.ts` and `overview.ts`.
 
 /** The file's own name, for a row whose artifact could not be read and for the search
  * haystack. Everything in this list is an absolute path from main, so the last segment is the
@@ -43,7 +44,9 @@ export function showsRange(review: RecentReview): boolean {
  * this list comes out of one directory, so the shared prefix contributes nothing but false
  * matches — and under a subsequence matcher it contributes a lot of them, since almost any
  * short query is a subsequence of a long absolute path. Typing "api" matched all six rows
- * before this was narrowed. */
+ * before this was narrowed.
+ *
+ * @internal Exported for its own unit test only — `filterRecents` is the one caller. */
 export function recentSearchText(review: RecentReview): string {
   const name = recentFileName(review.path);
   const summary = review.summary;
@@ -145,5 +148,5 @@ export function stepIndex(current: number, delta: number, count: number): number
   if (count === 0) {
     return -1;
   }
-  return Math.min(Math.max(current + delta, 0), count - 1);
+  return clamp(current + delta, 0, count - 1);
 }

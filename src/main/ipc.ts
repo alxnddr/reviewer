@@ -1,14 +1,4 @@
-import * as z from "zod";
-import { CliInstallResult, CliStatus } from "../shared/cli";
-import { ThemeId } from "../shared/contracts";
 import { IpcChannel } from "../shared/ipc";
-import {
-  Session,
-  SessionCreateRequest,
-  SessionIdRequest,
-  SessionOrderRequest,
-  SessionSnapshot,
-} from "../shared/session";
 import { cliStatus, installCli } from "./cli-install";
 import { registerGitIpcHandlers } from "./git/handlers";
 import type { GitRunner } from "./git/runner";
@@ -25,92 +15,58 @@ export function registerIpcHandlers(
   sessionStore: SessionStore,
   progressStore: ProgressStore,
 ): void {
-  registerIpcHandler(IpcChannel.themeGet, { request: z.void(), response: ThemeId }, () => {
+  registerIpcHandler(IpcChannel.themeGet, () => {
     return getThemeSelection();
   });
 
-  registerIpcHandler(IpcChannel.themeSet, { request: ThemeId, response: z.void() }, (selection) => {
+  registerIpcHandler(IpcChannel.themeSet, (selection) => {
     setThemeSelection(selection);
   });
 
-  registerIpcHandler(IpcChannel.cliStatus, { request: z.void(), response: CliStatus }, () =>
-    cliStatus(),
-  );
+  registerIpcHandler(IpcChannel.cliStatus, () => cliStatus());
 
-  registerIpcHandler(IpcChannel.cliInstall, { request: z.void(), response: CliInstallResult }, () =>
-    installCli(),
-  );
+  registerIpcHandler(IpcChannel.cliInstall, () => installCli());
 
-  registerIpcHandler(IpcChannel.onboardingGet, { request: z.void(), response: z.boolean() }, () =>
-    hasOnboarded(),
-  );
+  registerIpcHandler(IpcChannel.onboardingGet, () => hasOnboarded());
 
-  registerIpcHandler(
-    IpcChannel.onboardingComplete,
-    { request: z.void(), response: z.void() },
-    () => {
-      markOnboarded();
-    },
-  );
+  registerIpcHandler(IpcChannel.onboardingComplete, () => {
+    markOnboarded();
+  });
 
   registerGitIpcHandlers(gitRunner);
   registerReviewIpcHandlers(gitRunner, sessionStore, progressStore);
   registerReviewSaveHandlers();
 
-  registerIpcHandler(
-    IpcChannel.sessionsList,
-    { request: z.void(), response: SessionSnapshot },
-    () => sessionStore.list(),
-  );
+  registerIpcHandler(IpcChannel.sessionsList, () => sessionStore.list());
 
-  registerIpcHandler(
-    IpcChannel.sessionsCreate,
-    { request: SessionCreateRequest, response: Session },
-    (request) => sessionStore.create(request.source),
-  );
+  registerIpcHandler(IpcChannel.sessionsCreate, (request) => sessionStore.create(request.source));
 
-  registerIpcHandler(
-    IpcChannel.sessionsUpdate,
-    { request: Session, response: z.void() },
-    (session) => {
-      sessionStore.update(session);
-      // The session is authoritative while its tab is open; the artifact's record is a mirror
-      // of it, so it is refreshed from the same debounced write-back rather than on a channel
-      // of its own — one message, one truth, and no way for the two to disagree about what
-      // was read. Only review sessions have somewhere to mirror *to*; a plain repo session's
-      // progress lives in the session and nowhere else. The store skips writes that did not
-      // move the marks, so a scroll costs nothing here.
-      if (session.reviewPath !== null) {
-        void progressStore.write(session.reviewPath, {
-          readFiles: session.readFiles,
-          collapsedFiles: session.collapsedFiles,
-          readTotal: session.readTotal,
-        });
-      }
-    },
-  );
+  registerIpcHandler(IpcChannel.sessionsUpdate, (session) => {
+    sessionStore.update(session);
+    // The session is authoritative while its tab is open; the artifact's record is a mirror
+    // of it, so it is refreshed from the same debounced write-back rather than on a channel
+    // of its own — one message, one truth, and no way for the two to disagree about what
+    // was read. Only review sessions have somewhere to mirror *to*; a plain repo session's
+    // progress lives in the session and nowhere else. The store skips writes that did not
+    // move the marks, so a scroll costs nothing here.
+    if (session.reviewPath !== null) {
+      void progressStore.write(session.reviewPath, {
+        readFiles: session.readFiles,
+        collapsedFiles: session.collapsedFiles,
+        readTotal: session.readTotal,
+      });
+    }
+  });
 
-  registerIpcHandler(
-    IpcChannel.sessionsDelete,
-    { request: SessionIdRequest, response: z.void() },
-    (request) => {
-      sessionStore.delete(request.id);
-    },
-  );
+  registerIpcHandler(IpcChannel.sessionsDelete, (request) => {
+    sessionStore.delete(request.id);
+  });
 
-  registerIpcHandler(
-    IpcChannel.sessionsSetActive,
-    { request: SessionIdRequest, response: z.void() },
-    (request) => {
-      sessionStore.setActive(request.id);
-    },
-  );
+  registerIpcHandler(IpcChannel.sessionsSetActive, (request) => {
+    sessionStore.setActive(request.id);
+  });
 
-  registerIpcHandler(
-    IpcChannel.sessionsReorder,
-    { request: SessionOrderRequest, response: z.void() },
-    (request) => {
-      sessionStore.reorder(request.ids);
-    },
-  );
+  registerIpcHandler(IpcChannel.sessionsReorder, (request) => {
+    sessionStore.reorder(request.ids);
+  });
 }

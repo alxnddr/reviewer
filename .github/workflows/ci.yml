@@ -11,6 +11,8 @@ concurrency:
 
 jobs:
   check:
+    # The lint/typecheck/test lane is platform-independent, so it runs on the cheap runner.
+    # macOS is covered by `package` below, which is where platform actually matters.
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -25,8 +27,42 @@ jobs:
       - name: Typecheck, lint, format
         run: bun run check
 
+      # Explicit, and before the tests: vitest's globalSetup builds the same bundle, so a broken
+      # `build:cli` would otherwise surface as a confusing test failure rather than a build one.
+      - name: Build CLI bundle
+        run: bun run build:cli
+
       - name: Test
         run: bun run test
 
       - name: Build (smoke)
         run: bun run build
+
+  package:
+    # The app is macOS-only (build:mac, .icns, entitlements) and the release workflow runs on
+    # macos-latest, so packaging breakage is only discoverable here — otherwise it waits for a
+    # tag. `--dir` stops at the unpacked .app: the .dmg adds minutes and proves nothing this
+    # job asserts on.
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install
+        run: bun install --frozen-lockfile
+
+      - name: Build CLI + app
+        run: bun run build:cli && bun run build
+
+      - name: Package (unpacked .app)
+        # No signing certificate on CI: disable auto-discovery so electron-builder produces an
+        # unsigned, ad-hoc-signed build instead of failing. Same reason as release.yml.
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: "false"
+        run: bunx electron-builder --mac --dir
+
+      - name: Verify packaged contents
+        run: bun run check:package

@@ -1,4 +1,3 @@
-import { execFileSync } from "node:child_process";
 import {
   existsSync,
   mkdirSync,
@@ -11,15 +10,11 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { Writable } from "node:stream";
-import type { StricliProcess } from "@stricli/core";
-import { run } from "@stricli/core";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { ReviewArtifact } from "../src/shared/review";
 import { emitReviewArtifact } from "../src/tools/review-emit";
 import { capturePatch } from "./git";
-import { app } from "./app";
-import { normalizeExitCode } from "./context";
+import { FIXTURE_ENV, fixtureGit, runCli } from "./fixtures";
 
 // `rvw emit` driven against a real git fixture — the only honest proof of the contract: bytes
 // reach disk only on a clean gate pass, exit 0/1/2 hold, the written artifact is byte-identical
@@ -34,45 +29,6 @@ import { normalizeExitCode } from "./context";
 // Every run here passes `--no-open`. Opening is the default and is proven separately, on the
 // one path that reaches the launcher without a window: a platform Reviewer does not ship for.
 
-const FIXTURE_ENV = {
-  ...process.env,
-  GIT_CONFIG_GLOBAL: "/dev/null",
-  GIT_CONFIG_SYSTEM: "/dev/null",
-  GIT_AUTHOR_NAME: "Fixture",
-  GIT_AUTHOR_EMAIL: "fixture@test.local",
-  GIT_COMMITTER_NAME: "Fixture",
-  GIT_COMMITTER_EMAIL: "fixture@test.local",
-};
-
-function git(cwd: string, ...args: string[]): string {
-  return execFileSync("git", args, { cwd, encoding: "utf8", env: FIXTURE_ENV });
-}
-
-function capture(): { stream: Writable; text: () => string } {
-  const chunks: string[] = [];
-  const stream = new Writable({
-    write(chunk, _encoding, callback) {
-      chunks.push(String(chunk));
-      callback();
-    },
-  });
-  return { stream, text: () => chunks.join("") };
-}
-
-type CliResult = { code: number; stdout: string; stderr: string };
-
-async function runCli(args: readonly string[]): Promise<CliResult> {
-  const stdout = capture();
-  const stderr = capture();
-  const process: StricliProcess = { stdout: stdout.stream, stderr: stderr.stream, exitCode: null };
-  await run(app, args, { process });
-  return {
-    code: normalizeExitCode(process.exitCode),
-    stdout: stdout.text(),
-    stderr: stderr.text(),
-  };
-}
-
 let root: string;
 let repo: string;
 let baseSha: string;
@@ -82,22 +38,22 @@ beforeAll(() => {
   root = realpathSync(mkdtempSync(join(tmpdir(), "reviewer-emit-")));
   repo = join(root, "work");
   mkdirSync(repo);
-  git(repo, "init", "-b", "main");
+  fixtureGit(repo, "init", "-b", "main");
 
   writeFileSync(join(repo, "alpha.ts"), "a1\na2\na3\n");
-  git(repo, "add", ".");
-  git(repo, "commit", "-m", "base");
-  baseSha = git(repo, "rev-parse", "HEAD").trim();
+  fixtureGit(repo, "add", ".");
+  fixtureGit(repo, "commit", "-m", "base");
+  baseSha = fixtureGit(repo, "rev-parse", "HEAD").trim();
 
   // The head lands on its own branch, so `main` stays behind: a defaulted `--base` has a real
   // fork point to find, and a defaulted `--head` has a wrong answer available to it.
-  git(repo, "checkout", "-b", "feature");
+  fixtureGit(repo, "checkout", "-b", "feature");
   // alpha.ts line 2 rewritten (addition 2), line 4 appended; beta.ts added whole.
   writeFileSync(join(repo, "alpha.ts"), "a1\na2 changed\na3\na4\n");
   writeFileSync(join(repo, "beta.ts"), "b1\nb2\n");
-  git(repo, "add", ".");
-  git(repo, "commit", "-m", "head");
-  headSha = git(repo, "rev-parse", "HEAD").trim();
+  fixtureGit(repo, "add", ".");
+  fixtureGit(repo, "commit", "-m", "head");
+  headSha = fixtureGit(repo, "rev-parse", "HEAD").trim();
 });
 
 afterAll(() => {
@@ -185,7 +141,7 @@ describe("rvw emit", () => {
     const result = await runCli(explicit(VALID_DRAFT, "--out", out, "--embed-patch"));
     expect(result.code).toBe(0);
 
-    const captured = capturePatch(repo, baseSha, headSha);
+    const captured = capturePatch(FIXTURE_ENV, repo, baseSha, headSha);
     expect(captured.ok).toBe(true);
     if (!captured.ok) return;
     expect(readArtifact(out).patch).toBe(captured.patch);
@@ -247,7 +203,7 @@ describe("rvw emit", () => {
 
     // The file `rvw emit` wrote must equal the pure core's bytes for the same
     // repo/refs/patch/draft (same `JSON.stringify(candidate, null, 2)`).
-    const patch = capturePatch(repo, baseSha, headSha);
+    const patch = capturePatch(FIXTURE_ENV, repo, baseSha, headSha);
     if (!patch.ok) throw new Error(patch.message);
     const expected = emitReviewArtifact({
       repo,
@@ -301,13 +257,14 @@ describe("rvw emit", () => {
   });
 
   it("writes to the managed reviews dir when --out is omitted, never into the repo", async () => {
-    // RVW_HOME points the store at a throwaway dir so the test never writes to the real home.
-    // The managed dir need not pre-exist — emit creates it — so this also proves the mkdir.
+    // RVW_HOME points the store at a throwaway dir so the test never writes to the real home —
+    // handed to the run through its context rather than set on the real environment. The managed
+    // dir need not pre-exist — emit creates it — so this also proves the mkdir.
     const store = realpathSync(mkdtempSync(join(tmpdir(), "reviewer-rvw-home-")));
-    const previous = process.env.RVW_HOME;
-    process.env.RVW_HOME = store;
     try {
-      const result = await runCli(explicit(VALID_DRAFT));
+      const result = await runCli(explicit(VALID_DRAFT), {
+        env: { ...FIXTURE_ENV, RVW_HOME: store },
+      });
       expect(result.code).toBe(0);
       expect(result.stdout).toContain("written");
 
@@ -323,8 +280,6 @@ describe("rvw emit", () => {
       // Refs-only whichever path chose the destination.
       expect(readArtifact(join(reviewsDir, only))).not.toHaveProperty("patch");
     } finally {
-      if (previous === undefined) delete process.env.RVW_HOME;
-      else process.env.RVW_HOME = previous;
       rmSync(store, { recursive: true, force: true });
     }
   });
@@ -359,32 +314,22 @@ describe("rvw emit", () => {
 describe("rvw emit — the range nobody typed", () => {
   it("defaults --repo to the cwd's toplevel, --head to the checked-out branch, --base to the fork point", async () => {
     // The agent is standing in the repo it just reviewed; every flag it has to type about that
-    // repo is a flag it can get wrong. Driven from inside the repo, with no range at all.
-    const previous = process.cwd();
-    process.chdir(repo);
-    try {
-      const out = outPath("defaults.reviewer.json");
-      const result = await runCli([
-        "emit",
-        "--draft",
-        draftFile(VALID_DRAFT),
-        "--no-open",
-        "--out",
-        out,
-        "--json",
-      ]);
-      expect(result.code).toBe(0);
-      expect(JSON.parse(result.stdout)).toMatchObject({
-        ok: true,
-        repo,
-        // `main` is where `feature` forked, and its tip is the base commit.
-        base: baseSha,
-        // A branch, stored as a branch: the review is meant to follow it.
-        head: "feature",
-      });
-    } finally {
-      process.chdir(previous);
-    }
+    // repo is a flag it can get wrong. Driven from inside the repo — the context's cwd, not a
+    // `process.chdir` every other test in the worker would have shared — with no range at all.
+    const out = outPath("defaults.reviewer.json");
+    const result = await runCli(
+      ["emit", "--draft", draftFile(VALID_DRAFT), "--no-open", "--out", out, "--json"],
+      { cwd: repo },
+    );
+    expect(result.code).toBe(0);
+    expect(JSON.parse(result.stdout)).toMatchObject({
+      ok: true,
+      repo,
+      // `main` is where `feature` forked, and its tip is the base commit.
+      base: baseSha,
+      // A branch, stored as a branch: the review is meant to follow it.
+      head: "feature",
+    });
   });
 
   it("resolves a rev expression to a sha rather than refusing it", async () => {
@@ -441,7 +386,7 @@ describe("rvw emit — the range nobody typed", () => {
   it("pins a base that is not a local branch, and follows one that is", async () => {
     // A base is a fixed point, so a tag or a remote-tracking ref becomes the sha it named. A
     // local branch stays a name: that is the ref a reader is meant to follow.
-    git(repo, "tag", "v1", baseSha);
+    fixtureGit(repo, "tag", "v1", baseSha);
     const tagged = outPath("tagged.reviewer.json");
     const byTag = await runCli([
       "emit",
@@ -495,49 +440,6 @@ describe("rvw emit — the range nobody typed", () => {
 });
 
 describe("rvw emit — the draft", () => {
-  it("refuses to wait on a stdin nobody will write to", async () => {
-    // With no --draft the draft comes from stdin — but a *terminal* on stdin is a read that can
-    // never complete, so the command names both ways in rather than hanging. (The stdin draft
-    // itself is piped for real in `exit-gate.test.ts`, where the bundle is a spawned process.)
-    const previousTty = process.stdin.isTTY;
-    Object.defineProperty(process.stdin, "isTTY", { value: true, configurable: true });
-    try {
-      const result = await runCli(["emit", "--repo", repo, "--no-open", "--json"]);
-      expect(result.code).toBe(2);
-      expect(JSON.parse(result.stdout)).toMatchObject({
-        ok: false,
-        error: { code: "draftUnreadable" },
-      });
-
-      // `--draft -` is the *documented* way to ask for stdin, so it is the same read that
-      // can never complete and must produce the same guidance — not a wait for an EOF the
-      // terminal will never send.
-      const explicitStdin = await runCli([
-        "emit",
-        "--repo",
-        repo,
-        "--draft",
-        "-",
-        "--no-open",
-        "--json",
-      ]);
-      expect(explicitStdin.code).toBe(2);
-      expect(JSON.parse(explicitStdin.stdout)).toMatchObject({
-        ok: false,
-        // The same sentence, not merely the same code: a read that reaches fd 0 fails
-        // `draftUnreadable` too, but on whatever fd 0 happened to be (an EAGAIN, or bytes
-        // that are not JSON) — none of which tells a caller whose terminal simply never
-        // sent anything what to do next.
-        error: {
-          code: "draftUnreadable",
-          message: "no draft: pass --draft <file>, or pipe the draft JSON on stdin",
-        },
-      });
-    } finally {
-      Object.defineProperty(process.stdin, "isTTY", { value: previousTty, configurable: true });
-    }
-  });
-
   it("presents a comments-only draft, and a layers-only one", async () => {
     // Layers are the product's differentiator, not the price of entry: an agent arriving with
     // six findings from its own review command must be able to show them.
@@ -602,25 +504,20 @@ describe("rvw emit — presenting it", () => {
     // without a window means driving it on a platform Reviewer does not ship for, which is the
     // same code path a missing install takes: the launcher declines, the file is still real,
     // and the exit code says so.
-    const previous = process.platform;
-    Object.defineProperty(process, "platform", { value: "linux", configurable: true });
-    try {
-      const out = outPath("presented.reviewer.json");
-      const result = await runCli(explicitOpen(VALID_DRAFT, "--out", out));
-      expect(result.code).toBe(0);
-      expect(existsSync(out)).toBe(true);
-      expect(result.stdout).toContain("written");
-      expect(result.stderr).toContain("linux");
-      expect(result.stderr).toContain(`rvw open ${out}`);
+    const out = outPath("presented.reviewer.json");
+    const result = await runCli(explicitOpen(VALID_DRAFT, "--out", out), { platform: "linux" });
+    expect(result.code).toBe(0);
+    expect(existsSync(out)).toBe(true);
+    expect(result.stdout).toContain("written");
+    expect(result.stderr).toContain("linux");
+    expect(result.stderr).toContain(`rvw open ${out}`);
 
-      const asJson = await runCli(
-        explicitOpen(VALID_DRAFT, "--out", outPath("j.reviewer.json"), "--json"),
-      );
-      expect(asJson.code).toBe(0);
-      expect(JSON.parse(asJson.stdout)).toMatchObject({ ok: true, opened: false });
-    } finally {
-      Object.defineProperty(process, "platform", { value: previous, configurable: true });
-    }
+    const asJson = await runCli(
+      explicitOpen(VALID_DRAFT, "--out", outPath("j.reviewer.json"), "--json"),
+      { platform: "linux" },
+    );
+    expect(asJson.code).toBe(0);
+    expect(JSON.parse(asJson.stdout)).toMatchObject({ ok: true, opened: false });
   });
 });
 

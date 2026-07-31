@@ -1,9 +1,14 @@
 // The class names that go on the app's frosted-glass surface; the surface itself is in
-// index.css under `[data-glass]`. Two surfaces wear it — the overview's action island and
-// the comment stepper — and they are the app's only controls that float over the reader's
-// content for as long as they are working rather than appearing and going away. That is the
-// rule for when glass is the right answer: a transient overlay can afford to be an opaque
-// slab because it is gone in a moment; a persistent one would be a hole in the page.
+// index.css under `[data-glass]`, which also carries the long note on how it is built.
+//
+// Six surfaces wear it, in two families. The persistent floating controls — the overview's
+// action island, the comment stepper, the "rvw is not installed" notice — float over the
+// reader's content for as long as they are working, and an opaque slab there is a hole in the
+// page for the duration. The held-up panels — the first-run card, and through `ui/dialog.tsx`'s
+// glass variant the shortcut sheet and the recents picker — are over that content only for a
+// moment, but the work staying visible behind them is why they are held up at all. The rule is
+// the same either way: glass wherever what is behind the surface still has to be there.
+// Anything that appears, is read, and is gone is an opaque slab instead (`ui/surface.ts`).
 //
 // This file used to also export an SVG `feDisplacementMap` filter for the panel to reference
 // from `backdrop-filter: url(#…)`, giving the glass real refraction rather than a flat blur.

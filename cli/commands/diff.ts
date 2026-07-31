@@ -3,7 +3,7 @@ import { changedLineUniverse } from "../../src/tools/review-coverage";
 import { capturePatch } from "../git";
 import { resolveRange } from "../range";
 import { EXIT_READY, type LocalContext } from "../context";
-import { writeCannotRun } from "../errors";
+import { writeCannotRun, writeJson } from "../errors";
 
 // `rvw diff` — the diff the gate will judge against, printed. That is the whole idea, and it
 // exists because the alternative was prose: the authoring instructions used to spell out
@@ -76,21 +76,21 @@ export const diffCommand = buildCommand<DiffFlags, [], LocalContext>({
     positional: { kind: "tuple", parameters: [] },
   },
   func(this: LocalContext, flags: DiffFlags): void {
-    const resolved = resolveRange(flags, process.cwd());
+    const resolved = resolveRange(this.env, flags, this.cwd);
     if (!resolved.ok) {
       writeCannotRun(this, flags.json, resolved.error);
       return;
     }
     const { repoPath, base, head } = resolved.range;
 
-    const capture = capturePatch(repoPath, base, head);
+    const capture = capturePatch(this.env, repoPath, base, head);
     if (!capture.ok) {
       writeCannotRun(this, flags.json, { code: "gitFailed", message: capture.message });
       return;
     }
 
     if (flags.json === true) {
-      this.process.stdout.write(`${JSON.stringify(changedLineUniverse(capture.patch), null, 2)}\n`);
+      writeJson(this, changedLineUniverse(capture.patch));
     } else {
       // Verbatim, and nothing else on the channel — no header naming the range, because the
       // point of this verb is that its stdout *is* a patch, pipeable into anything that reads

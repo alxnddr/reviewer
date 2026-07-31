@@ -1,3 +1,5 @@
+import { join } from "node:path";
+import { pathToFileURL } from "node:url";
 import { describe, expect, it, vi } from "vitest";
 import { IpcChannel } from "../../shared/ipc";
 import type { GitRunner } from "./runner";
@@ -22,6 +24,13 @@ vi.mock("electron", () => ({
 }));
 
 const { registerGitIpcHandlers } = await import("./handlers");
+
+// The registry checks who is invoking before it parses what they sent, so every call here
+// carries a frame that looks like the page window.ts loads: the top frame of the built
+// bundle. Without it these suites would pass for the wrong reason — a rejected sender is
+// also a rejected promise.
+const SENDER_FRAME = { url: pathToFileURL(join(__dirname, "../../renderer/index.html")).href };
+const trustedEvent = { senderFrame: SENDER_FRAME, sender: { mainFrame: SENDER_FRAME } };
 
 function spyRunner(): { runner: GitRunner; run: ReturnType<typeof vi.fn> } {
   const run = vi.fn();
@@ -81,7 +90,7 @@ describe("git:diff IPC boundary", () => {
     const { runner, run } = spyRunner();
     const handler = diffHandler(runner);
 
-    await expect(handler({}, request)).rejects.toThrow();
+    await expect(handler(trustedEvent, request)).rejects.toThrow();
     expect(run).not.toHaveBeenCalled();
   });
 
@@ -90,7 +99,7 @@ describe("git:diff IPC boundary", () => {
     run.mockResolvedValue({ ok: true, stdout: "" });
     const handler = diffHandler(runner);
 
-    await handler({}, { repoPath: "/repo", selection: { kind: "uncommitted" } });
+    await handler(trustedEvent, { repoPath: "/repo", selection: { kind: "uncommitted" } });
     expect(run).toHaveBeenCalled();
   });
 });
@@ -150,7 +159,7 @@ describe("git:file-contents IPC boundary", () => {
     const { runner, run } = spyRunner();
     const handler = fileContentsHandler(runner);
 
-    await expect(handler({}, request)).rejects.toThrow();
+    await expect(handler(trustedEvent, request)).rejects.toThrow();
     expect(run).not.toHaveBeenCalled();
   });
 
@@ -159,10 +168,11 @@ describe("git:file-contents IPC boundary", () => {
     run.mockResolvedValue({ ok: true, stdout: "line one\nline two\n" });
     const handler = fileContentsHandler(runner);
 
-    const response = await handler(
-      {},
-      { repoPath: "/repo", source: { kind: "ref", ref: "main" }, path: "src/a.ts" },
-    );
+    const response = await handler(trustedEvent, {
+      repoPath: "/repo",
+      source: { kind: "ref", ref: "main" },
+      path: "src/a.ts",
+    });
     expect(response).toEqual({
       ok: true,
       value: { kind: "present", text: "line one\nline two\n" },
@@ -182,10 +192,11 @@ describe("git:file-contents IPC boundary", () => {
       run.mockResolvedValue({ ok: false, failure: { code: "exited", exitCode: 128, stderr } });
       const handler = fileContentsHandler(runner);
 
-      const response = await handler(
-        {},
-        { repoPath: "/repo", source: { kind: "ref", ref: "main" }, path: "src/a.ts" },
-      );
+      const response = await handler(trustedEvent, {
+        repoPath: "/repo",
+        source: { kind: "ref", ref: "main" },
+        path: "src/a.ts",
+      });
       expect(response).toEqual({ ok: true, value: { kind: "absent" } });
     },
   );
@@ -198,10 +209,11 @@ describe("git:file-contents IPC boundary", () => {
     });
     const handler = fileContentsHandler(runner);
 
-    const response = await handler(
-      {},
-      { repoPath: "/repo", source: { kind: "ref", ref: "main" }, path: "src/a.ts" },
-    );
+    const response = await handler(trustedEvent, {
+      repoPath: "/repo",
+      source: { kind: "ref", ref: "main" },
+      path: "src/a.ts",
+    });
     expect(response).toEqual({ ok: false, failure: { code: "notARepo", path: "/repo" } });
   });
 });

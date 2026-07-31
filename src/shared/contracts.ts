@@ -1,12 +1,12 @@
 import * as z from "zod";
-import { DEFAULT_DARK, DEFAULT_LIGHT, THEME_IDS, THEMES } from "./themes.generated";
-import type { ThemeAppearance } from "./themes.generated";
+import { DEFAULT_DARK, DEFAULT_LIGHT, THEME_IDS, THEMES } from "./themes";
+import type { ThemeAppearance } from "./themes";
 
-export type { ThemeAppearance } from "./themes.generated";
+export type { ThemeAppearance } from "./themes";
 
-/** The persisted theme choice: one curated theme, validated against the generated set. The whole app
+/** The persisted theme choice: one curated theme, validated against the curated set. The whole app
  * is themed by picking one of these — there is no separate light/dark/system mode. Its
- * inferred type is the same literal union as the generated ThemeId. */
+ * inferred type is the same literal union as themes.ts's ThemeId. */
 export const ThemeId = z.enum(THEME_IDS);
 export type ThemeId = z.infer<typeof ThemeId>;
 

@@ -1,13 +1,12 @@
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { Writable } from "node:stream";
-import type { Application, StricliProcess } from "@stricli/core";
-import { buildCommand, buildRouteMap, run } from "@stricli/core";
+import { buildCommand, buildRouteMap } from "@stricli/core";
 import { describe, expect, it } from "vitest";
 import type { ReviewArtifact } from "../src/shared/review";
-import { app, buildRvwApplication } from "./app";
-import { normalizeExitCode, type LocalContext } from "./context";
+import { buildRvwApplication } from "./app";
+import type { LocalContext } from "./context";
+import { REPO_ROOT, runCli, type CliResult } from "./fixtures";
 
 // The `rvw` surface driven the way the shipped entrypoint drives it — through Stricli's
 // `run` against the real application — but bound to capturing streams so the whole
@@ -65,34 +64,6 @@ const MIS_ANCHORED: ReviewArtifact = {
     { file: "src/foo.ts", side: "additions", startLine: 50, endLine: 50, body: "drifted" },
   ],
 };
-
-function capture(): { stream: Writable; text: () => string } {
-  const chunks: string[] = [];
-  const stream = new Writable({
-    write(chunk, _encoding, callback) {
-      chunks.push(String(chunk));
-      callback();
-    },
-  });
-  return { stream, text: () => chunks.join("") };
-}
-
-type CliResult = { code: number; stdout: string; stderr: string };
-
-async function runCli(
-  args: readonly string[],
-  application: Application<LocalContext> = app,
-): Promise<CliResult> {
-  const stdout = capture();
-  const stderr = capture();
-  const process: StricliProcess = { stdout: stdout.stream, stderr: stderr.stream, exitCode: null };
-  await run(application, args, { process });
-  return {
-    code: normalizeExitCode(process.exitCode),
-    stdout: stdout.text(),
-    stderr: stderr.text(),
-  };
-}
 
 /** Write an artifact (object or raw string) to a temp file and return its path, so
  * check reads real untrusted bytes exactly as it does in production. */
@@ -156,6 +127,24 @@ describe("rvw dispatch surface", () => {
     expect(help.stdout).not.toContain("rvw anchors");
   });
 
+  it("answers --version and -v with package.json's version and the file it is running from", async () => {
+    // Read off disk rather than imported, so this is the version the app ships under and not
+    // the same constant the CLI already believes. The path half is what makes the flag worth
+    // having — `src/main/cli-install.ts` can report that some other `rvw` won the PATH, and this
+    // is the only way to ask which one just ran — so it is asserted to name a file that exists.
+    const { version } = JSON.parse(readFileSync(join(REPO_ROOT, "package.json"), "utf8")) as {
+      version: string;
+    };
+    for (const flag of ["--version", "-v"]) {
+      const result = await runCli([flag]);
+      expect(result.code).toBe(0);
+      expect(result.stderr).toBe("");
+      const printed = /^(?<version>\S+) \((?<path>.+)\)$/u.exec(result.stdout.trim());
+      expect(printed?.groups?.version).toBe(version);
+      expect(existsSync(printed?.groups?.path ?? "")).toBe(true);
+    }
+  });
+
   it("maps a command body that throws to exit 2 (cannot-run), not Stricli's positive throw code", async () => {
     // Stricli reports an uncaught command throw as CommandRunError = 1; without the app's
     // determineExitCode that would be misread as our "ran, found problems" (1). This proves
@@ -170,7 +159,7 @@ describe("rvw dispatch surface", () => {
     const throwingApp = buildRvwApplication(
       buildRouteMap({ routes: { boom: throwing }, docs: { brief: "throwing test app" } }),
     );
-    const result = await runCli(["boom"], throwingApp);
+    const result = await runCli(["boom"], {}, throwingApp);
     expect(result.code).toBe(2);
   });
 });

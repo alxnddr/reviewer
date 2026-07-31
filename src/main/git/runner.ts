@@ -1,7 +1,8 @@
 import { spawn, type ChildProcess, type ChildProcessByStdio } from "node:child_process";
 import { statSync } from "node:fs";
 import type { Readable } from "node:stream";
-import { MAX_PATCH_BYTES } from "../../shared/git-diff";
+import { MAX_PATCH_BYTES, hardenedGitEnv } from "../../shared/node/git-diff";
+import { errnoCode } from "../../shared/errors";
 
 // Spawn wrapper for the system git binary: argument arrays only (never a shell),
 // explicit output cap, timeout, and child tracking so quit can terminate
@@ -50,10 +51,6 @@ export const DEFAULT_TIMEOUT_MS = 30_000;
  * onto the failure is enough. */
 const MAX_STDERR_BYTES = 64 * 1024;
 
-function isMissingBinaryError(error: NodeJS.ErrnoException): boolean {
-  return error.code === "ENOENT";
-}
-
 /** Symlinks are followed on purpose — a link to a work tree is a usable cwd. */
 function isDirectory(path: string): boolean {
   try {
@@ -81,20 +78,12 @@ export function createGitRunner(defaults: GitRunnerDefaults = {}): GitRunner {
       return Promise.resolve({ ok: false, failure: { code: "cwdMissing", cwd: request.cwd } });
     }
 
-    // Never let a spawned git hang on a credential prompt or take optional locks
-    // (all our operations are read-only). LC_ALL=C pins stderr to English — the
-    // failure mapping in ops.ts pattern-matches it. The GIT_* repo
-    // overrides must not leak in: they would silently redirect every operation to
-    // a different repository than the validated cwd.
-    const env: NodeJS.ProcessEnv = {
-      ...process.env,
-      GIT_TERMINAL_PROMPT: "0",
-      GIT_OPTIONAL_LOCKS: "0",
-      LC_ALL: "C",
-    };
-    delete env.GIT_DIR;
-    delete env.GIT_WORK_TREE;
-    delete env.GIT_INDEX_FILE;
+    // Hardened by `hardenedGitEnv` (src/shared/node/git-diff.ts) — the same posture the
+    // CLI's spawnSync adapter uses, so the two spawn styles cannot drift on prompts,
+    // optional locks, or locale (LC_ALL=C; the failure mapping in ops.ts pattern-matches
+    // its English stderr). The GIT_* repo overrides it strips must not leak in: they would
+    // silently redirect every operation to a different repository than the validated cwd.
+    const env = hardenedGitEnv(process.env);
 
     return new Promise((resolve) => {
       // The stdio triple above: no stdin, piped stdout/stderr.
@@ -157,11 +146,14 @@ export function createGitRunner(defaults: GitRunnerDefaults = {}): GitRunner {
       });
 
       child.on("error", (error: NodeJS.ErrnoException) => {
+        // Spawn ENOENT here is the git binary itself: a vanished or non-directory cwd was
+        // already refused above, so this is the one remaining way to get it.
         settle({
           ok: false,
-          failure: isMissingBinaryError(error)
-            ? { code: "gitMissing" }
-            : { code: "exited", exitCode: null, stderr: String(error) },
+          failure:
+            errnoCode(error) === "ENOENT"
+              ? { code: "gitMissing" }
+              : { code: "exited", exitCode: null, stderr: String(error) },
         });
       });
 

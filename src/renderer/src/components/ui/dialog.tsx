@@ -1,9 +1,54 @@
 import * as React from "react";
 import { Dialog as DialogPrimitive } from "@base-ui/react/dialog";
+import { cva, type VariantProps } from "class-variance-authority";
 
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { XIcon } from "lucide-react";
+
+// Two surfaces, one shell. `default` is the opaque slab, centred: the right answer for
+// anything that asks a question and is then dismissed. `glass` is the lens — a panel held
+// up over the reader's work to check something (the shortcut sheet, the recents picker),
+// where the diff staying visible behind it is the whole point. They differ only in surface
+// and placement, which is a variant rather than a second component; what `data-glass`
+// actually paints lives in `index.css`.
+
+const dialogOverlayVariants = cva(
+  "fixed inset-0 z-50 data-open:animate-in data-open:fade-in-0 data-closed:animate-out data-closed:fade-out-0",
+  {
+    variants: {
+      variant: {
+        default: "isolate bg-black/10 duration-100 supports-backdrop-filter:backdrop-blur-xs",
+        // Dimmer than the slab's, and blurred a little harder: a glass popup is itself
+        // translucent, and over an un-dimmed diff the two layers of code — the real one
+        // behind and the rows in front — compete at the same contrast.
+        glass: "bg-black/15 duration-150 supports-backdrop-filter:backdrop-blur-sm",
+      },
+    },
+    defaultVariants: {
+      variant: "default",
+    },
+  },
+);
+
+const dialogContentVariants = cva(
+  "fixed left-1/2 z-50 -translate-x-1/2 outline-none data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95 data-closed:animate-out data-closed:fade-out-0 data-closed:zoom-out-95",
+  {
+    variants: {
+      variant: {
+        default:
+          "top-1/2 grid w-full max-w-[calc(100%-2rem)] -translate-y-1/2 gap-4 rounded-xl bg-popover p-4 text-sm text-popover-foreground ring-1 ring-foreground/10 duration-100 sm:max-w-sm",
+        // No fill and no ring — `[data-glass]` paints both. Held above centre rather than
+        // in it, so the caller supplies `top-*` and its own width; everything else about
+        // the two glass panels is the same panel.
+        glass: "flex max-h-[72vh] flex-col overflow-hidden rounded-2xl duration-150",
+      },
+    },
+    defaultVariants: {
+      variant: "default",
+    },
+  },
+);
 
 function Dialog({ ...props }: DialogPrimitive.Root.Props) {
   return <DialogPrimitive.Root data-slot="dialog" {...props} />;
@@ -21,14 +66,15 @@ function DialogClose({ ...props }: DialogPrimitive.Close.Props) {
   return <DialogPrimitive.Close data-slot="dialog-close" {...props} />;
 }
 
-function DialogOverlay({ className, ...props }: DialogPrimitive.Backdrop.Props) {
+function DialogOverlay({
+  className,
+  variant = "default",
+  ...props
+}: DialogPrimitive.Backdrop.Props & VariantProps<typeof dialogOverlayVariants>) {
   return (
     <DialogPrimitive.Backdrop
       data-slot="dialog-overlay"
-      className={cn(
-        "fixed inset-0 isolate z-50 bg-black/10 duration-100 supports-backdrop-filter:backdrop-blur-xs data-open:animate-in data-open:fade-in-0 data-closed:animate-out data-closed:fade-out-0",
-        className,
-      )}
+      className={cn(dialogOverlayVariants({ variant }), className)}
       {...props}
     />
   );
@@ -37,20 +83,22 @@ function DialogOverlay({ className, ...props }: DialogPrimitive.Backdrop.Props) 
 function DialogContent({
   className,
   children,
+  variant = "default",
   showCloseButton = true,
   ...props
-}: DialogPrimitive.Popup.Props & {
-  showCloseButton?: boolean;
-}) {
+}: DialogPrimitive.Popup.Props &
+  VariantProps<typeof dialogContentVariants> & {
+    showCloseButton?: boolean;
+  }) {
   return (
     <DialogPortal>
-      <DialogOverlay />
+      <DialogOverlay variant={variant} />
       <DialogPrimitive.Popup
         data-slot="dialog-content"
-        className={cn(
-          "fixed top-1/2 left-1/2 z-50 grid w-full max-w-[calc(100%-2rem)] -translate-x-1/2 -translate-y-1/2 gap-4 rounded-xl bg-popover p-4 text-sm text-popover-foreground ring-1 ring-foreground/10 duration-100 outline-none sm:max-w-sm data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95 data-closed:animate-out data-closed:fade-out-0 data-closed:zoom-out-95",
-          className,
-        )}
+        // The glass surface is a stylesheet rule keyed off the attribute rather than a
+        // class, so the variant hands it out along with the classes.
+        data-glass={variant === "glass" ? "" : undefined}
+        className={cn(dialogContentVariants({ variant }), className)}
         {...props}
       >
         {children}

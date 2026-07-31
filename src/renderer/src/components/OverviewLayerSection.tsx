@@ -1,5 +1,7 @@
 import { useState, type ReactElement } from "react";
 import { AlertTriangle, MessageSquare } from "lucide-react";
+import { clamp } from "../../../shared/clamp";
+import { countLabel } from "../../../shared/plural";
 import type { OverviewChapter, OverviewFileEntry } from "@/lib/overview";
 import type { ReadTally } from "@/lib/read-progress";
 import { cn } from "@/lib/utils";
@@ -30,14 +32,31 @@ const FILES_SHOWN = 6;
  * same glyph as every aggregate rather than a second check of their own. */
 const READ_ONE: ReadTally = { read: 1, total: 1 };
 
-function countLabel(n: number, noun: string): string {
-  return `${n} ${noun}${n === 1 ? "" : "s"}`;
-}
-
 /** The DOM id a layer's section carries, so returning to the doc can scroll to the one the
  * reader just came out of. */
 export function layerSectionDomId(layerId: string): string {
   return `overview-layer-${layerId}`;
+}
+
+/** The DOM id a layer's own heading carries — the `<section>` points its `aria-labelledby`
+ * here rather than leaning on the heading being its first child, which is true today but not
+ * a contract worth an assistive-tech reader silently depending on. */
+function layerHeadingDomId(layerId: string): string {
+  return `${layerSectionDomId(layerId)}-heading`;
+}
+
+/** Heading tags, indexed by depth, so the rank the DOM carries is a lookup rather than a
+ * string built by hand. `MAX_LAYER_DEPTH` (shared/layers.ts) caps authored nesting at 5
+ * levels (0-based depth 0-4), which is exactly `h2`…`h6` — the whole run a document can
+ * still use below the page's own `h1`. */
+const HEADING_TAGS = ["h2", "h3", "h4", "h5", "h6"] as const;
+
+/** The heading rank a chapter's depth renders as. Depth is 0-based and `HEADING_TAGS` is
+ * exactly as long as nesting can go, so the clamp is only ever a defensive floor/ceiling —
+ * never a rank a real layer tree would reach. */
+function headingTag(depth: number): (typeof HEADING_TAGS)[number] {
+  const index = clamp(depth, 0, HEADING_TAGS.length - 1);
+  return HEADING_TAGS[index] ?? "h2";
 }
 
 /** Added/removed line counts, in the diff's own signal colours. A zero side is dropped
@@ -177,10 +196,19 @@ export function OverviewLayerSection({
   const shown = expanded ? files : files.slice(0, FILES_SHOWN);
   const rest = files.length - shown.length;
   const rank = rankStyle(chapter.depth);
+  const Heading = headingTag(chapter.depth);
+  const headingId = layerHeadingDomId(layer.id);
 
   return (
-    <section id={layerSectionDomId(layer.id)} className={cn("scroll-mt-6", rank.section)}>
-      <h2 className={cn("flex flex-wrap items-baseline gap-x-2 gap-y-1", rank.heading)}>
+    <section
+      id={layerSectionDomId(layer.id)}
+      aria-labelledby={headingId}
+      className={cn("scroll-mt-6", rank.section)}
+    >
+      <Heading
+        id={headingId}
+        className={cn("flex flex-wrap items-baseline gap-x-2 gap-y-1", rank.heading)}
+      >
         {/* The section number leads the title rather than sitting in a gutter: `4.2.1` in a
             fixed column would either clip or hold a wide empty aisle open for every
             shallower section on the page. */}
@@ -203,7 +231,7 @@ export function OverviewLayerSection({
             Outdated
           </span>
         )}
-      </h2>
+      </Heading>
 
       {/* The one-line summary reads as the section's deck; the long-form description
           follows it as the body. A layer with no description keeps the deck alone — that

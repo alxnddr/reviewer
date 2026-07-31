@@ -50,19 +50,15 @@ export function CommentNavIndicator({
       // The same glass the overview's action island takes, and for the same reason: this is
       // a control that floats over the reader's content while they work rather than
       // appearing and going away, so an opaque slab is a hole in the diff for as long as the
-      // walk lasts. The two are the app's only persistent floating surfaces and they now
-      // read as one kind of object — bottom-centre, pill, frosted — which is also what says
-      // they are the same *sort* of thing: where you are, and how to move.
+      // walk lasts. The two read as one kind of object — bottom-centre, pill, frosted —
+      // which is also what says they are the same *sort* of thing: where you are, and how
+      // to move.
       //
       // Still a pill, not a panel: the find bar owns the rounded-rect-with-a-field shape at
       // the top right, and the two overlays must stay tellable apart at a glance.
       className="absolute bottom-3 left-1/2 z-20 flex -translate-x-1/2 items-center gap-0.5 rounded-full p-1 text-popover-foreground"
     >
-      <TooltipHint
-        content={<ShortcutHint action="Previous comment" keys="p" />}
-        side="top"
-        align="center"
-      >
+      <TooltipHint content={<ShortcutHint id="comment.previous" />} side="top" align="center">
         <Button
           variant="ghost"
           size="icon-sm"
@@ -94,11 +90,7 @@ export function CommentNavIndicator({
         </Button>
       </TooltipHint>
 
-      <TooltipHint
-        content={<ShortcutHint action="Next comment" keys="n" />}
-        side="top"
-        align="center"
-      >
+      <TooltipHint content={<ShortcutHint id="comment.next" />} side="top" align="center">
         <Button
           variant="ghost"
           size="icon-sm"
@@ -114,17 +106,16 @@ export function CommentNavIndicator({
           sits past a divider rather than reading as a fourth step. */}
       <span aria-hidden="true" className={GLASS_DIVIDER} />
 
-      <TooltipHint
-        content={<ShortcutHint action="Stop navigating" keys="Esc" />}
-        side="top"
-        align="center"
-      >
+      <TooltipHint content={<ShortcutHint id="comment.stop" />} side="top" align="center">
         <Button
           variant="ghost"
           size="icon-sm"
           className={cn("rounded-full", GLASS_MUTED)}
           aria-label="Stop navigating comments"
-          onClick={onClose}
+          // Invoked, not handed over: `onClose` takes no arguments, and React would hand
+          // a click straight through as one — which the session-bound handler on the
+          // other end forwards to the store (`useSessionBound`, DiffScreen).
+          onClick={() => onClose()}
         >
           <X />
         </Button>

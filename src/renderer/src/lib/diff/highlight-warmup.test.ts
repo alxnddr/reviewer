@@ -8,7 +8,7 @@ import {
   DEFAULT_DIFF_THEME,
   HIGHLIGHT_ENGINE,
 } from "./highlight-warmup";
-import { THEMES } from "../../../../shared/themes.generated";
+import { THEMES } from "../../../../shared/themes";
 import { ThemeId } from "../../../../shared/contracts";
 
 // One representative file per format Reviewer's own diffs surface. `.ts` leads: it is

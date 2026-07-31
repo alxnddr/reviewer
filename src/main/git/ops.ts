@@ -1,6 +1,7 @@
 import { readFile } from "node:fs/promises";
 import { basename, join } from "node:path";
 import { assertNever } from "../../shared/assert";
+import { errnoCode } from "../../shared/errors";
 import {
   BranchName,
   Commit,
@@ -21,7 +22,7 @@ import {
 } from "../../shared/git";
 import type { GitRunFailure, GitRunner } from "./runner";
 import { parseBranchList, parseCommitLog } from "./parse";
-import { DIFF_ARGS, DIFF_CONFIG, committedDiffArgs, rangeSpec } from "../../shared/git-diff";
+import { DIFF_ARGS, DIFF_CONFIG, committedDiffArgs, rangeSpec } from "../../shared/node/git-diff";
 
 // Domain operations behind the git IPC channels. Every ref reaching this module has
 // already passed the zod boundary. The byte-stable diff wire-format
@@ -311,16 +312,12 @@ async function readWorktreeFile(repoPath: RepoPath, path: string): Promise<GitRe
     const text = await readFile(join(repoPath, path), "utf8");
     return { ok: true, value: { kind: "present", text } };
   } catch (error) {
-    const code = isErrnoException(error) ? error.code : undefined;
+    const code = errnoCode(error);
     if (code === "ENOENT" || code === "EISDIR") {
       return { ok: true, value: { kind: "absent" } };
     }
     return failure({ code: "unexpected" });
   }
-}
-
-function isErrnoException(error: unknown): error is NodeJS.ErrnoException {
-  return error instanceof Error && "code" in error;
 }
 
 /** The brush invariant `first` = oldest, endpoint = newest (git.ts) can't be

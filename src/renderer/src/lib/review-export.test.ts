@@ -1,4 +1,7 @@
 import { describe, expect, it } from "vitest";
+import { toString } from "mdast-util-to-string";
+import { visit } from "unist-util-visit";
+import { parseMarkdown } from "../../../shared/markdown";
 import {
   importReview,
   type Comment,
@@ -9,8 +12,12 @@ import {
   type ReviewStamp,
 } from "../../../shared/review";
 import type { RepoInfo } from "../../../shared/git";
-import { buildHugeAdditionPatch, MULTI_STATUS_PATCH, RENAMES_PATCH } from "./diff/fixtures";
-import { parsePatch } from "./diff/patch";
+import {
+  buildHugeAdditionPatch,
+  MULTI_STATUS_PATCH,
+  RENAMES_PATCH,
+} from "../../../shared/diff/fixtures";
+import { parsePatch } from "../../../shared/diff/patch";
 import {
   commentsToPrompt,
   commentToPrompt,
@@ -25,6 +32,34 @@ import {
   type PromptComment,
   type PromptReview,
 } from "./review-export";
+
+// Both exports interpolate unvalidated values — a layer label, an overview title, a repo
+// name, a file path — into lines whose meaning is positional. The escaping tests read the
+// *parsed* export rather than the string, because that is the only thing that decides
+// whether a value stayed a value: an escape that reads as escaped and still parses as
+// structure is exactly the bug they guard.
+const headingsOf = (markdown: string): string[] => {
+  const found: string[] = [];
+  visit(parseMarkdown(markdown), "heading", (node) => {
+    found.push(`h${node.depth} ${toString(node)}`);
+  });
+  return found;
+};
+
+const codeSpansOf = (markdown: string): string[] => {
+  const found: string[] = [];
+  visit(parseMarkdown(markdown), "inlineCode", (node) => {
+    found.push(node.value);
+  });
+  return found;
+};
+
+/** Every block the parsed export is made of, in order — what an injected setext underline,
+ * thematic break or stray paragraph shows up in. */
+const blocksOf = (markdown: string): string[] =>
+  parseMarkdown(markdown).children.map((node) =>
+    node.type === "heading" ? `h${node.depth}` : node.type,
+  );
 
 // A deterministic stamp: import assigns identity, so a fresh id per comment and layer makes
 // the round-trip reproducible. The authored projection compares with identity stripped,
@@ -381,6 +416,147 @@ describe("reviewToMarkdown", () => {
     });
     expect(markdown.endsWith("\n")).toBe(true);
     expect(markdown.endsWith("\n\n")).toBe(false);
+  });
+
+  const layer = (label: string): ReviewLayer => ({
+    id: "l1",
+    label,
+    ranges: [{ file: "src/a.ts", side: "additions", startLine: 1, endLine: 40 }],
+  });
+
+  it("keeps a layer label with newlines on one heading line, splitting no document", () => {
+    const markdown = reviewToMarkdown({
+      repo: REPO,
+      base: "main",
+      head: HEAD,
+      overview: null,
+      layers: [layer("Validation\n# Injected h1\r\n## Injected h2")],
+      comments: [],
+    });
+
+    expect(headingsOf(markdown)).toEqual([
+      "h1 Review — app",
+      "h2 Validation # Injected h1 ## Injected h2",
+    ]);
+  });
+
+  it("does not let a layer label opening with `#` pick its own heading level", () => {
+    const markdown = reviewToMarkdown({
+      repo: REPO,
+      base: "main",
+      head: HEAD,
+      overview: null,
+      layers: [layer("#### Deep")],
+      comments: [],
+    });
+
+    // Escaped, so the parser reads the hashes as the words they are — the section is still
+    // the `##` the export chose for it.
+    expect(headingsOf(markdown)).toEqual(["h1 Review — app", "h2 #### Deep"]);
+  });
+
+  it("keeps an injected overview title and repo name from becoming structure", () => {
+    const markdown = reviewToMarkdown({
+      repo: { path: "/repos/we\nird", name: "we\nird" },
+      base: "main",
+      head: HEAD,
+      overview: { title: "# Add the API\n\n## Injected", body: "Why this exists." },
+      layers: [],
+      comments: [],
+    });
+
+    expect(headingsOf(markdown)).toEqual(["h1 # Add the API ## Injected"]);
+    expect(codeSpansOf(markdown)).toContain("we ird");
+  });
+
+  it("survives a whitespace-only label without emitting a heading of hashes", () => {
+    const markdown = reviewToMarkdown({
+      repo: REPO,
+      base: "main",
+      head: HEAD,
+      overview: null,
+      layers: [layer("\n")],
+      comments: [],
+    });
+
+    expect(headingsOf(markdown)).toEqual(["h1 Review — app", "h2 "]);
+  });
+
+  it("round-trips a file path carrying backticks through the inline code span", () => {
+    const paths = [
+      "src/`weird`.ts",
+      "src/a``b.ts",
+      "`leading.ts",
+      "trailing.ts`",
+      "`",
+      "src/multi\nline.ts",
+    ];
+    const markdown = reviewToMarkdown({
+      repo: REPO,
+      base: "main",
+      head: HEAD,
+      overview: null,
+      layers: [],
+      comments: paths.map((path) => comment(path, "additions", 1, 1, "body")),
+    });
+
+    // Every path is still one code span holding exactly the path (the newline collapsed to
+    // the space a code span can carry) — no run of backticks closed a span early.
+    expect(codeSpansOf(markdown)).toEqual([
+      "main",
+      HEAD,
+      "`",
+      "`leading.ts",
+      "src/`weird`.ts",
+      "src/a``b.ts",
+      "src/multi line.ts",
+      "trailing.ts`",
+    ]);
+    // …and none of it broke the list: one item per comment, no stray paragraph.
+    expect(markdown.split("\n").filter((line) => line.startsWith("- ")).length).toBe(paths.length);
+  });
+
+  it("keeps a label's trailing hashes out of the heading's closing sequence", () => {
+    const markdown = reviewToMarkdown({
+      repo: REPO,
+      base: "main",
+      head: HEAD,
+      overview: null,
+      layers: [layer("Rollout ##")],
+      comments: [],
+    });
+
+    // Unescaped, `## Rollout ##` reads the trailing run as ATX's *optional closing
+    // sequence* and drops it — the label would silently lose the words it ends on.
+    expect(headingsOf(markdown)).toEqual(["h1 Review — app", "h2 Rollout ##"]);
+  });
+
+  it("keeps the spaces a path opens and closes on inside its code span", () => {
+    const markdown = reviewToMarkdown({
+      repo: REPO,
+      base: "main",
+      head: HEAD,
+      overview: null,
+      layers: [],
+      comments: [comment(" padded.ts ", "additions", 1, 1, "body")],
+    });
+
+    // CommonMark strips one space from each end of a span whose content has both, so an
+    // unpadded span renames the file it names.
+    expect(codeSpansOf(markdown)).toEqual(["main", HEAD, " padded.ts "]);
+  });
+
+  it("code-spans a ref carrying a backtick — a legal branch name the schema admits", () => {
+    const markdown = reviewToMarkdown({
+      repo: REPO,
+      base: "feat/`tick`",
+      head: HEAD,
+      overview: null,
+      layers: [],
+      comments: [],
+    });
+
+    expect(codeSpansOf(markdown)).toEqual(["feat/`tick`", HEAD]);
   });
 });
 
@@ -739,5 +915,50 @@ describe("commentsToPrompt", () => {
     const prompt = commentsToPrompt(promptReview({ layers, comments: [first, loose] }));
     expect(prompt.endsWith("\n")).toBe(true);
     expect(prompt.endsWith("\n\n")).toBe(false);
+  });
+
+  // The payload's headings and anchors carry the same unvalidated values the Markdown
+  // export's do, and its reader is an agent that will act on whatever structure it finds —
+  // a title that ends a section early hands it the wrong work under the wrong anchor.
+  it("keeps an injected title, label and path from restructuring the payload", () => {
+    const injected = promptComment({
+      file: "src/`odd`\nname.ts",
+      startLine: 4,
+      endLine: 4,
+      body: "why",
+    });
+    const prompt = commentsToPrompt(
+      promptReview({
+        overview: { title: "Replace polling\n---", body: "…" },
+        layers: [
+          promptLayer("l1", "Validation\n## Injected", [
+            { file: "src/`odd`\nname.ts", side: "additions", startLine: 4, endLine: 4 },
+          ]),
+        ],
+        comments: [injected],
+      }),
+    );
+
+    // No setext underline, no thematic break, no stray paragraph: the payload is the four
+    // blocks it writes, and the anchor is one span holding the whole locator.
+    expect(blocksOf(prompt)).toEqual(["h1", "paragraph", "h2", "h3", "paragraph"]);
+    expect(headingsOf(prompt)).toEqual([
+      "h1 Code review comments — Replace polling ---",
+      "h2 Validation ## Injected",
+      "h3 src/`odd` name.ts:4",
+    ]);
+    expect(codeSpansOf(prompt)).toContain("src/`odd` name.ts:4");
+  });
+
+  it("code-spans a repo name and refs carrying backticks", () => {
+    const prompt = commentsToPrompt(
+      promptReview({
+        repo: { path: "/repos/od`d", name: "od`d" },
+        refs: { base: "feat/`tick`", head: "main" },
+        comments: [first],
+      }),
+    );
+
+    expect(codeSpansOf(prompt)).toEqual(["od`d", "feat/`tick`", "main", "src/a.ts:10-12"]);
   });
 });

@@ -75,7 +75,10 @@ export function UnplaceableComments({
           <Button
             variant="ghost"
             size="sm"
-            onClick={onReset}
+            // Invoked, not handed over: `onReset` takes no arguments, and React would hand
+            // a click straight through as one — which the session-bound handler on the
+            // other end forwards to the store (`useSessionBound`, DiffScreen).
+            onClick={() => onReset()}
             className="ml-auto text-text-muted hover:bg-transparent hover:text-foreground dark:hover:bg-transparent"
           >
             Show full review

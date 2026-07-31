@@ -1,9 +1,9 @@
 import type { Comment, ReviewLayer } from "../../../shared/review";
 import { changedLines, type ChangedLines } from "../../../tools/review-coverage";
 import { effectiveLayers } from "./coverage";
-import type { FileChangeStatus, PatchFile } from "./diff/patch";
+import type { FileChangeStatus, PatchFile } from "../../../shared/diff/patch";
 import { snippetForAnchor, type DiffSnippet } from "./diff/snippet";
-import { layerOutline, layerOwning, resolveLayerScroll } from "./layers";
+import { layerOutline, layerOwning, resolveLayerScroll } from "../../../shared/layers";
 import {
   layerTally,
   nextUnreadLayer,
@@ -24,7 +24,7 @@ import {
 
 /** How much preview a chapter snippet shows. Six lines is a taste of the code — enough to
  * recognise the change, short enough that ten chapters still scan as a document. */
-export const SNIPPET_LINES = 6;
+const SNIPPET_LINES = 6;
 
 /** One file a chapter covers, with that chapter's own footprint in it — not the file's
  * totals. A layer that explains three lines of a 400-line file reads `+3`, because the
@@ -109,27 +109,25 @@ export type OverviewInput = {
   readFiles: ReadFiles;
 };
 
-/** How many of a file's changed lines, per side, this chapter's ranges cover. */
+/** How many of a file's changed lines, per side, this chapter's ranges cover. `ranges` is
+ * expected to already be narrowed to `path` — the caller buckets a chapter's whole-extent
+ * ranges by file once (`rangesByPath` below) rather than handing every file's changed lines
+ * the chapter's entire range list to filter, which used to make this O(changed lines ×
+ * chapter ranges) instead of O(changed lines × that file's ranges). */
 function coveredIn(
   changed: ChangedLines,
   ranges: readonly {
-    file: string;
     side: "additions" | "deletions";
     startLine: number;
     endLine: number;
   }[],
-  path: string,
 ): { additions: number; deletions: number } {
   let additions = 0;
   let deletions = 0;
   for (const side of ["additions", "deletions"] as const) {
     for (const line of changed[side]) {
       const covered = ranges.some(
-        (range) =>
-          range.file === path &&
-          range.side === side &&
-          range.startLine <= line &&
-          line <= range.endLine,
+        (range) => range.side === side && range.startLine <= line && line <= range.endLine,
       );
       if (!covered) {
         continue;
@@ -215,13 +213,26 @@ export function buildOverview({
     const subtree = entry?.subtree ?? [layer];
     const ranges = subtree.flatMap((current) => current.ranges);
     const paths = new Set(ranges.map((range) => range.file));
+    // Bucketed once per chapter so `coveredIn` below scans only the ranges that could
+    // possibly cover a given file's lines, not the whole chapter's (every other file's too).
+    const rangesByPath = new Map<string, typeof ranges>();
+    for (const range of ranges) {
+      const forFile = rangesByPath.get(range.file);
+      if (forFile === undefined) {
+        rangesByPath.set(range.file, [range]);
+      } else {
+        forFile.push(range);
+      }
+    }
     let additions = 0;
     let deletions = 0;
     const entries: OverviewFileEntry[] = [];
     for (const path of paths) {
       const changed = changedByPath.get(path);
       const counts =
-        changed === undefined ? { additions: 0, deletions: 0 } : coveredIn(changed, ranges, path);
+        changed === undefined
+          ? { additions: 0, deletions: 0 }
+          : coveredIn(changed, rangesByPath.get(path) ?? []);
       additions += counts.additions;
       deletions += counts.deletions;
       entries.push({

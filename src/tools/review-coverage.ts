@@ -1,11 +1,18 @@
-import { assertNever } from "../shared/assert";
 import {
   walkLayerInputs,
+  type AnchorSpan,
+  type LineSpan,
   type ReviewAnchor,
   type ReviewLayerInput,
   type ReviewSide,
 } from "../shared/review";
-import { parsePatch, type FileChangeStatus, type PatchFile } from "../renderer/src/lib/diff/patch";
+import {
+  ANALYSIS_CACHE_KEY,
+  parsePatch,
+  type FileChangeStatus,
+  type PatchFile,
+} from "../shared/diff/patch";
+import { walkFileLines } from "../shared/diff/walk";
 
 // Do the ordered layers cover the whole diff? The universe is every *changed* line of the
 // range's diff — additions in new-file coordinates, deletions in old-file coordinates, context
@@ -15,6 +22,14 @@ import { parsePatch, type FileChangeStatus, type PatchFile } from "../renderer/s
 // resolved: the range captured live for a `--draft` audit, re-derived from the artifact's own
 // repo/refs for a finished artifact, or a rare embedded frozen patch. The CLI shell owns the
 // patch bytes, the exit code, and the report formatting.
+//
+// This is the one module under `src/tools/` the renderer imports (`lib/coverage.ts` takes
+// `coverageOfFiles`, `lib/overview.ts` takes `changedLines`) — a deliberate `renderer → tools`
+// edge, declared by `src/tools/**/*` in `tsconfig.web.json`'s `include`. It stays here rather
+// than moving to `src/shared/` because the coverage *verdict* is the CLI gate's domain and the
+// app is the second reader: sharing the implementation is precisely what guarantees the number
+// on screen equals the one `rvw check --coverage` exits on. The edge is one-way — nothing under
+// `src/tools/` imports from `src/renderer/`.
 
 /** Why a changed file cannot be covered — it carries no changed line to anchor into.
  * Reported honestly, never as a gap the authoring agent is told to close: a binary has no
@@ -22,16 +37,6 @@ import { parsePatch, type FileChangeStatus, type PatchFile } from "../renderer/s
  * only in its mode (or created empty) has nothing between its `@@` markers. A file that
  * cannot be anchored into is never called `covered` either — nothing covers it. */
 export type NonCoverableReason = "binary" | "pureRename" | "noChangedLines";
-
-/** A contiguous run of uncovered changed lines within one file+side — the compact
- * "skipped this hunk" locator. Line numbers are file coordinates on `side` (new-file for
- * additions, old-file for deletions). */
-export type UncoveredSpan = {
-  file: string;
-  side: ReviewSide;
-  startLine: number;
-  endLine: number;
-};
 
 /** One changed file's coverage. A coverable file reports how
  * many of its changed lines a layer spans; `uncovered` is the "forgot a whole file"
@@ -60,7 +65,11 @@ export type CoverageHeadline = {
 export type CoverageReport = {
   headline: CoverageHeadline;
   files: FileCoverage[];
-  uncoveredSpans: UncoveredSpan[];
+  /** Each a contiguous run of uncovered changed lines within one file+side — the compact
+   * "skipped this hunk" locator, in the same anchor shape a layer range is authored in, so
+   * closing a gap is a copy of the span that named it. Line numbers are file coordinates on
+   * `side` (new-file for additions, old-file for deletions). */
+  uncoveredSpans: AnchorSpan[];
 };
 
 /** Coverage needs a diff to compute against; a patch that carries no diff has no universe, so
@@ -71,11 +80,6 @@ export type CoverageReport = {
 export type CoverageResult =
   | { ok: true; report: CoverageReport }
   | { ok: false; error: "missingPatch" };
-
-// `parsePatch` keys its highlight cache by this prefix; coverage never renders, so any
-// stable non-empty value serves — it just must not be omitted (an absent key collides
-// equally-named files, per patch.ts).
-const CACHE_KEY = "coverage";
 
 // The two sides in a fixed order, so the report (and every test asserting on it) is
 // deterministic regardless of which side a range happened to touch first.
@@ -104,8 +108,6 @@ export function layerExtentsOf(layers: readonly ReviewLayerInput[]): LayerExtent
  * `ranges` simply add nothing here, so it can never be a failure. */
 type FileRanges = Record<ReviewSide, LineSpan[]>;
 
-type LineSpan = { startLine: number; endLine: number };
-
 /** Coverage of a raw diff against a set of layer ranges — the one core every caller shares.
  * The finished-artifact command feeds it the diff re-derived from the artifact's own repo/refs
  * (or a rare embedded frozen patch); the live-range command feeds it the freshly-captured
@@ -113,7 +115,7 @@ type LineSpan = { startLine: number; endLine: number };
  * universe. An absent patch takes the same route as an unparseable one: both carry no diff.
  * Pure: no I/O, no clock. */
 export function coverageOfPatch(patch: string, layers: readonly LayerExtent[]): CoverageResult {
-  const files = parsePatch(patch, CACHE_KEY);
+  const files = parsePatch(patch, ANALYSIS_CACHE_KEY);
   if (files.length === 0) {
     return { ok: false, error: "missingPatch" };
   }
@@ -132,7 +134,7 @@ export function coverageOfFiles(
   const rangesByFile = groupRanges(layers);
 
   const fileCoverages: FileCoverage[] = [];
-  const uncoveredSpans: UncoveredSpan[] = [];
+  const uncoveredSpans: AnchorSpan[] = [];
   let coverableTotal = 0;
   let coveredTotal = 0;
 
@@ -183,11 +185,7 @@ export function coverageOfFiles(
 /** A contiguous run of changed lines on one side of one file — the shape an anchor may
  * span. The atom of the changed-line universe `rvw diff --json` lists and coverage measures
  * against, so an authored anchor targets a real span, not a guessed line number. */
-export type ChangedSpan = {
-  side: ReviewSide;
-  startLine: number;
-  endLine: number;
-};
+export type ChangedSpan = LineSpan & { side: ReviewSide };
 
 /** One file's place in the changed-line universe: either the contiguous changed spans an
  * anchor may fall in, or an honest non-coverable reason (a binary/pure-rename carries no
@@ -203,7 +201,7 @@ export type FileUniverse =
  * are exactly the universe coverage scores — one derivation, never a parallel parse (the
  * drift `changedLineUniverse` and `coverageOfPatch` sharing these helpers rules out). */
 export function changedLineUniverse(patch: string): FileUniverse[] {
-  return parsePatch(patch, CACHE_KEY).map((file) => {
+  return parsePatch(patch, ANALYSIS_CACHE_KEY).map((file) => {
     const changed = changedLines(file);
     const reason = nonCoverableReason(file, changed);
     if (reason !== null) {
@@ -223,7 +221,7 @@ export function changedLineUniverse(patch: string): FileUniverse[] {
  * true when every changed file is non-coverable (a diff of nothing but binaries, pure
  * renames, and mode changes): there is no line a layer could have explained. A patch that
  * carries no diff at all never reaches here — it is a typed `missingPatch` failure. */
-export function isComplete(report: CoverageReport): boolean {
+export function isFullyCovered(report: CoverageReport): boolean {
   return report.headline.coveredChangedLines === report.headline.coverableChangedLines;
 }
 
@@ -247,41 +245,25 @@ function nonCoverableReason(file: PatchFile, changed: ChangedLines): NonCoverabl
   return null;
 }
 
-/** The per-side changed lines of a file: walk each hunk's content, advancing an
- * addition cursor (new-file coords) and a deletion cursor (old-file coords) from the
- * hunk header's `additionStart`/`deletionStart`. A context block advances both cursors
- * without emitting; a change block emits `deletions` old-file lines then `additions`
- * new-file lines and advances each cursor by its own count. This is the universe — it
- * must be exact, so it reads the `+`/`-` line coordinates directly rather than
- * subtracting context from the hunk span. Exported because it *is* the universe
- * definition: the overview's per-layer `+/−` counts measure against these same sets, so
- * the doc's numbers and the coverage report can never describe different diffs. */
+/** The per-side changed lines of a file: the shared hunk walk (`shared/diff/walk.ts`)
+ * over every line, keeping the `+` lines at their new-file numbers and the `-` lines at
+ * their old-file ones and discarding the context the walk carries between them. This is
+ * the universe — it must be exact, so it reads the `+`/`-` line coordinates directly
+ * rather than subtracting context from the hunk span (the same walk the search index and
+ * the snippet preview read, so a line that is searchable and previewable is the line
+ * coverage scores). Exported because it *is* the universe definition: the overview's
+ * per-layer `+/−` counts measure against these same sets, so the doc's numbers and the
+ * coverage report can never describe different diffs. */
 export function changedLines(file: PatchFile): ChangedLines {
   const additions = new Set<number>();
   const deletions = new Set<number>();
-  for (const hunk of file.fileDiff.hunks) {
-    let additionLine = hunk.additionStart;
-    let deletionLine = hunk.deletionStart;
-    for (const block of hunk.hunkContent) {
-      if (block.type === "context") {
-        additionLine += block.lines;
-        deletionLine += block.lines;
-      } else if (block.type === "change") {
-        for (let i = 0; i < block.deletions; i += 1) {
-          deletions.add(deletionLine + i);
-        }
-        deletionLine += block.deletions;
-        for (let i = 0; i < block.additions; i += 1) {
-          additions.add(additionLine + i);
-        }
-        additionLine += block.additions;
-      } else {
-        // `@pierre/diffs` is a moving beta: a block kind added upstream must break the
-        // build here, never slip through and silently shrink the universe.
-        assertNever(block);
-      }
+  walkFileLines(file.fileDiff, (line) => {
+    if (line.kind === "addition") {
+      additions.add(line.lineNumber);
+    } else if (line.kind === "deletion") {
+      deletions.add(line.lineNumber);
     }
-  }
+  });
   return { additions, deletions };
 }
 

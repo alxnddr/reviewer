@@ -1,17 +1,17 @@
 import { describe, expect, it } from "vitest";
 import type { ReviewLayer } from "../../../shared/review";
-import { parsePatch, type PatchFile } from "./diff/patch";
+import { parsePatch, type PatchFile } from "../../../shared/diff/patch";
 import {
   fileSignature,
-  isComplete,
+  fileSignatures,
   isFileRead,
+  isFullyRead,
   layerTally,
   markFilesRead,
   nextUnreadLayer,
   NO_COLLAPSED_FILES,
   NO_READ_FILES,
   readPaths,
-  readPct,
   tallyRead,
   withCollapsed,
   type ReadFiles,
@@ -98,6 +98,31 @@ describe("fileSignature", () => {
   });
 });
 
+describe("fileSignatures", () => {
+  it("carries every file's own fileSignature, keyed by path", () => {
+    const files = parse(PATCH);
+    const signatures = fileSignatures(files);
+    expect(signatures.get("src/foo.ts")).toBe(fileSignature(fileAt(files, "src/foo.ts")));
+    expect(signatures.get("src/bar.ts")).toBe(fileSignature(fileAt(files, "src/bar.ts")));
+    expect(signatures.get("src/nowhere.ts")).toBeUndefined();
+  });
+
+  it("caches on the files array's identity, so a per-header lookup never rescans it", () => {
+    const files = parse(PATCH);
+    // Same array, called from two "selectors": the same Map instance comes back, which is
+    // what lets a consumer that runs on every store write skip recomputing the join.
+    expect(fileSignatures(files)).toBe(fileSignatures(files));
+  });
+
+  it("recomputes for a genuinely new files array, the same identity rule soloed-diff.ts uses", () => {
+    const first = parse(PATCH);
+    const second = parse(PATCH);
+    expect(fileSignatures(first)).not.toBe(fileSignatures(second));
+    // Different Map instances, same content — the cache key is identity, not equality.
+    expect(fileSignatures(first).get("src/foo.ts")).toBe(fileSignatures(second).get("src/foo.ts"));
+  });
+});
+
 describe("marks against content", () => {
   it("a file read stays read across a reload that did not touch it", () => {
     const files = parse(PATCH);
@@ -132,9 +157,7 @@ describe("tallies", () => {
     const files = parse(PATCH);
     const marks = markFilesRead(NO_READ_FILES, [fileAt(files, "src/foo.ts")], true);
     expect(tallyRead(files, marks)).toEqual({ read: 1, total: 2 });
-    expect(readPct({ read: 1, total: 2 })).toBe(50);
-    expect(readPct({ read: 0, total: 0 })).toBe(0);
-    expect(isComplete({ read: 0, total: 0 })).toBe(false);
+    expect(isFullyRead({ read: 0, total: 0 })).toBe(false);
     expect(readPaths(files, marks)).toEqual(new Set(["src/foo.ts"]));
   });
 
@@ -152,7 +175,7 @@ describe("tallies", () => {
     expect(layerTally(files, layers[2]!, layers, half)).toEqual({ read: 0, total: 1 });
 
     const all = markFilesRead(half, files, true);
-    expect(isComplete(layerTally(files, layers[0]!, layers, all))).toBe(true);
+    expect(isFullyRead(layerTally(files, layers[0]!, layers, all))).toBe(true);
   });
 
   it("a layer whose files left the diff has nothing to read, not zero read", () => {

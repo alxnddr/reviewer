@@ -1,0 +1,25 @@
+// The enforcement behind "src/shared/ is node-free". Everything under src/shared/ except
+// src/shared/node/ compiles into the renderer bundle, so a stray `import { join } from
+// "node:path"` there builds clean under the other three projects — @types/node is in all of
+// their programs, and its `declare module "node:path"` is ambient once it is — and then fails at
+// Vite build time or, worse, at runtime in the window. `"types": []` keeps @types/node out of
+// *this* program, which turns that import into TS2591 instead of prose nobody can run.
+//
+// Test files are excluded on purpose: a shared test runs under vitest in node, is free to read
+// a fixture off disk (themes.test.ts does), and pulling vitest's types in would drag
+// @types/node back in and defeat the whole check. They are still typechecked by the other three
+// projects. This project only guards the boundary; it adds no coverage of its own.
+{
+  "extends": "@electron-toolkit/tsconfig/tsconfig.web.json",
+  "include": ["src/shared/**/*"],
+  "exclude": ["src/shared/node/**", "src/shared/**/*.test.ts"],
+  "compilerOptions": {
+    "types": [],
+    "noImplicitAny": true,
+    "noUncheckedIndexedAccess": true,
+    "exactOptionalPropertyTypes": true,
+    "noImplicitOverride": true,
+    "verbatimModuleSyntax": true,
+    "erasableSyntaxOnly": true
+  }
+}

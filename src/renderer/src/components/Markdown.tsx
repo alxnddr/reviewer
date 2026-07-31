@@ -8,7 +8,7 @@ import {
 } from "react";
 import ReactMarkdown, { type Components } from "react-markdown";
 import type { PluggableList } from "unified";
-import { MARKDOWN_PLUGINS, isExternalUrl, remarkFileReferences } from "@/lib/markdown";
+import { MARKDOWN_PLUGINS, isExternalUrl, remarkFileReferences } from "../../../shared/markdown";
 import { Button } from "@/components/ui/button";
 import { TooltipHint } from "@/components/ui/tooltip";
 import { FileTypeIcon } from "@/components/FileTypeIcon";
@@ -17,7 +17,7 @@ import { cn } from "@/lib/utils";
 
 // The app's one prose tier, rendered: the markdown a layer `description`, the overview
 // `body`, and a comment body all share. remark parses it (CommonMark + GFM, see
-// `lib/markdown.ts`); everything below is *presentation* — the app's face for each
+// `shared/markdown.ts`); everything below is *presentation* — the app's face for each
 // element, and nothing about the grammar. One component so the chapter band, the tour
 // doc, and the comment card can never render the same prose three different ways, and so
 // a surface added later inherits the whole language instead of re-deciding which slice of
@@ -73,10 +73,10 @@ function FileChip({ label, path, onSelect }: FileChipProps): ReactElement {
   return (
     <Button
       type="button"
-      variant="ghost"
+      variant="chrome"
       size="xs"
       onClick={onSelect}
-      className="mx-0.5 inline-block h-auto rounded border border-border-strong px-1.5 align-baseline text-sm leading-5 hover:bg-border/60 dark:hover:bg-border/60"
+      className="mx-0.5 inline-block h-auto rounded border border-border-strong px-1.5 align-baseline text-sm leading-5"
     >
       {/* The file's own type glyph, exactly as the tree and the doc's file rows draw it —
           a file looks like itself wherever the app names it, mid-sentence included. */}

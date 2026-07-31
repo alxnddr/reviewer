@@ -13,7 +13,7 @@ import { cliNoticeShowing, useOnboardingStore } from "@/stores/onboarding";
 // inside — the app looks like it is working. So the condition is checked at every launch and
 // every time the window comes back to the front, and while it holds, it is said.
 //
-// Glass, and floating, for the reason the other two glass surfaces are: this is not an event
+// Glass, and floating, for the reason the app's other floating controls are: this is not an event
 // that happened (the failure bars in the shell's banner slot are, and they dock as solid
 // strips because they are gone as soon as they are read) — it is a condition that lasts as
 // long as it is true. A solid bar would push the whole app down for the duration and put a

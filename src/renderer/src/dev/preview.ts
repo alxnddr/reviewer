@@ -1,13 +1,13 @@
 import type { BranchList, LogEntry } from "../../../shared/git";
-import type { RecentReview } from "../../../shared/recent-reviews";
+import type { RecentReview } from "../../../shared/review-ipc";
 import type { Comment, ReviewLayer, ReviewOverview } from "../../../shared/review";
 import {
   buildHugeAdditionPatch,
   buildManyFilesPatch,
   buildPathsPatch,
   MULTI_STATUS_PATCH,
-} from "../lib/diff/fixtures";
-import { parsePatch, type PatchFile } from "../lib/diff/patch";
+} from "../../../shared/diff/fixtures";
+import { parsePatch, type PatchFile } from "../../../shared/diff/patch";
 import {
   markFilesRead,
   NO_COLLAPSED_FILES,
@@ -16,7 +16,7 @@ import {
 } from "../lib/read-progress";
 import { useOnboardingStore } from "../stores/onboarding";
 import { useRecentReviewsStore } from "../stores/recent-reviews";
-import { useReviewStore, type SessionSlice } from "../stores/review";
+import { createSessionSlice, useReviewStore, type SessionSlice } from "../stores/review";
 
 const HOUR_MS = 3600 * 1000;
 
@@ -299,37 +299,17 @@ function siblingSlice(ordinal: number, spec: SiblingSpec): SessionSlice {
   const repo = { path: `/preview/${name}`, name };
   const head = spec.head ?? `feature/${name}`;
   const review = title === undefined ? null : { ...repo, base: "main", head };
-  return {
-    id: `${digit.repeat(8)}-${digit.repeat(4)}-4000-8000-${digit.repeat(12)}`,
-    repo,
-    log: null,
-    branches: null,
-    brush: null,
-    base: null,
-    head: null,
-    selection: null,
-    diff: { phase: "idle" },
-    selectedFilePath: null,
-    scrollTop: 0,
-    commitSelection: null,
-    comments: [],
-    layers: [],
-    reviewDiff: review === null ? null : { kind: "refs", base: review.base, head: review.head },
-    reviewSubrange: null,
-    reviewOrigin:
-      review === null ? null : { repo, base: review.base, head: review.head, patch: null },
-    overview: title === undefined ? null : { title, body: "" },
-    overviewOpen: false,
-    lastChapterId: null,
-    activeLayerId: null,
-    activeCommentId: null,
-    readFiles: NO_READ_FILES,
-    collapsedFiles: NO_COLLAPSED_FILES,
-    readTotal: 0,
-    reviewPath: null,
-    needsDerive: true,
-    requestTicket: 0,
-  };
+  // Everything else is the factory's default, which is what an unactivated tab holds: nothing
+  // walked, nothing loaded, `needsDerive` still set.
+  return createSessionSlice(
+    { id: `${digit.repeat(8)}-${digit.repeat(4)}-4000-8000-${digit.repeat(12)}`, repo },
+    {
+      reviewDiff: review === null ? null : { kind: "refs", base: review.base, head: review.head },
+      reviewOrigin:
+        review === null ? null : { repo, base: review.base, head: review.head, patch: null },
+      overview: title === undefined ? null : { title, body: "" },
+    },
+  );
 }
 
 /** Adds inactive sibling tabs around whatever state already seeded the active
@@ -440,39 +420,25 @@ function seedRecents(reviews: RecentReview[], extra = 0): void {
 
 /** Boots the store as if one hydrated, derived session were active. */
 function seedSession(overrides: Partial<SessionSlice>): void {
-  const slice: SessionSlice = {
-    id: FIXTURE_SESSION_ID,
-    repo: { path: "/preview/fixture", name: "fixture" },
-    log: { phase: "loaded", entries: fixtureEntries() },
-    branches: { phase: "loaded", list: FIXTURE_BRANCHES },
-    brush: { anchor: 0, focus: 0 },
-    // A fresh session lists the branch it is standing on and compares to nothing; the
-    // states that show a comparison set `base` themselves.
-    base: null,
-    head: FIXTURE_BRANCHES.currentBranch,
-    selection: { kind: "uncommitted" },
-    diff: { phase: "empty" },
-    selectedFilePath: null,
-    scrollTop: 0,
-    commitSelection: { kind: "uncommitted" },
-    comments: [],
-    layers: [],
-    reviewDiff: null,
-    reviewSubrange: null,
-    reviewOrigin: null,
-    overview: null,
-    overviewOpen: false,
-    lastChapterId: null,
-    activeLayerId: null,
-    activeCommentId: null,
-    readFiles: NO_READ_FILES,
-    collapsedFiles: NO_COLLAPSED_FILES,
-    readTotal: 0,
-    reviewPath: null,
-    needsDerive: false,
-    requestTicket: 1,
-    ...overrides,
-  };
+  const slice = createSessionSlice(
+    { id: FIXTURE_SESSION_ID, repo: { path: "/preview/fixture", name: "fixture" } },
+    {
+      log: { phase: "loaded", entries: fixtureEntries() },
+      branches: { phase: "loaded", list: FIXTURE_BRANCHES },
+      brush: { anchor: 0, focus: 0 },
+      // A fresh session lists the branch it is standing on and compares to nothing, so `base`
+      // stays at the factory's null; the states that show a comparison set it themselves.
+      head: FIXTURE_BRANCHES.currentBranch,
+      selection: { kind: "uncommitted" },
+      diff: { phase: "empty" },
+      commitSelection: { kind: "uncommitted" },
+      // Already derived, with a ticket past the initial one — the state this boots into is
+      // one an activation has already been through.
+      needsDerive: false,
+      requestTicket: 1,
+      ...overrides,
+    },
+  );
   useReviewStore.setState({
     boot: "ready",
     sessions: { [slice.id]: slice },

@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import type { RecentReview } from "../../../shared/recent-reviews";
+import type { RecentReview } from "../../../shared/review-ipc";
 // Relative, not `@/`: this module is unit-tested, and the alias is a bundler concern the
 // vitest config does not share (every other store imports its lib the same way).
 import { filterRecents, stepIndex } from "../lib/recent-reviews";

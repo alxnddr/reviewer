@@ -28,6 +28,10 @@ describe("planScrollRestore", () => {
   });
 });
 
+// The generic arm/coalesce/flush/cancel behaviour is covered once, on the shared primitive
+// this wraps (`shared/debounce.test.ts`). What is left here is site-specific: that a capture
+// commits at its own 150ms window (not main's 500ms write-back window) and that `notify`/
+// `flush` reach `commit` at all.
 describe("createScrollCapture", () => {
   beforeEach(() => {
     vi.useFakeTimers();
@@ -36,30 +40,16 @@ describe("createScrollCapture", () => {
     vi.useRealTimers();
   });
 
-  it("coalesces a burst into a single commit of the latest position", () => {
+  it("commits the latest of a burst after its own 150ms window, distinct from the 500ms write-back", () => {
     const commit = vi.fn<(scrollTop: number) => void>();
     const capture = createScrollCapture(commit);
 
     capture.notify(10);
-    capture.notify(40);
     capture.notify(90);
     expect(commit).not.toHaveBeenCalled();
 
     vi.advanceTimersByTime(SCROLL_CAPTURE_DEBOUNCE_MS);
-    expect(commit).toHaveBeenCalledTimes(1);
-    expect(commit).toHaveBeenCalledWith(90);
-  });
-
-  it("starts a fresh window after a commit rather than firing per event", () => {
-    const commit = vi.fn<(scrollTop: number) => void>();
-    const capture = createScrollCapture(commit);
-
-    capture.notify(10);
-    vi.advanceTimersByTime(SCROLL_CAPTURE_DEBOUNCE_MS);
-    capture.notify(20);
-    vi.advanceTimersByTime(SCROLL_CAPTURE_DEBOUNCE_MS);
-
-    expect(commit.mock.calls).toEqual([[10], [20]]);
+    expect(commit).toHaveBeenCalledExactlyOnceWith(90);
   });
 
   it("flush commits a pending position immediately — the unmount/switch path", () => {
@@ -73,14 +63,5 @@ describe("createScrollCapture", () => {
     // The timer was cleared, so no second commit fires on the trailing edge.
     vi.advanceTimersByTime(SCROLL_CAPTURE_DEBOUNCE_MS);
     expect(commit).toHaveBeenCalledTimes(1);
-  });
-
-  it("flush with nothing pending is a no-op", () => {
-    const commit = vi.fn<(scrollTop: number) => void>();
-    const capture = createScrollCapture(commit);
-
-    capture.flush();
-    vi.advanceTimersByTime(SCROLL_CAPTURE_DEBOUNCE_MS);
-    expect(commit).not.toHaveBeenCalled();
   });
 });

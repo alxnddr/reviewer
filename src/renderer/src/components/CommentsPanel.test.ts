@@ -1,10 +1,11 @@
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { Comment } from "../../../shared/review";
 import { CommentsPanel } from "@/components/CommentsPanel";
-import { MULTI_STATUS_PATCH } from "@/lib/diff/fixtures";
-import { parsePatch } from "@/lib/diff/patch";
+import { createSessionSlice, type ReviewState, type SessionSlice } from "@/stores/review";
+import { MULTI_STATUS_PATCH } from "../../../shared/diff/fixtures";
+import { parsePatch } from "../../../shared/diff/patch";
 
 // The rail preview is markup, not text: a body is flattened (`flattenMarkdown`) and the
 // runs it produces are drawn as sans spans and mono `code`. `markdown.test.ts` pins the
@@ -13,8 +14,35 @@ import { parsePatch } from "@/lib/diff/patch";
 // is that the markup they produce is the markup they produced before.
 //
 // Rendered as static markup rather than into a DOM: the panel's output is a pure function
-// of its props (its one effect only scrolls a row into view), so a server render is the
-// same tree the app mounts, and the renderer's tests stay in a plain node environment.
+// of the session it is looking at (its one effect only scrolls a row into view), so a
+// server render is the same tree the app mounts, and the renderer's tests stay in a plain
+// node environment.
+//
+// That session is handed over by stubbing the store hook rather than by seeding the store:
+// the panel is a rail section, so it reads its own state (the data rule in ReviewRail.tsx),
+// and `renderToStaticMarkup` takes a zustand subscription's *server* snapshot — which is
+// the store's initial state, so `useReviewStore.setState` would never reach the render.
+// With the subscription out of the picture the hook is just a selector call, which is
+// exactly what the stub is; everything else about the module stays real, including the
+// selectors the panel runs through it and the actions it hands its rows.
+const seeded = vi.hoisted(() => ({
+  id: "11111111-1111-4111-8111-111111111111",
+  slice: null as SessionSlice | null,
+}));
+
+vi.mock("@/stores/review", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/stores/review")>();
+  const base = actual.useReviewStore.getState();
+  return {
+    ...actual,
+    useReviewStore: <T>(selector: (state: ReviewState) => T): T =>
+      selector(
+        seeded.slice === null
+          ? base
+          : { ...base, sessions: { [seeded.id]: seeded.slice }, activeSessionId: seeded.id },
+      ),
+  };
+});
 
 const FILES = parsePatch(MULTI_STATUS_PATCH, "comments-panel-test");
 
@@ -33,17 +61,12 @@ function comment(overrides: Partial<Comment> = {}): Comment {
 }
 
 function render(comments: Comment[], activeCommentId: string | null = null): string {
+  seeded.slice = createSessionSlice(
+    { id: seeded.id, repo: { path: "/repo", name: "repo" } },
+    { diff: { phase: "loaded", loadId: 1, files: FILES }, comments, activeCommentId },
+  );
   return renderToStaticMarkup(
-    createElement(CommentsPanel, {
-      files: FILES,
-      comments,
-      frozen: false,
-      activeCommentId,
-      onFocusComment: () => {},
-      expanded: true,
-      onToggleExpanded: () => {},
-      fill: false,
-    }),
+    createElement(CommentsPanel, { expanded: true, onToggleExpanded: () => {}, fill: false }),
   );
 }
 

@@ -99,7 +99,12 @@ describe("importReviewFromPath", () => {
 
     const result = await importReviewFromPath(path, fixedStamp());
 
-    expect(result).toEqual({ ok: false, failure: { code: "invalidContent" } });
+    // The reason rides along so the banner can say more than "not a review": these bytes
+    // were never a JSON document, and `JSON.parse`'s own message names where it gave up.
+    expect(result).toEqual({
+      ok: false,
+      failure: { code: "invalidContent", reason: expect.stringContaining("JSON") },
+    });
   });
 
   it("rejects a source ref smuggling a spawn flag as invalidContent, never a spawn", async () => {
@@ -118,7 +123,12 @@ describe("importReviewFromPath", () => {
 
     const result = await importReviewFromPath(path, fixedStamp());
 
-    expect(result).toEqual({ ok: false, failure: { code: "invalidContent" } });
+    // …and the reason names the field that failed, so the same banner serves the reader who
+    // hand-edited a review badly and the one who was handed a tampered one.
+    expect(result).toEqual({
+      ok: false,
+      failure: { code: "invalidContent", reason: expect.stringContaining("base") },
+    });
   });
 
   it("returns unreadable for a directory that carries the extension", async () => {

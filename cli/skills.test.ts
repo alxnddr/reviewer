@@ -58,12 +58,34 @@ describe("listSkills", () => {
     expect(result.skills[1]?.description).toContain("injection");
   });
 
-  it("keeps a description containing a colon intact, splitting only on the first one", () => {
-    const withColon = "---\nname: x\ndescription: Reviews a diff: carefully, and reports.\n---\n";
-    const result = listSkills(skillsRoot({ x: withColon }));
+  it("unwraps a quoted description rather than printing the quotes", () => {
+    // Quoting is what an author reaches for the moment a description opens with a colon-bearing
+    // clause; the quotes are YAML syntax, and printing them in the listing (and in --json) made
+    // the tool look broken.
+    const quoted = '---\nname: x\ndescription: "Reviews a diff: carefully, and reports."\n---\n';
+    const result = listSkills(skillsRoot({ x: quoted }));
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     expect(result.skills[0]?.description).toBe("Reviews a diff: carefully, and reports.");
+  });
+
+  it("folds a block-scalar description instead of printing the fold marker", () => {
+    // Descriptions are long prose, so they get wrapped. Read line-at-a-time, the description
+    // was the literal `>-` and every folded line under it was dropped — a listing that looks
+    // like it worked while telling an agent nothing about the skill.
+    const folded = `---
+name: x
+description: >-
+  Reviews a diff for injection, authz, and secret-handling defects,
+  and reports what it found.
+---
+`;
+    const result = listSkills(skillsRoot({ x: folded }));
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.skills[0]?.description).toBe(
+      "Reviews a diff for injection, authz, and secret-handling defects, and reports what it found.",
+    );
   });
 
   it("skips a directory that carries no SKILL.md rather than failing the listing", () => {
@@ -81,6 +103,33 @@ describe("listSkills", () => {
     expect(result.ok).toBe(false);
     if (result.ok) return;
     expect(result.message).toContain("missing `name` or `description`");
+  });
+
+  it("fails loudly on frontmatter that is not valid YAML, naming the file and the reason", () => {
+    // An unquoted `: ` is the case the hand-rolled parser accepted by splitting on the first
+    // colon; YAML reads it as a nested mapping and rejects it, which is what every frontmatter
+    // reader an agent harness has does too. The rejection has to stay scoped: a broken bundle
+    // names the file it is broken in and why, rather than a bare "cannot list skills".
+    const malformed = "---\nname: x\ndescription: Reviews a diff: carefully.\n---\n";
+    const root = skillsRoot({ broken: malformed });
+    const result = listSkills(root);
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.message).toContain(join(root, "broken", "SKILL.md"));
+    expect(result.message).toContain("frontmatter is not valid YAML");
+    // The position has to be the position in the *file* — the description is on line 3 of the
+    // SKILL.md — or naming the file is worse than useless. The fenced block starts a line in.
+    expect(result.message).toContain("line 3");
+    // The parser's excerpt ends in a newline and the reporter adds its own; a message that
+    // ends in a blank line reads as one that got cut off.
+    expect(result.message).not.toMatch(/\s$/u);
+  });
+
+  it("fails loudly on frontmatter that parses but is not a mapping", () => {
+    const result = listSkills(skillsRoot({ broken: "---\njust a sentence\n---\n" }));
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.message).toContain("is not a block of `key: value` pairs");
   });
 
   it("fails loudly on a SKILL.md with no frontmatter fence at all", () => {

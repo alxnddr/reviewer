@@ -1,5 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { RecentReview, RecentReviewsResponse } from "../../../shared/recent-reviews";
+import type { ReviewerBridge } from "../../../shared/ipc";
+import type { RecentReview, RecentReviewsResponse } from "../../../shared/review-ipc";
+import { stubBridge } from "./__fixtures__/bridge";
 import { useRecentReviewsStore, visibleRecents } from "./recent-reviews";
 
 // The picker's state machine, without a window. What is actually being pinned here is the
@@ -35,10 +37,9 @@ function answer(reviews: RecentReview[], overrides: Partial<RecentReviewsRespons
   };
 }
 
-function install(response: RecentReviewsResponse): { listRecentReviews: ReturnType<typeof vi.fn> } {
-  const bridge = { listRecentReviews: vi.fn().mockResolvedValue(response) };
-  vi.stubGlobal("window", { reviewer: bridge });
-  return bridge;
+/** The shared bridge fixture with the one answer this store reads swapped for `response`. */
+function install(response: RecentReviewsResponse): ReviewerBridge {
+  return stubBridge({ listRecentReviews: vi.fn().mockResolvedValue(response) });
 }
 
 const ROWS = [row("alpha"), row("beta"), row("gamma")];

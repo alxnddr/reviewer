@@ -3,7 +3,8 @@
 @import "tailwindcss";
 @import "tw-animate-css";
 @import "shadcn/tailwind.css";
-/* Generated design system — imported LAST so its :root/.dark/@theme win the cascade. */
+/* The adopted palettes — imported LAST so their :root/.dark/@theme win the cascade.
+ * Hand-maintained, not generated; see design/README.md. */
 @import "../../../design/globals.css";
 
 @custom-variant dark (&:is(.dark *));
@@ -69,10 +70,13 @@
    * than another row of it: the diff surface, a BAND that steps off it and runs the
    * full width of the annotation row, and the CARD that rises off the band.
    *
-   * Derived here instead of mapped onto --card/--elevated because those collapse to
-   * one value on four of the eight themes and invert on github-light (see the
-   * correction below) — which is exactly what left a comment reading as a grey panel
-   * on a grey field. A mix against the theme's own ink and diff surface is a real
+   * Derived here rather than mapped onto one of the ramp's own raised tones
+   * (--surface, --muted, --popover), because those are mixed for opaque chrome rather
+   * than for stepping off the diff surface: --surface IS the diff surface on four of
+   * the six themes and --popover is on both light ones, so neither is a step at all
+   * there, and github-light's --muted and --popover came in darker than its page (see
+   * the correction below) — which is exactly what left a comment reading as a grey
+   * panel on a grey field. A mix against the theme's own ink and diff surface is a real
    * step on every theme by construction, and tracks whatever the theme paints. */
   --comment-band: color-mix(in oklab, var(--foreground) 5%, var(--diff-surface));
   /* Light: the card is paper — the same white as the code behind it, so the body sits
@@ -87,26 +91,29 @@
 }
 
 /* ── github-light: elevation-ramp correction ───────────────────────────────────
- * The generated theme has this one backwards. Its --background / --surface /
- * --diff-surface are #ffffff, but --elevated is #f2f2f2 and --popover is #ebecec —
- * so the theme's *raised* surfaces are its DARKEST, and every menu, select,
- * dropdown, tooltip and floating panel paints muddier than the page under it. Every
- * other light theme here has popover as the lightest tone (pierre-light: page 0.985,
- * card 0.97, popover 1.0). Real GitHub Light agrees: overlays are #ffffff over a
- * #f6f8fa subtle canvas.
+ * The adopted theme has this one backwards. Its --background / --surface /
+ * --diff-surface are #ffffff, but --popover is #ebecec — so the theme's one *raised*
+ * surface is its DARKEST, and every menu, select, dropdown, tooltip and floating
+ * panel paints muddier than the page under it. Every other light theme here has
+ * popover as the lightest tone (pierre-light: page 0.985, surface 0.97, popover 1.0).
+ * Real GitHub Light agrees: overlays are #ffffff over a #f6f8fa subtle canvas.
  *
- * Corrected here rather than in design/globals.css because that file is a
- * checked-in artifact of an external generator with no regeneration script in this
- * repo — an edit there is silently lost the next time it is produced. Same selector,
- * later source order, so this wins. --card is deliberately left alone: it is doing
- * canvas-subtle duty for the resting surfaces and moving it would ripple. */
+ * Only --popover moves. The theme's other tones below the page (--muted / --secondary /
+ * --accent, all #f2f2f2) are left alone: they fill resting chrome that sits *in* the
+ * page rather than floating over it, where a tone under the page is the right one.
+ *
+ * Corrected here rather than in design/globals.css because that file holds the six
+ * palettes as they were adopted, one mechanical ramp per theme, and this is the
+ * app's disagreement with one of them rather than a transcription error — keeping
+ * it out of there keeps the adopted set readable as one piece, next to its sibling
+ * design/tokens.json and design/contrast-report.json. Same selector, later source
+ * order, so this wins. */
 html[data-theme="github-light"] {
-  --elevated: #ffffff;
   --popover: #ffffff;
 }
 
 /* ── Dark themes: the secondary ink, lifted ────────────────────────────────────
- * The generated dark ramps put --text-muted at ~5.8:1 and --text-faint at ~3.5:1
+ * The adopted dark ramps put --text-muted at ~5.8:1 and --text-faint at ~3.5:1
  * against the page. Those pass on paper (the report grades faint as "faint/large
  * text") but they were graded against the token, not against where the token is
  * actually spent: the rail's section labels and every quiet row under them, and
@@ -126,11 +133,11 @@ html[data-theme="github-light"] {
  * the same colour: they are one ink with two names (ours and shadcn's), and a lift
  * applied to one of them would split the menus and placeholders off from the rail.
  *
- * Here rather than in design/globals.css for the reason given above: that file is
- * a generator artifact with no regeneration script in this repo, so an edit to it
- * is lost the next time it is produced. Same selectors, later source order, so
- * these win — and each dark data-theme is listed explicitly, because those beat a
- * bare `.dark` on specificity. */
+ * Here rather than in design/globals.css for the reason given above: those ramps
+ * are the adopted set and this lift is the app's own, so it belongs with the app's
+ * other corrections. Same selectors, later source order, so these win — and each
+ * dark data-theme is listed explicitly, because those beat a bare `.dark` on
+ * specificity. */
 .dark {
   --muted-foreground: oklch(0.7041 0 0);
   --text-muted: oklch(0.7041 0 0);
@@ -210,13 +217,6 @@ html[data-theme="nord"] {
  * the *sibling's* state, a fade that depends on whether the name is clipped,
  * and a query on the tab's own width. */
 
-@utility no-scrollbar {
-  scrollbar-width: none;
-  &::-webkit-scrollbar {
-    display: none;
-  }
-}
-
 [data-tab] {
   /* Each tab is its own query container: the strip's width says nothing about
    * how much room any one tab ended up with, so a squeezed tab has to decide
@@ -270,11 +270,17 @@ html[data-theme="nord"] {
 
 @layer components {
   /* ── Frosted glass ─────────────────────────────────────────────────────────────
-   * Worn by the app's two persistent floating controls — the overview's action island and
-   * the comment stepper. That is the rule for when it is the right answer: a transient
-   * overlay (the find bar) can be an opaque slab because it is gone in a moment, while these
-   * two sit over the reader's content for as long as they are working, and an opaque slab
-   * there is a permanent hole in the page.
+   * Worn by six surfaces, in two families. The persistent floating controls — the overview's
+   * action island, the comment stepper, the "rvw is not installed" notice — sit over the
+   * reader's content for as long as they are working, and an opaque slab there is a permanent
+   * hole in the page. The held-up panels — the first-run card, and through `ui/dialog.tsx`'s
+   * glass variant the shortcut sheet and the recents picker — are over that content only for a
+   * moment, but the work staying visible behind them is the whole reason they are held up
+   * rather than swapped in for the page.
+   *
+   * So the rule is: glass wherever what is behind the surface still has to be there. Anything
+   * that appears and is gone and asks the reader to stop looking past it is an opaque slab
+   * instead — the find bar, every menu and listbox (`ui/surface.ts`), the default dialog.
    *
    * THE THING THAT MATTERS MOST: blur and tint trade against each other, and they are not
    * interchangeable. Tint is what makes a panel opaque — push it and the backdrop stops being

@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { ReviewLayer } from "../../../shared/review";
-import { parsePatch, type PatchFile } from "./diff/patch";
+import { parsePatch, type PatchFile } from "../../../shared/diff/patch";
 
 // The one thing this module promises beyond its parts is that it *is* its parts, computed
 // once: the derivation has to be indistinguishable from `effectiveLayers` + `findLayer` +
@@ -21,7 +21,7 @@ vi.mock("../../../tools/review-coverage", async (importOriginal) => {
 });
 
 const { coverageSummary, effectiveLayers, UNCOVERED_LAYER_ID } = await import("./coverage");
-const { findLayer, soloFiles } = await import("./layers");
+const { findLayer, soloFiles } = await import("../../../shared/layers");
 const { coverageFor, soloedDiff } = await import("./soloed-diff");
 
 // Three files: foo and bar are walked by a layer, skipped by none — so the inferred

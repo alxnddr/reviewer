@@ -3,6 +3,7 @@ import { Columns2, Rows3 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { TooltipHint } from "@/components/ui/tooltip";
 import { selectActiveSlice, useReviewStore } from "@/stores/review";
+import { useUiPrefsStore } from "@/stores/ui-prefs";
 
 // The layout switch only has meaning against a diff, so it appears with one
 // (loading or loaded) and is absent at every dead end — nothing to lay out.
@@ -20,8 +21,10 @@ function selectDiffPresence(state: ReturnType<typeof useReviewStore.getState>): 
  * icon names the current layout; the label names the switch the click performs. */
 export function DiffStyleToggle(): ReactElement | null {
   const presence = useReviewStore(selectDiffPresence);
-  const diffStyle = useReviewStore((state) => state.diffStyle);
-  const setDiffStyle = useReviewStore((state) => state.setDiffStyle);
+  // App-wide, not per-session: the layout the reader picked follows them across tabs and
+  // relaunches (stores/ui-prefs).
+  const diffStyle = useUiPrefsStore((state) => state.diffStyle);
+  const setDiffStyle = useUiPrefsStore((state) => state.setDiffStyle);
 
   if (presence === "absent") {
     return null;
@@ -39,12 +42,9 @@ export function DiffStyleToggle(): ReactElement | null {
       content={split ? "Switch to unified view" : "Switch to split view"}
     >
       <Button
-        variant="ghost"
+        variant="chrome"
         size="icon"
-        // Match the theme trigger: the ghost hover (bg-muted) is invisible on the
-        // bg-sidebar titlebar, so the wash comes from the border tone, with dark:
-        // twins to outrank the variant's own dark arm.
-        className="app-region-no-drag hover:bg-border/60 dark:hover:bg-border/60"
+        className="app-region-no-drag"
         disabled={presence === "loading"}
         aria-label={`Switch to ${split ? "unified" : "split"} view`}
         onClick={() => setDiffStyle(split ? "unified" : "split")}

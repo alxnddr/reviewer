@@ -66,10 +66,12 @@ function describeFile(file: FileCoverage): string {
   }
 }
 
-/** The one rendering of a non-coverable reason, shared by `rvw check --coverage` and `rvw diff`
- * so the two verbs never describe the same file differently. Exhaustive: a new reason is a
- * compile error, not a file quietly mislabelled as the last arm. */
-export function describeReason(reason: NonCoverableReason): string {
+/** A non-coverable reason as the rollup's parenthetical. Private to this module, and only the
+ * *text* channel has one: `rvw check --coverage --json` and `rvw diff --json` both ship the
+ * reason code itself, which is the form an agent branches on — translating it there would put a
+ * sentence in a wire format. Exhaustive: a new reason is a compile error, not a file quietly
+ * mislabelled as the last arm. */
+function describeReason(reason: NonCoverableReason): string {
   switch (reason) {
     case "binary":
       return "binary";

@@ -39,10 +39,10 @@ export function useCopyFeedback(): { copied: boolean; confirm: () => void } {
  * where there is no click of its own to hang a promise off. The store records the copy and
  * bumps the token; the control that the copy was *about* watches it and flashes.
  *
- * Value-compared against a mount-seeded ref, the idiom `DiffView`'s scroll effects use: a
- * control that mounts with a token already set finds it unchanged and stays quiet. Without
- * that, a card scrolling back into a virtualized diff — or a tab switched away from and
- * back — would replay a check for a copy that happened minutes ago.
+ * Value-compared against a mount-seeded ref, the idiom the diff's scroll effects use
+ * (`use-diff-scroll.ts`): a control that mounts with a token already set finds it unchanged
+ * and stays quiet. Without that, a card scrolling back into a virtualized diff — or a tab
+ * switched away from and back — would replay a check for a copy that happened minutes ago.
  *
  * `null` means nothing has been copied that this control speaks for. */
 export function useCopiedFlash(token: number | null): boolean {

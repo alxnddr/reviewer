@@ -6,8 +6,8 @@ import {
   navigableEntries,
   orderedComments,
 } from "./comment-navigation";
-import { RENAMES_PATCH } from "./fixtures";
-import { parsePatch } from "./patch";
+import { RENAMES_PATCH } from "../../../../shared/diff/fixtures";
+import { parsePatch } from "../../../../shared/diff/patch";
 
 // Two files, each with one modification hunk. foo covers additions 10..14; bar
 // covers additions 20..22 — so a comment can be placed, drifted off the end

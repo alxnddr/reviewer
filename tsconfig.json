@@ -1,6 +1,15 @@
 {
   "files": [],
-  "references": [{ "path": "./tsconfig.node.json" }, { "path": "./tsconfig.web.json" }],
+  // The solution the editor's project service walks. `tools` is here for `cli/**`, which no
+  // other project includes: left out, opening a CLI file gets an inferred project — no paths,
+  // no strictness flags, no in-editor errors. tsconfig.shared.json is deliberately *not*
+  // referenced: it is a boundary check with `"types": []`, not a program anyone should get
+  // IntelliSense from, and every file it covers is already in the three below.
+  "references": [
+    { "path": "./tsconfig.node.json" },
+    { "path": "./tsconfig.web.json" },
+    { "path": "./tsconfig.tools.json" }
+  ],
   "compilerOptions": {
     "paths": {
       "@/*": ["./src/renderer/src/*"]

@@ -1,11 +1,13 @@
 import { useEffect, useMemo, useState, type KeyboardEvent, type ReactElement } from "react";
 import { AlertTriangle, ChevronDown, ChevronRight, Layers as LayersIcon } from "lucide-react";
 import type { ReviewLayer } from "../../../shared/review";
-import type { PatchFile } from "@/lib/diff/patch";
+import { clamp } from "../../../shared/clamp";
+import type { PatchFile } from "../../../shared/diff/patch";
 import type { FitToContentRefs } from "@/lib/fit-panel";
-import { layerOutline, resolveLayerScroll } from "@/lib/layers";
+import { layerOutline, resolveLayerScroll } from "../../../shared/layers";
 import { coverageFor } from "@/lib/soloed-diff";
 import { layerTally, NO_READ_FILES, type ReadTally } from "@/lib/read-progress";
+import { useScrollIntoViewById } from "@/lib/use-scroll-into-view";
 import { RAIL_ACTIVE_ITEM, RAIL_GLYPH, RAIL_LIST, RailRow, RailSection } from "@/components/rail";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -24,13 +26,13 @@ import { selectActiveSlice, useReviewStore } from "@/stores/review";
 //
 // Every row is a real place to stand, parents included — selecting one solos its whole
 // extent (itself plus everything under it), selecting a child narrows to that section.
-// That is the aggregation rule from lib/layers.ts, and it is why there is no second kind
+// That is the aggregation rule from shared/layers.ts, and it is why there is no second kind
 // of row here with different rules: one row type, one gesture, two scopes.
 //
 // Hand-built `tree`/`treeitem` rather than a component library: the active descendant *is*
 // the soloed layer, so roving and soloing are the same move, and the arrow keys have to
 // walk what is on screen (a collapsed subtree is skipped) while the diff-side chevrons walk
-// the whole review. The pure stepping/solo/outline logic lives in lib/layers.ts.
+// the whole review. The pure stepping/solo/outline logic lives in shared/layers.ts.
 
 /** Per-level indent. Enough to read as nesting at a glance in a 256px rail, small enough
  * that the cap (five levels) still leaves a usable label column. */
@@ -41,6 +43,11 @@ const TWISTY_PX = 16;
 /** Nothing measured: any layer the loaded diff carries no file for. A shared constant so
  * those rows hand `ReadRing` one stable reference rather than a fresh object per render. */
 const NO_TALLY: ReadTally = { read: 0, total: 0 };
+
+/** Stable empty arrays, so a layer-less session and an unloaded diff hand the selectors
+ * below one constant reference rather than a fresh [] that would re-render every tick. */
+const EMPTY_LAYERS: ReviewLayer[] = [];
+const EMPTY_FILES: PatchFile[] = [];
 
 function rowDomId(id: string): string {
   return `layer-row-${id}`;
@@ -79,21 +86,18 @@ type LayerRowProps = {
   /** The row the keyboard is on — the soloed one, or the cursor while nothing is. */
   current: boolean;
   expanded: boolean;
-  onSelect: () => void;
   onToggle: () => void;
 };
 
 /** One row: indent, twisty, section number, label. One line — the rail is scanned, and a
  * second line of prose per row buries the shape the indentation exists to show. The
- * summary rides in the hover hint, where it costs nothing. */
-function TreeRow({
-  row,
-  selected,
-  current,
-  expanded,
-  onSelect,
-  onToggle,
-}: LayerRowProps): ReactElement {
+ * summary rides in the hover hint, where it costs nothing.
+ *
+ * Nothing here selects. The tree container delegates every click through `data-row-id`
+ * below, so selecting a row and clicking the soloed row again to clear it have exactly one
+ * owner — a second handler on the label would fire the first half of that pair twice and
+ * leave the clear reachable only by whichever handler read the staler `activeLayerId`. */
+function TreeRow({ row, selected, current, expanded, onToggle }: LayerRowProps): ReactElement {
   const glyph =
     row.kind === "uncovered" ? <AlertTriangle aria-hidden="true" className={RAIL_GLYPH} /> : null;
 
@@ -159,9 +163,7 @@ function TreeRow({
           )
         }
       >
-        <span onClick={onSelect} className="min-w-0 flex-1 truncate text-sm">
-          {row.label}
-        </span>
+        <span className="min-w-0 flex-1 truncate text-sm">{row.label}</span>
       </TooltipHint>
       {row.outdated && (
         // The neutral pill keeps a hairline so its shape stays legible against the themed
@@ -186,21 +188,7 @@ function TreeRow({
 }
 
 type LayerListProps = {
-  layers: ReviewLayer[];
-  activeLayerId: string | null;
-  /** Whether the tour doc is the current stop. No row here is selected while it is (the
-   * store clears the solo when the doc opens, and the doc's own row lives above this
-   * section) — but the escape back to the full diff still belongs in this header, because
-   * leaving the doc and leaving a soloed layer are the same move to the same place. */
-  overviewOpen: boolean;
-  /** The full loaded diff — never the soloed subset — so each layer's outdated flag is
-   * resolved against the whole file set. */
-  files: PatchFile[];
-  /** True when the review pins its own frozen patch: every layer anchor places
-   * against it, so no layer wears the outdated chip — the same rule the comment
-   * surface applies to a frozen review. */
-  frozen: boolean;
-  /** Disclosure is owned by the parent (SidebarNav) so it can host the open tree in a
+  /** Disclosure is owned by the rail (`ReviewRail`) so it can host the open tree in a
    * resizable panel and fall back to a plain bar when collapsed — the same split it
    * makes for the comment overview above. */
   expanded: boolean;
@@ -212,17 +200,34 @@ type LayerListProps = {
 
 /** The ordered-layers panel: solos a layer's extent across the file tree and the code
  * view. Selection is derived view state routed through the store — it never touches the
- * session's persisted diff/scroll. */
+ * session's persisted diff/scroll.
+ *
+ * A section, so it reads its own state (the rail's rule, `ReviewRail.tsx`); what it takes
+ * from the rail is the disclosure and the panel it is fitted through. */
 export function LayerList({
-  layers,
-  activeLayerId,
-  overviewOpen,
-  files,
-  frozen,
   expanded,
   onToggleExpanded,
   fit,
 }: LayerListProps): ReactElement | null {
+  const layers = useReviewStore((state) => selectActiveSlice(state)?.layers ?? EMPTY_LAYERS);
+  const activeLayerId = useReviewStore((state) => selectActiveSlice(state)?.activeLayerId ?? null);
+  // Whether the tour doc is the current stop. No row here is selected while it is (the
+  // store clears the solo when the doc opens, and the doc's own row lives above this
+  // section) — but the escape back to the full diff still belongs in this header, because
+  // leaving the doc and leaving a soloed layer are the same move to the same place.
+  const overviewOpen = useReviewStore((state) => selectActiveSlice(state)?.overviewOpen ?? false);
+  // The full loaded diff — never the soloed subset — so each layer's outdated flag and
+  // each row's tally are resolved against the whole file set.
+  const files = useReviewStore((state) => {
+    const diff = selectActiveSlice(state)?.diff;
+    return diff !== undefined && diff.phase === "loaded" ? diff.files : EMPTY_FILES;
+  });
+  // True when the review pins its own frozen patch: every layer anchor places against it,
+  // so no layer wears the outdated chip — the same rule the comment surface applies to a
+  // frozen review.
+  const frozen = useReviewStore(
+    (state) => selectActiveSlice(state)?.reviewDiff?.kind === "frozenPatch",
+  );
   const setActiveLayer = useReviewStore((state) => state.setActiveLayer);
   const readFiles = useReviewStore((state) => selectActiveSlice(state)?.readFiles ?? NO_READ_FILES);
 
@@ -357,12 +362,11 @@ export function LayerList({
     });
   }, [activeLayerId, outline]);
 
-  useEffect(() => {
-    // Keep the selected row visible as the selection walks the tree.
-    if (selectedId !== null) {
-      document.getElementById(rowDomId(selectedId))?.scrollIntoView({ block: "nearest" });
-    }
-  }, [selectedId, rows]);
+  // Keep the selected row visible as the selection walks the tree.
+  useScrollIntoViewById(selectedId === null ? null : rowDomId(selectedId), { block: "nearest" }, [
+    selectedId,
+    rows,
+  ]);
 
   // Nothing to walk: the section is absent entirely. A review with a doc but no layers is
   // now just the doc's own row above, with no empty Layers bar under it.
@@ -407,7 +411,7 @@ export function LayerList({
         ? direction === 1
           ? 0
           : visible.length - 1
-        : Math.min(Math.max(index + direction, 0), visible.length - 1);
+        : clamp(index + direction, 0, visible.length - 1);
     const target = visible[next];
     if (target !== undefined) {
       select(target.id);
@@ -526,12 +530,12 @@ export function LayerList({
           // with them, not on the bare bar.
           expanded && (activeLayerId !== null || overviewOpen) ? (
             <Button
-              variant="ghost"
+              variant="chrome"
               size="sm"
               // Size and ink overriding the variant's own: it rides the Layers bar and has
               // to read as part of it — same 14px, same muted ink, same lift to full ink
               // under the pointer as the bar's own label (see `RailSection`).
-              className="shrink-0 text-sm text-text-muted hover:bg-border/60 hover:text-foreground dark:hover:bg-border/60"
+              className="shrink-0 text-sm text-text-muted"
               onClick={() => setActiveLayer(null)}
             >
               View all
@@ -581,7 +585,6 @@ export function LayerList({
                 selected={row.id === selectedId}
                 current={row.id === currentId}
                 expanded={!collapsed.has(row.id)}
-                onSelect={() => select(row.id)}
                 onToggle={() => toggle(row.id)}
               />
             ))}

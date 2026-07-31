@@ -3,6 +3,7 @@ import { ArrowRight, Check, LoaderCircle, TerminalIcon } from "lucide-react";
 import { AgentPromptBlock, AnyAgentNote, Mono } from "@/components/AgentPrompt";
 import { Button } from "@/components/ui/button";
 import { GLASS_MUTED } from "@/components/Glass";
+import { shortcutBlocked } from "@/lib/shortcut-guard";
 import { cn } from "@/lib/utils";
 import { ONBOARDING_STEPS, useOnboardingStore } from "@/stores/onboarding";
 
@@ -62,9 +63,15 @@ export function OnboardingCard(): ReactElement | null {
 
   // Esc leaves, like every other dismissible surface in the app. Skipping and finishing are
   // the same act (see the store), so this is the same call the Skip button makes.
+  //
+  // Through the shared guard, like every other window-level key: this one used to take an
+  // Escape off `window` and act on it whatever else was up, so the sheet or the recents picker
+  // opened over the guide — both of which close on Escape themselves — would have been
+  // dismissed *and* had the guide vanish behind them from the one press. The card carries no
+  // text field today, so `isEditable` is a latent arm of the same guard rather than a live one.
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent): void => {
-      if (event.key === "Escape") {
+      if (event.key === "Escape" && !shortcutBlocked(event)) {
         event.preventDefault();
         finish();
       }

@@ -24,8 +24,10 @@ type CommentThreadProps = {
  * when outdated).
  *
  * **The surface.** `--comment-surface`, which on a light theme is the same paper
- * white as the code behind it: prose belongs on white, and every grey the kit
- * offered here (`--card`, `--elevated`, `--popover`) put the body on a wash instead.
+ * white as the code behind it: prose belongs on white, and the ramp's own raised
+ * tones do not offer it — `--muted` is a grey wash under the body on both light
+ * themes, and `--surface` is that same wash on pierre-light and the page itself on
+ * github-light, which leaves the card no edge at all.
  * What a white card gives up is *noticeability*, so that job moves out to the band
  * the card sits in — see `CommentAnnotationFrame`. On a dark theme there is nothing
  * lighter than the diff surface to be paper, so the card rises off the band instead.

@@ -1,7 +1,14 @@
 {
   "extends": "@electron-toolkit/tsconfig/tsconfig.node.json",
-  "include": ["cli/**/*", "src/tools/**/*", "src/shared/**/*"],
+  // `src/main/review/guard.ts` is listed one file at a time, not as `src/main/**`: the only
+  // thing in cli/ that reaches into main is `exit-gate.test.ts`, whose whole claim is that the
+  // *app's* importer accepts what the CLI emits. This project is composite, so an import of a
+  // file it does not list is TS6307 rather than a silent second copy — and pulling all of main
+  // in would typecheck it twice per run for one import. Guard itself only imports node builtins
+  // and `src/shared/**`, which are already here, so nothing follows it in.
+  "include": ["cli/**/*", "src/tools/**/*", "src/shared/**/*", "src/main/review/guard.ts"],
   "compilerOptions": {
+    "composite": true,
     "noImplicitAny": true,
     "noUncheckedIndexedAccess": true,
     "exactOptionalPropertyTypes": true,

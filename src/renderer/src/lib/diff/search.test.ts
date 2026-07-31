@@ -1,9 +1,14 @@
 import { describe, expect, it } from "vitest";
-import { MULTI_STATUS_PATCH } from "./fixtures";
-import { parsePatch } from "./patch";
-import { buildSearchIndex, findMatches } from "./search";
+import { MULTI_STATUS_PATCH } from "../../../../shared/diff/fixtures";
+import { parsePatch } from "../../../../shared/diff/patch";
+import { buildSearchIndex, findMatches, partialSignature } from "./search";
 
 const files = parsePatch(MULTI_STATUS_PATCH, "search-test");
+
+/** `text` plus its precomputed lowercase form, for `toEqual` against a real index entry. */
+function line(fileId: string, side: "additions" | "deletions", lineNumber: number, text: string) {
+  return { fileId, side, lineNumber, text, lowerText: text.toLowerCase() };
+}
 
 describe("buildSearchIndex", () => {
   it("addresses each hunk line by file, side, and 1-based number", () => {
@@ -11,52 +16,57 @@ describe("buildSearchIndex", () => {
     // greet.ts: @@ -1,3 +1,7 @@ — one context line, then a change (1 deletion,
     // 5 additions), then a trailing context line. Numbering walks from 1 on both
     // sides; deletions render before additions within the change block.
-    const greet = index.filter((line) => line.fileId === "greet.ts");
+    const greet = index.filter((entry) => entry.fileId === "greet.ts");
     expect(greet).toEqual([
-      {
-        fileId: "greet.ts",
-        side: "additions",
-        lineNumber: 1,
-        text: "export function greet(name: string): string {",
-      },
-      { fileId: "greet.ts", side: "deletions", lineNumber: 2, text: "  return `hello ${name}`;" },
-      { fileId: "greet.ts", side: "additions", lineNumber: 2, text: "  return `hi ${name}`;" },
-      { fileId: "greet.ts", side: "additions", lineNumber: 3, text: "}" },
-      { fileId: "greet.ts", side: "additions", lineNumber: 4, text: "" },
-      {
-        fileId: "greet.ts",
-        side: "additions",
-        lineNumber: 5,
-        text: "export function shout(name: string): string {",
-      },
-      {
-        fileId: "greet.ts",
-        side: "additions",
-        lineNumber: 6,
-        text: "  return greet(name).toUpperCase();",
-      },
-      { fileId: "greet.ts", side: "additions", lineNumber: 7, text: "}" },
+      line("greet.ts", "additions", 1, "export function greet(name: string): string {"),
+      line("greet.ts", "deletions", 2, "  return `hello ${name}`;"),
+      line("greet.ts", "additions", 2, "  return `hi ${name}`;"),
+      line("greet.ts", "additions", 3, "}"),
+      line("greet.ts", "additions", 4, ""),
+      line("greet.ts", "additions", 5, "export function shout(name: string): string {"),
+      line("greet.ts", "additions", 6, "  return greet(name).toUpperCase();"),
+      line("greet.ts", "additions", 7, "}"),
     ]);
   });
 
   it("strips the trailing newline the parser keeps on each line", () => {
     const index = buildSearchIndex(files);
-    expect(index.every((line) => !line.text.includes("\n"))).toBe(true);
+    expect(index.every((entry) => !entry.text.includes("\n"))).toBe(true);
+  });
+
+  it("precomputes lowerText as the lowercase of text", () => {
+    const index = buildSearchIndex(files);
+    expect(index.length).toBeGreaterThan(0);
+    expect(index.every((entry) => entry.lowerText === entry.text.toLowerCase())).toBe(true);
   });
 
   it("gives binary changes and pure renames no searchable lines", () => {
     const index = buildSearchIndex(files);
-    expect(index.some((line) => line.fileId === "img.png")).toBe(false);
-    expect(index.some((line) => line.fileId === "newname.txt")).toBe(false);
+    expect(index.some((entry) => entry.fileId === "img.png")).toBe(false);
+    expect(index.some((entry) => entry.fileId === "newname.txt")).toBe(false);
   });
 
   it("numbers a deletion hunk from its old-file start", () => {
     const index = buildSearchIndex(files);
     // doomed.txt: @@ -1,2 +0,0 @@ — two deletions, no additions.
-    expect(index.filter((line) => line.fileId === "doomed.txt")).toEqual([
-      { fileId: "doomed.txt", side: "deletions", lineNumber: 1, text: "to be deleted" },
-      { fileId: "doomed.txt", side: "deletions", lineNumber: 2, text: "line2" },
+    expect(index.filter((entry) => entry.fileId === "doomed.txt")).toEqual([
+      line("doomed.txt", "deletions", 1, "to be deleted"),
+      line("doomed.txt", "deletions", 2, "line2"),
     ]);
+  });
+});
+
+describe("partialSignature", () => {
+  it("is stable for the same files and changes when a file's isPartial flag flips", () => {
+    const before = partialSignature(files);
+    expect(partialSignature(files)).toBe(before);
+
+    const flipped = files.map((file, i) =>
+      i === 0
+        ? { ...file, fileDiff: { ...file.fileDiff, isPartial: !file.fileDiff.isPartial } }
+        : file,
+    );
+    expect(partialSignature(flipped)).not.toBe(before);
   });
 });
 

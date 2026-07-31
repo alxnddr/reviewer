@@ -48,7 +48,9 @@ const REGION_SELECTORS = [
 
 /** Where in `regions` the focus currently sits — the region that *contains* the focused
  * element, not just the one that is it, so focus resting on a tree row or a comment row
- * still counts as being in that region and F6 moves on rather than back to the top. */
+ * still counts as being in that region and F6 moves on rather than back to the top.
+ *
+ * @internal Exported for its own unit test only — `nextRegion` is the one caller. */
 export function activeRegionIndex(regions: readonly HTMLElement[], active: Element | null): number {
   if (active === null) {
     return -1;

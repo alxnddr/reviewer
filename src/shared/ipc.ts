@@ -1,30 +1,9 @@
-import type { CliInstallResult, CliStatus } from "./cli";
-import type { ThemeId } from "./contracts";
-import type {
-  BranchesResponse,
-  DiffRequest,
-  DiffResponse,
-  FileContentsRequest,
-  FileContentsResponse,
-  LogRequest,
-  LogResponse,
-  OpenRepoResponse,
-  RepoRequest,
-} from "./git";
-import type { RecentReviewsResponse } from "./recent-reviews";
-import type { ReviewOpenPathRequest, ReviewOpenResponse } from "./review-open";
-import type { ReviewSaveRequest, ReviewSaveResponse } from "./review-save";
-import type {
-  Session,
-  SessionCreateRequest,
-  SessionIdRequest,
-  SessionOrderRequest,
-  SessionSnapshot,
-} from "./session";
+import type { IpcContract } from "./ipc-schemas";
 
 // Runtime-light on purpose: the sandboxed preload bundles this module, so it must
-// not pull zod in — schemas live in contracts.ts / git.ts and are imported as types
-// only. Main pairs each channel with its schemas via registerIpcHandler.
+// not pull zod in — the schemas live in ipc-schemas.ts, whose `IpcContract` arrives
+// here as a type and is therefore erased. Main pairs each channel with the same
+// table's schemas via registerIpcHandler.
 export const IpcChannel = {
   themeGet: "theme:get",
   themeSet: "theme:set",
@@ -132,41 +111,6 @@ export const TAB_ORDINAL_EVENTS = [
   [8, IpcEvent.menuActivateTab8],
   [9, IpcEvent.menuActivateTab9],
 ] as const satisfies ReadonlyArray<TabOrdinalEventPair>;
-
-/** Single source of truth linking each channel to its wire types; main handlers and
- * the preload bridge are both typechecked against it. */
-export type IpcContract = {
-  "theme:get": { request: void; response: ThemeId };
-  "theme:set": { request: ThemeId; response: void };
-  "cli:status": { request: void; response: CliStatus };
-  // Answers with the state *after* the attempt rather than a bare success flag: the guide
-  // shows where the launcher landed, and "installed" is a fact on disk either way.
-  "cli:install": { request: void; response: CliInstallResult };
-  "onboarding:get": { request: void; response: boolean };
-  "onboarding:complete": { request: void; response: void };
-  "repo:open": { request: void; response: OpenRepoResponse };
-  // Dialog: main owns the picker, so the request is void. Path: the renderer
-  // supplies the dropped path, guarded in main before use.
-  "review:open": { request: void; response: ReviewOpenResponse };
-  "review:open-path": { request: ReviewOpenPathRequest; response: ReviewOpenResponse };
-  // Answers plainly rather than in a result envelope: "the directory would not open" is a
-  // field on the answer (see RecentReviewsResponse), not a failed call.
-  "reviews:recent": { request: void; response: RecentReviewsResponse };
-  "review:save-json": { request: ReviewSaveRequest; response: ReviewSaveResponse };
-  "review:save-markdown": { request: ReviewSaveRequest; response: ReviewSaveResponse };
-  "git:branches": { request: RepoRequest; response: BranchesResponse };
-  "git:log": { request: LogRequest; response: LogResponse };
-  "git:diff": { request: DiffRequest; response: DiffResponse };
-  "git:file-contents": { request: FileContentsRequest; response: FileContentsResponse };
-  // Session channels answer plainly, not in the GitResult envelope: no git runs
-  // here and the store's salvage-on-load semantics mean reads always succeed.
-  "sessions:list": { request: void; response: SessionSnapshot };
-  "sessions:create": { request: SessionCreateRequest; response: Session };
-  "sessions:update": { request: Session; response: void };
-  "sessions:delete": { request: SessionIdRequest; response: void };
-  "sessions:set-active": { request: SessionIdRequest; response: void };
-  "sessions:reorder": { request: SessionOrderRequest; response: void };
-};
 
 export type IpcRequest<Channel extends IpcChannelName> = IpcContract[Channel]["request"];
 export type IpcResponse<Channel extends IpcChannelName> = IpcContract[Channel]["response"];

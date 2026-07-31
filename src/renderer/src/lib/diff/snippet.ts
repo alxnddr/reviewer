@@ -1,6 +1,6 @@
 import type { FileDiffMetadata } from "@pierre/diffs";
-import { assertNever } from "../../../../shared/assert";
 import type { ReviewAnchor } from "../../../../shared/review";
+import { walkFileLines } from "../../../../shared/diff/walk";
 
 // The few lines of real code an anchor points at, lifted straight out of the parsed
 // diff — the taste of a layer the overview embeds beside its file list, so a reader
@@ -32,58 +32,26 @@ function lineText(raw: string | undefined): string {
   return (raw ?? "").replace(/\r?\n$/u, "");
 }
 
-/** Walk one side of a file's hunks, calling `visit` with each line's number and text in
- * file order. `additionLines`/`deletionLines` hold the raw text; each hunk block carries
- * the index where its run starts in those arrays, and the line *numbers* advance from
- * the hunk header exactly as the coverage universe advances them. `visit` returns false
- * to stop the walk — the caller stops once it is past the range it wants, so a snippet
- * of a 3-line anchor never walks a 4000-line file to its end. */
+/** One side of the shared hunk walk (`shared/diff/walk.ts`): `visit` sees each of this
+ * side's lines with its number and text, in file order. The other side's change lines live
+ * at their own numbers and are not part of these coordinates, so they are filtered out;
+ * a context line the walk emits on both sides arrives here in this side's own numbering.
+ * `additionLines`/`deletionLines` hold the raw text at the index the walk carries.
+ *
+ * `visit` returns false to stop the walk — the caller stops once it is past the range it
+ * wants, so a snippet of a 3-line anchor never walks a 4000-line file to its end. */
 function walkSide(
   file: FileDiffMetadata,
   side: ReviewAnchor["side"],
   visit: (line: SnippetLine) => boolean,
 ): void {
-  const additions = side === "additions";
-  const texts = additions ? file.additionLines : file.deletionLines;
-  /** One block's run of lines, in file coordinates. False the moment `visit` asks to stop. */
-  const emitRun = (
-    kind: SnippetLine["kind"],
-    from: number,
-    start: number,
-    count: number,
-  ): boolean => {
-    for (let i = 0; i < count; i += 1) {
-      if (!visit({ kind, line: from + i, text: lineText(texts[start + i]) })) {
-        return false;
-      }
+  const texts = side === "additions" ? file.additionLines : file.deletionLines;
+  walkFileLines(file, (line) => {
+    if (line.side !== side) {
+      return true;
     }
-    return true;
-  };
-  for (const hunk of file.hunks) {
-    let line = additions ? hunk.additionStart : hunk.deletionStart;
-    for (const block of hunk.hunkContent) {
-      if (block.type === "context") {
-        const start = additions ? block.additionLineIndex : block.deletionLineIndex;
-        if (!emitRun("context", line, start, block.lines)) {
-          return;
-        }
-        line += block.lines;
-      } else if (block.type === "change") {
-        // Only this side's run of the change block exists in these coordinates; the
-        // other side's lines live at their own numbers and are not part of this walk.
-        const count = additions ? block.additions : block.deletions;
-        const start = additions ? block.additionLineIndex : block.deletionLineIndex;
-        if (!emitRun(additions ? "addition" : "deletion", line, start, count)) {
-          return;
-        }
-        line += count;
-      } else {
-        // `@pierre/diffs` is a moving beta: a block kind added upstream must break the
-        // build here rather than silently drop lines out of a preview.
-        assertNever(block);
-      }
-    }
-  }
+    return visit({ kind: line.kind, line: line.lineNumber, text: lineText(texts[line.index]) });
+  });
 }
 
 /** The anchor's own lines, capped at `maxLines`. Null when the range resolves to nothing

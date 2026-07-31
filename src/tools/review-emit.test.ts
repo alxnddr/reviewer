@@ -1,32 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { ReviewArtifact } from "../shared/review";
+import { TWO_FILE_PATCH } from "../shared/diff/fixtures";
 import { parseReviewArtifact, validatePlacement } from "./review-validator";
 import { emitReviewArtifact, type EmitInput } from "./review-emit";
-
-// A two-file patch so comment anchors and layer ranges have real hunks to place
-// against: `src/foo.ts` covers additions 10..14, `src/bar.ts` covers additions 1..3.
-const PATCH = [
-  "diff --git a/src/foo.ts b/src/foo.ts",
-  "index 1111111..2222222 100644",
-  "--- a/src/foo.ts",
-  "+++ b/src/foo.ts",
-  "@@ -10,3 +10,5 @@",
-  " ctx10",
-  "-old11",
-  "+new11",
-  "+new12",
-  "+new13",
-  " ctx14",
-  "diff --git a/src/bar.ts b/src/bar.ts",
-  "index 3333333..4444444 100644",
-  "--- a/src/bar.ts",
-  "+++ b/src/bar.ts",
-  "@@ -1,2 +1,3 @@",
-  " keep1",
-  "+added2",
-  " keep3",
-  "",
-].join("\n");
 
 const COMMENTS = [
   { file: "src/foo.ts", side: "additions", startLine: 11, endLine: 13, body: "why" },
@@ -51,7 +27,7 @@ function input(overrides: Partial<EmitInput> = {}): EmitInput {
     repo: "/repo",
     base: "main",
     head: "feature",
-    patch: PATCH,
+    patch: TWO_FILE_PATCH,
     comments: COMMENTS,
     layers: LAYERS,
     ...overrides,
@@ -72,7 +48,7 @@ describe("emitReviewArtifact", () => {
     // from the recorded repo/refs on open, and re-validation places against that captured
     // diff, not stored bytes.
     expect(parsed.artifact.patch).toBeUndefined();
-    expect(validatePlacement(parsed.artifact, PATCH)).toEqual([]);
+    expect(validatePlacement(parsed.artifact, TWO_FILE_PATCH)).toEqual([]);
 
     const artifact = ReviewArtifact.parse(JSON.parse(result.bytes));
     expect(artifact.repo).toBe("/repo");
@@ -123,7 +99,7 @@ describe("emitReviewArtifact", () => {
     expect(result.ok).toBe(false);
     if (result.ok) return;
     expect(result.problems).toContainEqual(
-      expect.objectContaining({ kind: "schema", path: "comments.0.side" }),
+      expect.objectContaining({ kind: "schema", path: "comments[0].side" }),
     );
   });
 
@@ -140,7 +116,7 @@ describe("emitReviewArtifact", () => {
     expect(result.ok).toBe(false);
     if (result.ok) return;
     expect(result.problems).toContainEqual(
-      expect.objectContaining({ kind: "schema", path: "comments.0" }),
+      expect.objectContaining({ kind: "schema", path: "comments[0].endLine" }),
     );
   });
 
@@ -177,7 +153,7 @@ describe("emitReviewArtifact — carrying the diff", () => {
     const artifact = ReviewArtifact.parse(JSON.parse(result.bytes));
     // Verbatim, not re-serialized: the app renders an embedded patch as-is, so a byte that
     // changed here would be a line the reader sees differently from the one that was gated.
-    expect(artifact.patch).toBe(PATCH);
+    expect(artifact.patch).toBe(TWO_FILE_PATCH);
     // And the anchors still place — against the very bytes the file now carries, which is
     // the stronger of the two checks, not a weaker one.
     expect(validatePlacement(artifact, artifact.patch ?? "")).toEqual([]);

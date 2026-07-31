@@ -16,12 +16,27 @@ function bundledCliPath(): string {
     : join(app.getAppPath(), "dist", "rvw.js");
 }
 
+/** POSIX single-quoting, the rule the shell itself uses: everything between the quotes is
+ * literal, and the one character that cannot appear there — a quote — is closed, escaped and
+ * reopened. An apostrophe in a home directory is enough to need this. */
+function quote(word: string): string {
+  return `'${word.replaceAll("'", "'\\''")}'`;
+}
+
+/** The line a shim of ours names its bundle on. Also how one is recognised again below, so
+ * the two read the same string: the path is quoted in the file, and an apostrophe in it is
+ * written `'\''` there and nowhere else — comparing against the raw path would stop matching
+ * our own shim the moment a home directory has one in it. */
+function shimMarker(cliPath: string): string {
+  return `RVW=${quote(cliPath)}`;
+}
+
 /** A launcher that runs the app-bundled CLI and deletes itself the first time it is
  * invoked after the app is gone — so trashing Reviewer.app leaves no stray command. */
 function shimScript(cliPath: string): string {
   return [
     "#!/bin/sh",
-    `RVW='${cliPath}'`,
+    shimMarker(cliPath),
     'if [ ! -f "$RVW" ]; then',
     '  rm -f "$0" 2>/dev/null',
     '  echo "rvw: Reviewer.app is gone — removed stale launcher." >&2',
@@ -32,18 +47,40 @@ function shimScript(cliPath: string): string {
   ].join("\n");
 }
 
-function runPlain(command: string): Promise<boolean> {
-  return new Promise((resolve) => {
-    execFile("/bin/sh", ["-c", command], (error) => resolve(error === null));
-  });
+/** One step of an install, as argv rather than as a command string. Absolute binaries because
+ * the elevated path below runs these as root and should not be asking a PATH which one it
+ * means. Non-empty by construction, so the spawn below always has a program to run. */
+type Command = readonly [string, ...string[]];
+
+/** Each step in turn as the current user, with no shell anywhere: nothing here is a string a
+ * shell has to take apart again, so a path is one argument whatever is in it. Stops at the
+ * first failure, as the `&&` chain this replaced did. */
+async function runPlain(commands: readonly Command[]): Promise<boolean> {
+  for (const [bin, ...argv] of commands) {
+    const ok = await new Promise<boolean>((resolve) => {
+      execFile(bin, argv, (error) => resolve(error === null));
+    });
+    if (!ok) {
+      return false;
+    }
+  }
+  return true;
 }
 
-/** One admin prompt (Touch ID / password) via AppleScript, as Xcode and VS Code do. */
-function runElevated(command: string): Promise<boolean> {
-  const escaped = command.replaceAll("\\", "\\\\").replaceAll('"', '\\"');
+/** One admin prompt (Touch ID / password) via AppleScript, as Xcode and VS Code do.
+ *
+ * `do shell script` takes a command string and nothing else, so this is the one place an argv
+ * is written back out as shell words — every word quoted whole, then the whole thing escaped
+ * once more for the AppleScript string literal. The two layers are why the words are quoted
+ * properly rather than wrapped in `'…'` and hoped for: this runs as root. */
+function runElevated(commands: readonly Command[]): Promise<boolean> {
+  const script = commands
+    .map((command) => command.map((word) => quote(word)).join(" "))
+    .join(" && ");
+  const escaped = script.replaceAll("\\", "\\\\").replaceAll('"', '\\"');
   return new Promise((resolve) => {
     execFile(
-      "osascript",
+      "/usr/bin/osascript",
       ["-e", `do shell script "${escaped}" with administrator privileges`],
       (error) => resolve(error === null),
     );
@@ -52,8 +89,8 @@ function runElevated(command: string): Promise<boolean> {
 
 /** Try as the user first; only prompt for admin when /usr/local/bin is not writable
  * (the common case on Apple Silicon and fresh installs). */
-async function runPrivileged(command: string): Promise<boolean> {
-  return (await runPlain(command)) || runElevated(command);
+async function runPrivileged(commands: readonly Command[]): Promise<boolean> {
+  return (await runPlain(commands)) || runElevated(commands);
 }
 
 function show(options: MessageBoxOptions): Promise<unknown> {
@@ -77,7 +114,7 @@ function shadowDirs(): string[] {
  * takeover below idempotent. A candidate we cannot read counts: an unreadable `rvw` earlier
  * on the path answers the agent exactly as well as a readable one. */
 function shadowingPaths(): string[] {
-  const ours = bundledCliPath();
+  const ours = shimMarker(bundledCliPath());
   return shadowDirs()
     .map((dir) => join(dir, "rvw"))
     .filter((candidate) => {
@@ -121,9 +158,11 @@ export async function installCli(): Promise<CliInstallResult> {
   try {
     const staged = join(mkdtempSync(join(tmpdir(), "rvw-install-")), "rvw");
     writeFileSync(staged, shimScript(cli), { mode: 0o755 });
-    await runPrivileged(
-      `mkdir -p '${INSTALL_DIR}' && cp -f '${staged}' '${LINK_PATH}' && chmod 755 '${LINK_PATH}'`,
-    );
+    await runPrivileged([
+      ["/bin/mkdir", "-p", INSTALL_DIR],
+      ["/bin/cp", "-f", staged, LINK_PATH],
+      ["/bin/chmod", "755", LINK_PATH],
+    ]);
     // Then take over every launcher that would have answered first. Installing has to mean
     // "`rvw` now runs this app", full stop — writing one file and leaving a stale shim from
     // some earlier setup to win the PATH is the failure this whole check exists to catch,
@@ -134,7 +173,10 @@ export async function installCli(): Promise<CliInstallResult> {
     // the app is gone. Both paths then point at the same place, so the PATH order stops
     // mattering — and a second run finds nothing left to do.
     for (const rival of shadowingPaths()) {
-      await runPrivileged(`cp -f '${staged}' '${rival}' && chmod 755 '${rival}'`);
+      await runPrivileged([
+        ["/bin/cp", "-f", staged, rival],
+        ["/bin/chmod", "755", rival],
+      ]);
     }
   } catch {
     // Staging failed (no writable tmp, …) — same outcome for the reader as a refused
@@ -185,7 +227,7 @@ export async function uninstallCliCommand(): Promise<void> {
     return;
   }
 
-  const removed = await runPrivileged(`rm -f '${LINK_PATH}'`);
+  const removed = await runPrivileged([["/bin/rm", "-f", LINK_PATH]]);
   await show(
     removed
       ? { type: "info", message: "rvw removed", detail: `Deleted ${LINK_PATH}.` }

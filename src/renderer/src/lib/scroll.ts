@@ -1,3 +1,5 @@
+import { createDebouncer } from "../../../shared/debounce";
+
 /** What a session activation asks of the diff surface. The single scroll owner:
  * exactly one of these drives the one `scrollTo` per mount, so a persisted scroll
  * position and a file-jump can never both fire. Absence is a distinct arm — never
@@ -38,37 +40,17 @@ export type ScrollCapture = {
   flush: () => void;
 };
 
-/** Leading-schedule, trailing-commit debounce (matching the store's write-back
- * shape): the first `notify` schedules, later ones only replace the pending
- * value, and the timer fires once with the latest. */
+/** Leading-schedule, trailing-commit debounce, on the shared primitive (`shared/debounce.ts`)
+ * that also backs the store's write-backs and main's session persist: the first `notify`
+ * schedules, later ones only replace the pending value, and the timer fires once with the
+ * latest. */
 export function createScrollCapture(
   commit: (scrollTop: number) => void,
   delayMs: number = SCROLL_CAPTURE_DEBOUNCE_MS,
 ): ScrollCapture {
-  let timer: ReturnType<typeof setTimeout> | null = null;
-  let pending: number | null = null;
-
-  function fire(): void {
-    timer = null;
-    if (pending !== null) {
-      const value = pending;
-      pending = null;
-      commit(value);
-    }
-  }
-
+  const debouncer = createDebouncer<number>({ delayMs, onFire: commit });
   return {
-    notify(scrollTop) {
-      pending = scrollTop;
-      if (timer === null) {
-        timer = setTimeout(fire, delayMs);
-      }
-    },
-    flush() {
-      if (timer !== null) {
-        clearTimeout(timer);
-        fire();
-      }
-    },
+    notify: (scrollTop) => debouncer.notify(scrollTop),
+    flush: () => debouncer.flush(),
   };
 }

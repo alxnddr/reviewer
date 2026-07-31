@@ -9,22 +9,11 @@ import { EXIT_CANNOT_RUN, type LocalContext } from "./context";
 // than as a stderr line it would have to parse anyway; without `--json` it stays a plain stderr
 // message. Same failure, same code, two renderings — the decision lives in `writeCannotRun` and
 // nowhere else, so no verb can forget half of it.
-
-/** The message of a caught `unknown`, without letting a non-Error throw stringify to
- * `[object Object]`. Every shell effect in the CLI (reading an artifact, spawning git,
- * writing an output file) reports its failure through this, so a caller reads one message
- * shape whichever verb produced it. */
-export function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
-}
-
-/** Whether a caught `unknown` is the filesystem's "no such file". The one error a reader
- * may treat as an answer rather than a failure: absence. Every other `readFileSync` error
- * (permissions, a directory where a file belongs, a symlink loop) means the path exists
- * and could not be read — a broken install, not a missing one. */
-export function isNotFound(error: unknown): boolean {
-  return error instanceof Error && "code" in error && error.code === "ENOENT";
-}
+//
+// `writeJson` is the other half of that: the envelope and every verb's own `--json` document —
+// an exit-1 verdict as much as a clean pass — are one wire format to the caller reading them, so
+// they are written by the same line here rather than by eleven hand-rolled
+// `JSON.stringify(x, null, 2)` calls that can each drift.
 
 /** Why the shell could not run — a closed set, because an agent branching on a failure needs
  * the reason to be a token it can switch on rather than a sentence it has to match. Each code
@@ -65,6 +54,14 @@ export type CliError = { readonly code: CliErrorCode; readonly message: string }
  * shapes, so one field decides whether to read the rest. */
 export type CliErrorEnvelope = { readonly ok: false; readonly error: CliError };
 
+/** The CLI's one `--json` rendering: pretty-printed on stdout with a trailing newline, so
+ * every document a caller may pipe — a report, a resolved range, a skill, this module's error
+ * envelope — arrives in the same shape. Two spaces because the output is read by agents *and*
+ * by the humans watching them, and a single-line blob is neither. */
+export function writeJson(context: LocalContext, value: unknown): void {
+  context.process.stdout.write(`${JSON.stringify(value, null, 2)}\n`);
+}
+
 /** Report a cannot-run on the channel the caller opted into, and set exit 2. The single
  * place the 2-with-a-reason contract is honored: every verb's exit-2 path routes through
  * here, so `--json` can never degrade to a bare stderr line. */
@@ -75,7 +72,7 @@ export function writeCannotRun(
 ): void {
   if (json === true) {
     const envelope: CliErrorEnvelope = { ok: false, error };
-    context.process.stdout.write(`${JSON.stringify(envelope, null, 2)}\n`);
+    writeJson(context, envelope);
   } else {
     context.process.stderr.write(`${error.message}\n`);
   }

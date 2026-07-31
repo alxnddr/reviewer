@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { NO_PROGRESS } from "../../shared/review-progress";
-import { reviewsDir } from "../../shared/reviews-dir";
+import { reviewsDir } from "../../shared/node/reviews-dir";
 import { createProgressStore, type ProgressStore } from "./progress";
 import { listRecentReviews, RECENT_MAX, summarizeArtifact } from "./recent";
 

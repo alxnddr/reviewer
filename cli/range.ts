@@ -75,25 +75,28 @@ function badRef(flag: string, input: string, detail: string): CliError {
 /** The repo, the base, and the head — each taken from its flag when given and resolved from
  * the repo otherwise. Order matters: the repo is settled first because every later question is
  * asked *of* it, and the head before the base because the default base is a fork point and a
- * fork point needs two endpoints. `cwd` is passed in rather than read, so a test proves the
- * defaults without changing directory. */
-export function resolveRange(flags: RangeFlags, cwd: string): RangeResult {
-  const toplevel = git(flags.repo ?? cwd, ["rev-parse", "--show-toplevel"]);
+ * fork point needs two endpoints. `env` and `cwd` are the caller's (`cli/context.ts`) rather
+ * than the process's, so a test proves the defaults without changing directory and every git
+ * child below spawns into an environment the caller chose. */
+export function resolveRange(env: NodeJS.ProcessEnv, flags: RangeFlags, cwd: string): RangeResult {
+  const toplevel = git(env, flags.repo ?? cwd, ["rev-parse", "--show-toplevel"]);
   if (!toplevel.ok) {
     return { ok: false, error: { code: "gitFailed", message: toplevel.message } };
   }
   const repoPath = toplevel.stdout.trim();
 
   const head =
-    flags.head === undefined ? defaultHead(repoPath) : resolveRef(repoPath, "--head", flags.head);
+    flags.head === undefined
+      ? defaultHead(env, repoPath)
+      : resolveRef(env, repoPath, "--head", flags.head);
   if (!head.ok) {
     return head;
   }
 
   const base =
     flags.base === undefined
-      ? defaultBase(repoPath, head.ref)
-      : resolveRef(repoPath, "--base", flags.base);
+      ? defaultBase(env, repoPath, head.ref)
+      : resolveRef(env, repoPath, "--base", flags.base);
   if (!base.ok) {
     return base;
   }
@@ -110,7 +113,7 @@ type RefResult =
  * local branch is written back as written. A remote-tracking ref, a tag, and a rev expression
  * all become the sha they named, because none of them is a thing the reader is meant to follow
  * — and `HEAD`/`@` short-circuit to the sha before the question is even asked. */
-function resolveRef(repo: string, flag: string, input: string): RefResult {
+function resolveRef(env: NodeJS.ProcessEnv, repo: string, flag: string, input: string): RefResult {
   if (!usableRevision(input)) {
     return {
       ok: false,
@@ -122,7 +125,7 @@ function resolveRef(repo: string, flag: string, input: string): RefResult {
     };
   }
 
-  const verified = git(repo, ["rev-parse", "--verify", `${input}^{commit}`]);
+  const verified = git(env, repo, ["rev-parse", "--verify", `${input}^{commit}`]);
   if (!verified.ok) {
     return { ok: false, error: badRef(flag, input, "is not a commit this repo can resolve") };
   }
@@ -138,7 +141,7 @@ function resolveRef(repo: string, flag: string, input: string): RefResult {
     return { ok: true, ref: sha };
   }
 
-  const branch = localBranchName(repo, input);
+  const branch = localBranchName(env, repo, input);
   return { ok: true, ref: branch ?? sha };
 }
 
@@ -149,8 +152,8 @@ function resolveRef(repo: string, flag: string, input: string): RefResult {
  * through `BranchName`: it is about to be written into an artifact whose schema will demand it,
  * and a ref git accepts but the schema would not must fall back to the sha rather than emit a
  * file that cannot be re-read. */
-function localBranchName(repo: string, input: string): string | null {
-  const symbolic = git(repo, ["rev-parse", "--symbolic-full-name", input]);
+function localBranchName(env: NodeJS.ProcessEnv, repo: string, input: string): string | null {
+  const symbolic = git(env, repo, ["rev-parse", "--symbolic-full-name", input]);
   if (!symbolic.ok) {
     return null;
   }
@@ -166,15 +169,15 @@ function localBranchName(repo: string, input: string): string | null {
 /** The head nobody named: the branch that is checked out, so the review follows it, falling
  * back to the resolved sha on a detached HEAD. An unborn branch has no commit to review, and
  * that surfaces as the `rev-parse` failure it is. */
-function defaultHead(repo: string): RefResult {
-  const symbolic = git(repo, ["symbolic-ref", "--short", "--quiet", "HEAD"]);
+function defaultHead(env: NodeJS.ProcessEnv, repo: string): RefResult {
+  const symbolic = git(env, repo, ["symbolic-ref", "--short", "--quiet", "HEAD"]);
   if (symbolic.ok) {
     const name = symbolic.stdout.trim();
     if (BranchName.safeParse(name).success) {
       return { ok: true, ref: name };
     }
   }
-  const detached = git(repo, ["rev-parse", "--verify", "HEAD^{commit}"]);
+  const detached = git(env, repo, ["rev-parse", "--verify", "HEAD^{commit}"]);
   if (!detached.ok) {
     return {
       ok: false,
@@ -194,9 +197,9 @@ function defaultHead(repo: string): RefResult {
  * base is a fixed point: a base stored as `origin/main` would slide forward every fetch and
  * quietly shrink the review. When nothing answers, that is reported rather than papered over
  * with a guess — the one thing a review range must never be. */
-function defaultBase(repo: string, head: string): RefResult {
-  for (const candidate of baseCandidates(repo)) {
-    const forkPoint = git(repo, ["merge-base", candidate, head]);
+function defaultBase(env: NodeJS.ProcessEnv, repo: string, head: string): RefResult {
+  for (const candidate of baseCandidates(env, repo)) {
+    const forkPoint = git(env, repo, ["merge-base", candidate, head]);
     if (!forkPoint.ok) {
       continue;
     }
@@ -216,18 +219,23 @@ function defaultBase(repo: string, head: string): RefResult {
 
 /** The refs a fork point may be measured from, best first. Each is checked to exist before it
  * is offered, so `merge-base` is only ever asked about a ref the repo has. */
-function baseCandidates(repo: string): string[] {
+function baseCandidates(env: NodeJS.ProcessEnv, repo: string): string[] {
   const candidates: string[] = [];
-  const upstream = git(repo, ["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}"]);
+  const upstream = git(env, repo, [
+    "rev-parse",
+    "--abbrev-ref",
+    "--symbolic-full-name",
+    "@{upstream}",
+  ]);
   if (upstream.ok && upstream.stdout.trim().length > 0) {
     candidates.push(upstream.stdout.trim());
   }
-  const originHead = git(repo, ["rev-parse", "--abbrev-ref", "origin/HEAD"]);
+  const originHead = git(env, repo, ["rev-parse", "--abbrev-ref", "origin/HEAD"]);
   if (originHead.ok && originHead.stdout.trim().length > 0) {
     candidates.push(originHead.stdout.trim());
   }
   for (const fallback of ["main", "master"]) {
-    if (git(repo, ["rev-parse", "--verify", "--quiet", `${fallback}^{commit}`]).ok) {
+    if (git(env, repo, ["rev-parse", "--verify", "--quiet", `${fallback}^{commit}`]).ok) {
       candidates.push(fallback);
     }
   }

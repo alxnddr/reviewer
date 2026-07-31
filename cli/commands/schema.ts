@@ -1,6 +1,7 @@
 import { buildCommand } from "@stricli/core";
 import { reviewArtifactJsonSchema } from "../../src/tools/review-schema";
 import { EXIT_READY, type LocalContext } from "../context";
+import { writeJson } from "../errors";
 
 // `rvw schema` — the artifact shape an agent authors against, derived from the same
 // `ReviewArtifact` zod contract `rvw emit`/`rvw check` parse with, never hand-written (the
@@ -44,7 +45,7 @@ export const schemaCommand = buildCommand<SchemaFlags, [], LocalContext>({
     positional: { kind: "tuple", parameters: [] },
   },
   func(this: LocalContext, flags: SchemaFlags): void {
-    this.process.stdout.write(`${JSON.stringify(reviewArtifactJsonSchema(), null, 2)}\n`);
+    writeJson(this, reviewArtifactJsonSchema());
     if (!flags.json) {
       for (const line of ENFORCEMENT_NOTE) {
         this.process.stdout.write(`${line}\n`);

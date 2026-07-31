@@ -6,12 +6,12 @@ import {
   type ThemesType,
 } from "@pierre/diffs";
 import type { ThemeId } from "../../../../shared/contracts";
-import { DEFAULT_DARK, DEFAULT_LIGHT, THEMES } from "../../../../shared/themes.generated";
+import { DEFAULT_DARK, DEFAULT_LIGHT, THEMES } from "../../../../shared/themes";
 
 function shikiThemeFor(id: string): DiffsThemeNames {
   const meta = THEMES.find((theme) => theme.id === id);
   if (meta === undefined) {
-    throw new Error(`no curated theme "${id}" in the generated set`);
+    throw new Error(`no theme "${id}" in the curated set`);
   }
   return meta.shikiTheme;
 }
@@ -28,7 +28,7 @@ export const DEFAULT_DIFF_THEME: ThemesType = {
  * it whichever side the .dark class picks. Null (pre-hydration) boots on the default pair; an unknown
  * id falls back to it too. Shared by the pool sync (which pushes it onto the workers as the tokenizing
  * theme) and the diff view (which mirrors it into its per-view options purely to force a re-render on a
- * same-appearance switch — see DiffView). */
+ * same-appearance switch — see `use-diff-options.ts`). */
 export function activeDiffThemePair(selection: ThemeId | null): ThemesType {
   const shiki =
     selection === null ? undefined : THEMES.find((theme) => theme.id === selection)?.shikiTheme;

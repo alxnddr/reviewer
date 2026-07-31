@@ -1,7 +1,7 @@
 import type { ReviewLayer } from "../../../shared/review";
 import { coverageSummary, effectiveLayers, type CoverageSummary } from "./coverage";
-import type { PatchFile } from "./diff/patch";
-import { findLayer, soloFiles } from "./layers";
+import type { PatchFile } from "../../../shared/diff/patch";
+import { findLayer, soloFiles } from "../../../shared/layers";
 
 // The one derivation of "what the reader is actually looking at": the effective layer list,
 // the resolved active layer, and the file subset a solo leaves on screen. Every surface and

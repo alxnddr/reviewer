@@ -1,4 +1,6 @@
 import { assertNever } from "../../../shared/assert";
+import { clamp } from "../../../shared/clamp";
+import { countLabel } from "../../../shared/plural";
 import type { CommitSelection, CommitSha, LogEntry } from "../../../shared/git";
 import { shortSha as abbreviate } from "./refs";
 
@@ -14,7 +16,18 @@ export type BrushAction =
   | { type: "step"; direction: 1 | -1; extend: boolean };
 
 function clampIndex(index: number, entryCount: number): number {
-  return Math.min(Math.max(index, 0), entryCount - 1);
+  return clamp(index, 0, entryCount - 1);
+}
+
+/** The range that came in, when the action did not actually move it. The store asks "did the
+ * brush change?" by reference twice over — `previewBrush` against this result, then
+ * `applyBrush` against the slice it wrote — and a freshly allocated but equal range defeats
+ * both: a drag's 60 Hz of extends, or a held arrow at either end of the list, would each
+ * reallocate the whole session record for a brush that stayed exactly where it was. */
+function settled(range: BrushRange | null, next: BrushRange): BrushRange {
+  return range !== null && range.anchor === next.anchor && range.focus === next.focus
+    ? range
+    : next;
 }
 
 /** Every brush interaction funnels through here; the result is null only when
@@ -30,23 +43,26 @@ export function brushReducer(
   switch (action.type) {
     case "set": {
       const index = clampIndex(action.index, entryCount);
-      return { anchor: index, focus: index };
+      return settled(range, { anchor: index, focus: index });
     }
     case "extend": {
       const focus = clampIndex(action.index, entryCount);
       if (range === null) {
         return { anchor: focus, focus };
       }
-      return { anchor: clampIndex(range.anchor, entryCount), focus };
+      return settled(range, { anchor: clampIndex(range.anchor, entryCount), focus });
     }
     case "step": {
       if (range === null) {
         return { anchor: 0, focus: 0 };
       }
       const focus = clampIndex(range.focus + action.direction, entryCount);
-      return action.extend
-        ? { anchor: clampIndex(range.anchor, entryCount), focus }
-        : { anchor: focus, focus };
+      return settled(
+        range,
+        action.extend
+          ? { anchor: clampIndex(range.anchor, entryCount), focus }
+          : { anchor: focus, focus },
+      );
     }
   }
 }
@@ -71,7 +87,10 @@ export function brushContains(range: BrushRange, index: number): boolean {
  * pseudo-entry is pinned to index 0 (shared/git.ts), so a range containing it
  * either is it alone or extends down into commits. Null means the range does not
  * fit the list — a stale brush after the log changed. */
-export function selectionFromBrush(entries: LogEntry[], range: BrushRange): CommitSelection | null {
+export function selectionFromBrush(
+  entries: readonly LogEntry[],
+  range: BrushRange,
+): CommitSelection | null {
   const { top, bottom } = brushBounds(range);
   if (top < 0 || bottom >= entries.length) {
     return null;
@@ -95,7 +114,7 @@ export function selectionFromBrush(entries: LogEntry[], range: BrushRange): Comm
   return { kind: "commitRange", first: oldest.commit.sha, last: newest.commit.sha };
 }
 
-function indexOfSha(entries: LogEntry[], sha: CommitSha): number | null {
+function indexOfSha(entries: readonly LogEntry[], sha: CommitSha): number | null {
   const index = entries.findIndex((entry) => entry.kind === "commit" && entry.commit.sha === sha);
   return index === -1 ? null : index;
 }
@@ -106,7 +125,7 @@ function indexOfSha(entries: LogEntry[], sha: CommitSha): number | null {
  * working tree that is no longer dirty, or an inverted commit order —
  * so a stale selection degrades to nothing, never to a wrong-range brush. */
 export function brushFromSelection(
-  entries: LogEntry[],
+  entries: readonly LogEntry[],
   selection: CommitSelection,
 ): BrushRange | null {
   switch (selection.kind) {
@@ -134,13 +153,13 @@ export function brushFromSelection(
 
 /** The brush covering every row — the whole review range, which reads as "the full
  * review" rather than a narrowed subset. Null for an empty list. */
-export function reviewFullBrush(entries: LogEntry[]): BrushRange | null {
+export function reviewFullBrush(entries: readonly LogEntry[]): BrushRange | null {
   return entries.length > 0 ? { anchor: 0, focus: entries.length - 1 } : null;
 }
 
 /** Whether a brush spans the entire list. A full span over a review's commits is
  * the whole review, modelled as no subrange so its diff renders via the pin. */
-export function isFullBrush(entries: LogEntry[], range: BrushRange): boolean {
+export function isFullBrush(entries: readonly LogEntry[], range: BrushRange): boolean {
   const { top, bottom } = brushBounds(range);
   return top === 0 && bottom === entries.length - 1;
 }
@@ -149,7 +168,7 @@ export function isFullBrush(entries: LogEntry[], range: BrushRange): boolean {
  * log: `{ selected, total }` for the "N of M commits" label, or null when the
  * subrange no longer fits the log (rewritten history). */
 export function reviewSubrangeExtent(
-  entries: LogEntry[],
+  entries: readonly LogEntry[],
   subrange: CommitSelection,
 ): { selected: number; total: number } | null {
   const range = brushFromSelection(entries, subrange);
@@ -161,7 +180,7 @@ export function reviewSubrangeExtent(
 }
 
 /** The affordance line under the brush: "3 commits + uncommitted". */
-export function brushSummary(entries: LogEntry[], range: BrushRange): string {
+export function brushSummary(entries: readonly LogEntry[], range: BrushRange): string {
   const { top, bottom } = brushBounds(range);
   const selected = entries.slice(top, bottom + 1);
   const commitCount = selected.filter((entry) => entry.kind === "commit").length;
@@ -169,7 +188,7 @@ export function brushSummary(entries: LogEntry[], range: BrushRange): string {
   if (commitCount === 0) {
     return withUncommitted ? "uncommitted changes" : "no selection";
   }
-  const commits = commitCount === 1 ? "1 commit" : `${commitCount} commits`;
+  const commits = countLabel(commitCount, "commit");
   return withUncommitted ? `${commits} + uncommitted` : commits;
 }
 
@@ -198,7 +217,7 @@ function staleCommitLabel(selection: CommitSelection): string {
  * commit; the sha is machine identity and says nothing about which change this is.
  * Anything wider is a count ("3 commits + uncommitted"), because nobody reads a range
  * by its endpoints either. */
-export function commitRangeLabel(entries: LogEntry[], range: BrushRange): string {
+export function commitRangeLabel(entries: readonly LogEntry[], range: BrushRange): string {
   const { top, bottom } = brushBounds(range);
   if (top === bottom) {
     const entry = entries[top];
@@ -214,7 +233,7 @@ export function commitRangeLabel(entries: LogEntry[], range: BrushRange): string
 /** The same label for a settled selection. Only one the log cannot place falls back to
  * shas, where there is genuinely nothing else left to print. */
 export function commitSelectionLabel(
-  entries: LogEntry[] | null,
+  entries: readonly LogEntry[] | null,
   selection: CommitSelection,
 ): string {
   if (entries === null) {

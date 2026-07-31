@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { errorMessage } from "./errors";
+import { errorMessage } from "../src/shared/errors";
 
 // The one seam `rvw open` launches the installed app through (the mirror of `cli/git.ts`:
 // a pure decision plus a thin spawn). The app already owns every arrival path — a cold

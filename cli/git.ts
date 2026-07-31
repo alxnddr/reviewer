@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { MAX_PATCH_BYTES, rangeDiffArgs } from "../src/shared/git-diff";
+import { MAX_PATCH_BYTES, hardenedGitEnv, rangeDiffArgs } from "../src/shared/node/git-diff";
 import { ReviewRef } from "../src/shared/git";
 import type { ReviewArtifact } from "../src/shared/review";
 
@@ -26,25 +26,17 @@ export type PatchCapture = { ok: true; patch: string } | { ok: false; message: s
  * stream, which is the one failure an agent cannot act on. */
 const TIMEOUT_MS = 30_000;
 
-/** Run git in the target repo and return stdout, or a typed failure. Env is hardened like
- * the app runner (src/main/git/runner.ts): the `GIT_*` repo overrides are scrubbed — they
- * would redirect the diff to a different repo than `--repo`, whose internally-consistent
- * output would still look valid — and `LC_ALL=C` pins stderr to English so a failure
- * message is stable regardless of the agent's locale. */
-export function git(repo: string, args: readonly string[]): GitCapture {
-  const env: NodeJS.ProcessEnv = {
-    ...process.env,
-    GIT_TERMINAL_PROMPT: "0",
-    GIT_OPTIONAL_LOCKS: "0",
-    LC_ALL: "C",
-  };
-  delete env.GIT_DIR;
-  delete env.GIT_WORK_TREE;
-  delete env.GIT_INDEX_FILE;
-
+/** Run git in the target repo and return stdout, or a typed failure. The environment is the
+ * caller's (`context.env` — the CLI reads no global here, so a suite proves the spawn posture
+ * against an env it chose) and is hardened by `hardenedGitEnv` (src/shared/node/git-diff.ts)
+ * before the child sees it — the same posture the app runner spawns with, so the two spawn
+ * styles (this one's sync `spawnSync`, the app's async/streaming one) cannot drift on the part
+ * that must not: prompts, optional locks, locale, and the `GIT_*` repo overrides that would
+ * redirect the diff to a different repo than `--repo`. */
+export function git(env: NodeJS.ProcessEnv, repo: string, args: readonly string[]): GitCapture {
   const result = spawnSync("git", ["-C", repo, ...args], {
     encoding: "utf8",
-    env,
+    env: hardenedGitEnv(env),
     maxBuffer: MAX_PATCH_BYTES,
     timeout: TIMEOUT_MS,
   });
@@ -88,14 +80,19 @@ export function git(repo: string, args: readonly string[]): GitCapture {
  * not a user-facing rejection but the spawn boundary itself — a hand-edited artifact must not
  * smuggle a flag or a rev expression into a `git` child, and validating before the spawn is
  * how every other ref-bearing path in this codebase behaves. */
-export function capturePatch(repo: string, base: string, head: string): PatchCapture {
+export function capturePatch(
+  env: NodeJS.ProcessEnv,
+  repo: string,
+  base: string,
+  head: string,
+): PatchCapture {
   if (!ReviewRef.safeParse(base).success) {
     return { ok: false, message: `base ${base} is not a valid ref (a branch name or full sha)` };
   }
   if (!ReviewRef.safeParse(head).success) {
     return { ok: false, message: `head ${head} is not a valid ref (a branch name or full sha)` };
   }
-  const captured = git(repo, rangeDiffArgs(base, head));
+  const captured = git(env, repo, rangeDiffArgs(base, head));
   return captured.ok ? { ok: true, patch: captured.stdout } : captured;
 }
 
@@ -105,9 +102,9 @@ export function capturePatch(repo: string, base: string, head: string): PatchCap
  * re-validation matches what a reviewer sees, but it needs the repo present. A rare imported
  * artifact that still carries a frozen `patch` is honored verbatim (no git), so it validates
  * offline exactly as the app renders it frozen. */
-export function artifactDiff(artifact: ReviewArtifact): PatchCapture {
+export function artifactDiff(env: NodeJS.ProcessEnv, artifact: ReviewArtifact): PatchCapture {
   if (artifact.patch !== undefined && artifact.patch.length > 0) {
     return { ok: true, patch: artifact.patch };
   }
-  return capturePatch(artifact.repo, artifact.base, artifact.head);
+  return capturePatch(env, artifact.repo, artifact.base, artifact.head);
 }

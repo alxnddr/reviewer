@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import type { CliInstallProblem, CliStatus } from "../../../shared/cli";
+import { clamp } from "../../../shared/clamp";
 
 // The first-run guide's state, kept out of the review store on purpose: nothing here belongs
 // to a session, and the guide has to be able to run before there is one.
@@ -45,7 +46,7 @@ type OnboardingState = {
 };
 
 function clampStep(step: number): number {
-  return Math.min(Math.max(step, 0), ONBOARDING_STEPS - 1);
+  return clamp(step, 0, ONBOARDING_STEPS - 1);
 }
 
 /** Whether the standing "rvw is not installed" notice is on screen (see CliBanner).

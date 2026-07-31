@@ -1,5 +1,5 @@
 // How a comment names where it lives. The body itself is prose in the app's one
-// markdown tier (`lib/markdown.ts`), rendered by `Markdown`; all that is left here is
+// markdown tier (`shared/markdown.ts`), rendered by `Markdown`; all that is left here is
 // the mono anchor string a surface shows when the comment is off its line.
 
 import type { Comment } from "../../../shared/review";

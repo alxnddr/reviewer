@@ -1,4 +1,5 @@
 import * as z from "zod";
+import { errorMessage } from "./errors";
 import { ReviewRef, RepoInfo, RepoPath } from "./git";
 
 // The review domain contract: `.reviewer.json` is the single integration
@@ -20,22 +21,18 @@ export type ReviewSide = z.infer<typeof ReviewSide>;
 
 const LineNumber = z.number().int().positive();
 
-/** Kept together so the wire comment, the in-app comment, and a layer range
- * share one anchor definition — the Range shape is identical across comments and
- * layers, so anchoring and the outdated rule apply unchanged. */
-const anchorShape = {
-  file: z.string().min(1),
-  side: ReviewSide,
-  startLine: LineNumber,
-  endLine: LineNumber,
-};
-
-type LineSpan = { startLine: number; endLine: number };
+/** An inclusive `startLine..endLine` run — the line half of every anchor, on its own
+ * because the rules that only compare the two numbers (the ascending refine here, coverage's
+ * span arithmetic) have no business knowing which file or side they came from. */
+export type LineSpan = { startLine: number; endLine: number };
 
 /** An inverted range is not a real anchor — reject it rather than represent it. */
 const rangeIsAscending = (range: LineSpan): boolean => range.endLine >= range.startLine;
 const ASCENDING_RANGE_RULE = "endLine must be greater than or equal to startLine";
-const rangeError = { error: ASCENDING_RANGE_RULE };
+/** Reported at `endLine`, not on the anchor object: the rule compares two siblings but only
+ * one of them is the one to edit, so the path an authoring agent reads names the field it
+ * has to change rather than the whole anchor. */
+const rangeError = { error: ASCENDING_RANGE_RULE, path: ["endLine"] };
 
 /** Carried as schema metadata, not just a `.refine` predicate, because the ascending
  * rule compares two sibling fields — a shape no JSON Schema keyword can express. It
@@ -45,35 +42,46 @@ const anchorDescription = `An anchor: file + side + line range. ${ASCENDING_RANG
 
 /** `file + side + line range` — the unit the anchoring resolver places
  * or flags outdated. Persisted as authored; the placed line is recomputed on
- * load, never stored (the session.ts inputs-not-derived precedent). */
+ * load, never stored (the session.ts inputs-not-derived precedent).
+ *
+ * One schema rather than a field bag each user re-spreads: a layer range *is* an anchor,
+ * and the wire comment and the in-app comment are `.extend()`s of it — the Range shape is
+ * identical across comments and layers, so anchoring and the outdated rule apply unchanged.
+ * `.extend()` carries the ascending refine along with the fields, so an anchor-shaped
+ * schema derived from this one cannot forget it. */
 export const ReviewAnchor = z
-  .object(anchorShape)
+  .object({
+    file: z.string().min(1),
+    side: ReviewSide,
+    startLine: LineNumber,
+    endLine: LineNumber,
+  })
   .refine(rangeIsAscending, rangeError)
   .meta({ description: anchorDescription });
 export type ReviewAnchor = z.infer<typeof ReviewAnchor>;
+
+/** The same `file + side + range` as a plain shape — `ReviewAnchor` minus the ascending
+ * refine, which is a *parse-time* rule about untrusted input and says nothing about a range
+ * the code derived itself. Every locator a tool reports is this: the validator's problem
+ * anchors and coverage's uncovered spans are the same four fields, so they are the same
+ * type, and a `ReviewAnchor` is assignable straight into one. */
+export type AnchorSpan = LineSpan & { file: string; side: ReviewSide };
 
 /** A comment as written in the artifact — minimal on the wire; the app stamps
  * identity on import (mirrors `SessionId`, never renderer-chosen). `body` is prose in
  * the same markdown the overview and a layer description take — the app renders one
  * grammar everywhere — though a comment is usually a sentence, not a document. */
-export const ReviewComment = z
-  .object({ ...anchorShape, body: z.string().min(1) })
-  .refine(rangeIsAscending, rangeError)
-  .meta({
-    description: `${anchorDescription} \`body\` says why, never what, and is markdown (CommonMark + GFM).`,
-  });
+export const ReviewComment = ReviewAnchor.extend({ body: z.string().min(1) }).meta({
+  description: `${anchorDescription} \`body\` says why, never what, and is markdown (CommonMark + GFM).`,
+});
 export type ReviewComment = z.infer<typeof ReviewComment>;
 
 /** The in-app comment: the authored shape plus the app-assigned `id` stamped by
  * `importReview`. Non-optional — once imported a comment always has identity, so
- * the illegal "comment without an id" state is unrepresentable. */
-export const Comment = z
-  .object({
-    ...anchorShape,
-    body: z.string().min(1),
-    id: z.uuid(),
-  })
-  .refine(rangeIsAscending, rangeError);
+ * the illegal "comment without an id" state is unrepresentable. Extended from
+ * `ReviewComment` rather than rebuilt beside it, so the in-app shape cannot drift from
+ * the wire one. */
+export const Comment = ReviewComment.extend({ id: z.uuid() });
 export type Comment = z.infer<typeof Comment>;
 
 /** A layer as written in the artifact: **nested**, and identity-free. A layer that
@@ -98,39 +106,30 @@ export type Comment = z.infer<typeof Comment>;
  * and every layer reaching some code — its own ranges, or a descendant's. The app reads a
  * too-deep layer as un-nested (a hand-edited artifact still opens and still reads top to
  * bottom) while `rvw emit`/`check` refuse to produce one. */
-export interface ReviewLayerInput {
-  label: string;
-  summary?: string | undefined;
-  description?: string | undefined;
-  ranges: ReviewAnchor[];
-  children: ReviewLayerInput[];
-}
-
-/** The same layer before the schema fills its defaults in — the shape an author actually
- * writes, where a leaf is `{ label, ranges }` and nothing more. */
-export type ReviewLayerDraft = {
-  label: string;
-  summary?: string | undefined;
-  description?: string | undefined;
-  ranges?: ReviewAnchor[] | undefined;
-  children?: ReviewLayerDraft[] | undefined;
-};
-
-export const ReviewLayerInput: z.ZodType<ReviewLayerInput, ReviewLayerDraft> = z
-  .lazy(() =>
-    z.strictObject({
-      label: z.string().min(1),
-      summary: z.string().min(1).optional(),
-      description: z.string().min(1).optional(),
-      ranges: z.array(ReviewAnchor).default([]),
-      children: z.array(ReviewLayerInput).default([]),
-    }),
-  )
+export const ReviewLayerInput = z
+  .strictObject({
+    label: z.string().min(1),
+    summary: z.string().min(1).optional(),
+    description: z.string().min(1).optional(),
+    ranges: z.array(ReviewAnchor).default([]),
+    /** A getter, not a `z.lazy` wrapper: it defers the self-reference the same way, but
+     * leaves the schema's own type *inferable*, so the two exported types below are read
+     * off this declaration instead of hand-written beside it and asserted onto it — a
+     * field added here can no longer diverge from a type nothing checks. */
+    get children() {
+      return z.array(ReviewLayerInput).default([]);
+    },
+  })
   .meta({
     id: "reviewLayer",
     description:
       "A section of the review. Nest sub-sections in `children`; a layer with no `ranges` of its own is a grouping layer, and must have a descendant that has some.",
   });
+export type ReviewLayerInput = z.infer<typeof ReviewLayerInput>;
+
+/** The same layer before the schema fills its defaults in — the shape an author actually
+ * writes, where a leaf is `{ label, ranges }` and nothing more. */
+export type ReviewLayerDraft = z.input<typeof ReviewLayerInput>;
 
 /** The in-app layer: the authored fields plus the identity `importReview` stamps —
  * `id`, and `parent` naming the id of the layer it hangs off. Flat, and in document order
@@ -247,8 +246,8 @@ export function reviewDiffFor(review: ImportedReview): ReviewDiff {
 }
 
 /** A validated review ready to bind to a session. `repo` is a full `RepoInfo`: the
- * artifact carries only the path, and the name is derived here (see `repoNameOf`), so every
- * downstream consumer keeps reading the repo the same way a plain repo session's does.
+ * artifact carries only the path, and the name is derived here (see `repoDisplayName`), so
+ * every downstream consumer keeps reading the repo the same way a plain repo session's does.
  * `patch` models its absence as null rather than an optional key so consumers branch on a
  * real value. */
 export type ImportedReview = {
@@ -288,7 +287,10 @@ export function reviewOriginFor(review: ImportedReview): ReviewOrigin {
 
 export type ImportReviewResult =
   | { ok: true; review: ImportedReview }
-  | { ok: false; error: "invalidContent" };
+  /** `reason` is what zod objected to first (see `firstIssueReason`), carried rather than
+   * dropped so the banner over a hand-edited artifact can say which field is wrong instead
+   * of only that the file is not a review. */
+  | { ok: false; error: "invalidContent"; reason: string };
 
 /** Injected identity so `importReview` stays pure and deterministic: main
  * supplies `crypto.randomUUID`, tests supply fixed values. */
@@ -298,10 +300,14 @@ export type ReviewStamp = {
 
 /** The repo's display name: the last segment of its work-tree toplevel. Never authored —
  * it is a function of the path, and a field an author could get wrong is a field the
- * artifact should not carry. A plain string walk rather than `node:path`'s `basename` so
- * this module stays node-free for the renderer bundle; the artifact's `repo` is a validated
- * absolute path, so the last non-empty segment is the name (and `/` stands for itself). */
-function repoNameOf(path: string): string {
+ * artifact should not carry. The artifact's `repo` is a validated absolute path, so the last
+ * non-empty segment is the name (and `/` stands for itself).
+ *
+ * The one derivation, exported rather than restated: the recent-reviews list names a repo
+ * beside the tab that opening it will produce, and a second copy of this rule is a way for
+ * the two to disagree about what the repo is called. The path fallback is part of the rule,
+ * not something a caller adds — a segment-less path answers with itself. */
+export function repoDisplayName(path: string): string {
   const segments = path.split("/").filter((segment) => segment.length > 0);
   return segments.at(-1) ?? path;
 }
@@ -336,25 +342,98 @@ export function flattenLayers(
   return layers;
 }
 
-/** Untrusted artifact text → a validated review, or a typed failure — never a
- * throw. The single seam the open paths call: it parses (safeParse, never trusts disk/CLI
- * bytes), stamps app-assigned identity onto each comment and each layer, and derives what
- * the artifact deliberately does not carry — the repo's name from its path, the flat layer
- * array from the nested one. */
-export function importReview(bytes: string, stamp: ReviewStamp): ImportReviewResult {
+/** A parse of artifact bytes: the validated artifact, or every issue that stopped it —
+ * zod's own, so nothing about the failure is thrown away before the caller sees it. */
+export type ParsedArtifactBytes =
+  | { ok: true; artifact: ReviewArtifact }
+  | { ok: false; issues: z.core.$ZodIssue[] };
+
+/** The `format` on the issue reported for bytes that never were a JSON document. Not one of
+ * zod's own string formats — no schema here parses JSON — so it is named once and matched
+ * against, rather than spelled out at the one call site that separates "this was never a
+ * document" from "this document is not a review". */
+export const ARTIFACT_JSON_FORMAT = "json";
+
+/** Untrusted bytes → a validated artifact, or every reason zod refused them. Three callers
+ * read artifact bytes — the app's open path (`importReview`), the recents lister's peek, and
+ * the CLI's pre-handoff check — and each used to run its own `JSON.parse` in a try/catch
+ * followed by its own `safeParse`, then collapse both outcomes into its own single word. Only
+ * one of the three kept *why*. Both steps happen here once and the issues survive, so each
+ * caller projects them into its own failure vocabulary instead of discarding the diagnosis.
+ *
+ * Bytes that are not JSON at all report as an issue rather than as an arm of their own: the
+ * caller that cares reads the distinction off the issue (`ARTIFACT_JSON_FORMAT`), and the two
+ * that only want a sentence get one list to render whichever way the parse failed. */
+export function parseArtifactBytes(bytes: string): ParsedArtifactBytes {
   let json: unknown;
   try {
     json = JSON.parse(bytes);
-  } catch {
-    return { ok: false, error: "invalidContent" };
+  } catch (error) {
+    return {
+      ok: false,
+      issues: [
+        {
+          code: "invalid_format",
+          format: ARTIFACT_JSON_FORMAT,
+          // Root path: nothing in the document can be pointed at when the document did not
+          // parse. `JSON.parse`'s own message carries the offset, which is the locator.
+          path: [],
+          message: errorMessage(error),
+          // No `input`, deliberately: zod's own issues carry none, and an artifact is up to
+          // 32 MiB of untrusted JSON — attaching it would make this issue the one value in
+          // the parse result that holds the whole document, handed to three callers and one
+          // `JSON.stringify` away from the unbounded leak `MAX_REASON_LENGTH` below exists to
+          // prevent. The message is the diagnosis; the bytes are the caller's already.
+        },
+      ],
+    };
   }
 
   const parsed = ReviewArtifact.safeParse(json);
-  if (!parsed.success) {
-    return { ok: false, error: "invalidContent" };
+  return parsed.success
+    ? { ok: true, artifact: parsed.data }
+    : { ok: false, issues: parsed.error.issues };
+}
+
+/** Bound on the sentence below, because part of it is the file's own text: zod names an
+ * unrecognized key back at the author, and an artifact is up to 32 MiB of untrusted JSON, so an
+ * absurd key would otherwise ride into the open-failure banner as one unbreakable text node —
+ * the bound `RepoPath` carries, for the same reason. No honest message comes close. */
+const MAX_REASON_LENGTH = 200;
+
+/** The first thing zod objected to, as one line a reader can act on: `path — message`, or the
+ * message alone when the objection is about the document as a whole (bytes that are not JSON,
+ * an unrecognized key at the root). Only the first, because this ends up in a banner — the
+ * full list is a report, and `rvw check` already prints one.
+ *
+ * The locator is zod's own `toDotPath` rather than a `join(".")`, for the reason the validator
+ * uses it: it brackets array indices (`comments[2].endLine`) and escapes a key containing a
+ * dot, so the path names exactly one place in the file the reader has open. */
+function firstIssueReason(issues: readonly z.core.$ZodIssue[]): string {
+  const issue = issues[0];
+  if (issue === undefined) {
+    // Unreachable: a failed parse reports at least one issue, and the JSON arm above builds
+    // its own. Answered rather than asserted — an open must not throw on the way to a banner.
+    return "The file is not a valid review.";
+  }
+  const path = z.core.toDotPath(issue.path);
+  const reason = path === "" ? issue.message : `${path} — ${issue.message}`;
+  return reason.length > MAX_REASON_LENGTH ? `${reason.slice(0, MAX_REASON_LENGTH)}…` : reason;
+}
+
+/** Untrusted artifact text → a validated review, or a typed failure — never a
+ * throw. The single seam the open paths call: it parses (`parseArtifactBytes`, never trusts
+ * disk/CLI bytes), stamps app-assigned identity onto each comment and each layer, and derives
+ * what the artifact deliberately does not carry — the repo's name from its path, the flat
+ * layer array from the nested one. */
+export function importReview(bytes: string, stamp: ReviewStamp): ImportReviewResult {
+  const parsed = parseArtifactBytes(bytes);
+  if (!parsed.ok) {
+    return { ok: false, error: "invalidContent", reason: firstIssueReason(parsed.issues) };
   }
 
-  const comments: Comment[] = parsed.data.comments.map((comment) => ({
+  const artifact = parsed.artifact;
+  const comments: Comment[] = artifact.comments.map((comment) => ({
     ...comment,
     id: stamp.newId(),
   }));
@@ -362,13 +441,13 @@ export function importReview(bytes: string, stamp: ReviewStamp): ImportReviewRes
   return {
     ok: true,
     review: {
-      repo: { path: parsed.data.repo, name: repoNameOf(parsed.data.repo) },
-      base: parsed.data.base,
-      head: parsed.data.head,
-      patch: parsed.data.patch ?? null,
-      overview: parsed.data.overview ?? null,
+      repo: { path: artifact.repo, name: repoDisplayName(artifact.repo) },
+      base: artifact.base,
+      head: artifact.head,
+      patch: artifact.patch ?? null,
+      overview: artifact.overview ?? null,
       comments,
-      layers: flattenLayers(parsed.data.layers, stamp),
+      layers: flattenLayers(artifact.layers, stamp),
     },
   };
 }

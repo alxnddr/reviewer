@@ -1,16 +1,5 @@
 import { BrowserWindow, dialog } from "electron";
-import * as z from "zod";
-import {
-  BranchesResponse,
-  DiffRequest,
-  DiffResponse,
-  FileContentsRequest,
-  FileContentsResponse,
-  LogRequest,
-  LogResponse,
-  OpenRepoResponse,
-  RepoRequest,
-} from "../../shared/git";
+import type { OpenRepoResponse } from "../../shared/git";
 import { IpcChannel } from "../../shared/ipc";
 import { registerIpcHandler } from "../ipc-registry";
 import { getCommitLog, getDiff, getFileContents, listBranches, validateRepo } from "./ops";
@@ -37,31 +26,17 @@ async function openRepoViaDialog(runner: GitRunner): Promise<OpenRepoResponse> {
 }
 
 export function registerGitIpcHandlers(runner: GitRunner): void {
-  registerIpcHandler(IpcChannel.repoOpen, { request: z.void(), response: OpenRepoResponse }, () =>
-    openRepoViaDialog(runner),
+  registerIpcHandler(IpcChannel.repoOpen, () => openRepoViaDialog(runner));
+
+  registerIpcHandler(IpcChannel.gitBranches, ({ repoPath }) => listBranches(runner, repoPath));
+
+  registerIpcHandler(IpcChannel.gitLog, ({ repoPath, range }) =>
+    getCommitLog(runner, repoPath, range),
   );
 
-  registerIpcHandler(
-    IpcChannel.gitBranches,
-    { request: RepoRequest, response: BranchesResponse },
-    ({ repoPath }) => listBranches(runner, repoPath),
+  registerIpcHandler(IpcChannel.gitDiff, ({ repoPath, selection }) =>
+    getDiff(runner, repoPath, selection),
   );
 
-  registerIpcHandler(
-    IpcChannel.gitLog,
-    { request: LogRequest, response: LogResponse },
-    ({ repoPath, range }) => getCommitLog(runner, repoPath, range),
-  );
-
-  registerIpcHandler(
-    IpcChannel.gitDiff,
-    { request: DiffRequest, response: DiffResponse },
-    ({ repoPath, selection }) => getDiff(runner, repoPath, selection),
-  );
-
-  registerIpcHandler(
-    IpcChannel.gitFileContents,
-    { request: FileContentsRequest, response: FileContentsResponse },
-    (request) => getFileContents(runner, request),
-  );
+  registerIpcHandler(IpcChannel.gitFileContents, (request) => getFileContents(runner, request));
 }

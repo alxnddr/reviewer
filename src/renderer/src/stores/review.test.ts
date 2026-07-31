@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { BranchList, BranchName, DiffResponse, LogEntry } from "../../../shared/git";
+import type { BranchName, DiffResponse, LogEntry } from "../../../shared/git";
 import type { ReviewerBridge } from "../../../shared/ipc";
 import type { Session, SessionSnapshot } from "../../../shared/session";
 import {
@@ -14,142 +14,46 @@ import {
   type ReviewOverview,
   type ReviewStamp,
 } from "../../../shared/review";
-import { buildCommentItems, type CommentSlot } from "../lib/diff/comment-annotations";
-import { MULTI_STATUS_PATCH } from "../lib/diff/fixtures";
-import { parsePatch } from "../lib/diff/patch";
+import { buildCommentItems, type CommentSlot } from "../../../shared/diff/comment-annotations";
+import { MULTI_STATUS_PATCH } from "../../../shared/diff/fixtures";
+import { parsePatch } from "../../../shared/diff/patch";
 import { NO_PROGRESS } from "../../../shared/review-progress";
-import { NO_COLLAPSED_FILES, NO_READ_FILES } from "../lib/read-progress";
-import { resolveLayerScroll, stepLayer } from "../lib/layers";
+import { resolveLayerScroll, stepLayer } from "../../../shared/layers";
 import { UNCOVERED_LAYER_ID } from "../lib/coverage";
 import { createScrollCapture, SCROLL_CAPTURE_DEBOUNCE_MS } from "../lib/scroll";
-import { useReviewStore, WRITE_BACK_DEBOUNCE_MS, type SessionSlice } from "./review";
+import {
+  BRANCH_LIST,
+  commitEntry,
+  DIRTY_ENTRIES,
+  makeBridge,
+  SESSION_ID,
+  SHA_A,
+  SHA_B,
+} from "./__fixtures__/bridge";
+import {
+  createReviewStore,
+  createSessionSlice,
+  WRITE_BACK_DEBOUNCE_MS,
+  type ReviewStore,
+  type SessionSlice,
+} from "./review";
 
-const SHA_A = "a".repeat(40);
-const SHA_B = "b".repeat(40);
-
-const SESSION_ID = "11111111-1111-4111-8111-111111111111";
 const ID_A = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
 const ID_B = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
 const ID_C = "cccccccc-cccc-4ccc-8ccc-cccccccccccc";
 
-function commitEntry(sha: string): LogEntry {
-  return {
-    kind: "commit",
-    commit: {
-      sha,
-      shortSha: sha.slice(0, 7),
-      author: "t",
-      authoredAt: "2026-07-04T00:00:00+00:00",
-      subject: "subject",
-    },
-  };
-}
+/** What every hand-seeded slice below shares, and the one place it differs from
+ * `createSessionSlice`'s defaults: these stand in for a session that has already been through
+ * `deriveSession`, so nothing re-derives underneath the action being tested, and the ticket is
+ * past zero so a response carrying the initial one would read as the stale thing it is. */
+const DERIVED = { needsDerive: false, requestTicket: 1 } satisfies Partial<SessionSlice>;
 
-const DIRTY_ENTRIES: LogEntry[] = [{ kind: "uncommitted" }, commitEntry(SHA_A), commitEntry(SHA_B)];
-
-const BRANCH_LIST: BranchList = {
-  branches: ["main", "feature/x"],
-  defaultBranch: "main",
-  currentBranch: "feature/x",
-};
-
-function makeBridge(overrides: Partial<ReviewerBridge>): ReviewerBridge {
-  return {
-    getThemeSelection: vi.fn(),
-    setThemeSelection: vi.fn(),
-    getCliStatus: vi.fn().mockResolvedValue({
-      supported: true,
-      installed: true,
-      path: "/usr/local/bin/rvw",
-      shadowedBy: null,
-    }),
-    installCli: vi.fn().mockResolvedValue({
-      status: {
-        supported: true,
-        installed: true,
-        path: "/usr/local/bin/rvw",
-        shadowedBy: null,
-      },
-      problem: null,
-    }),
-    getOnboarded: vi.fn().mockResolvedValue(true),
-    completeOnboarding: vi.fn(),
-    openRepo: vi.fn().mockResolvedValue({
-      ok: true,
-      value: { kind: "opened", repo: { path: "/repo", name: "repo" } },
-    }),
-    openReview: vi.fn().mockResolvedValue({ ok: true, value: { kind: "canceled" } }),
-    openReviewByPath: vi.fn().mockResolvedValue({ ok: true, value: { kind: "canceled" } }),
-    listRecentReviews: vi.fn().mockResolvedValue({
-      dir: "/home/dev/.rvw/reviews",
-      reviews: [],
-      truncated: 0,
-      unreadable: false,
-    }),
-    saveReviewJson: vi.fn().mockResolvedValue({ ok: true, value: { kind: "canceled" } }),
-    saveReviewMarkdown: vi.fn().mockResolvedValue({ ok: true, value: { kind: "canceled" } }),
-    getPathForFile: vi.fn().mockReturnValue(null),
-    listBranches: vi.fn().mockResolvedValue({ ok: true, value: BRANCH_LIST }),
-    getCommitLog: vi.fn().mockResolvedValue({ ok: true, value: { entries: DIRTY_ENTRIES } }),
-    getDiff: vi.fn().mockResolvedValue({ ok: true, value: { patch: MULTI_STATUS_PATCH } }),
-    getFileContents: vi.fn().mockResolvedValue({ ok: true, value: { kind: "absent" } }),
-    listSessions: vi.fn().mockResolvedValue({ sessions: [], activeSessionId: null }),
-    createSession: vi.fn().mockImplementation((request: { source: Session["source"] }) =>
-      Promise.resolve({
-        id: SESSION_ID,
-        source: request.source,
-        base: null,
-        head: null,
-        commitSelection: null,
-        selectedFilePath: null,
-        scrollTop: 0,
-        comments: [],
-        layers: [],
-        overview: null,
-        reviewDiff: null,
-        reviewSubrange: null,
-        reviewOrigin: null,
-        reviewPath: null,
-        ...NO_PROGRESS,
-      } satisfies Session),
-    ),
-    updateSession: vi.fn().mockResolvedValue(undefined),
-    deleteSession: vi.fn().mockResolvedValue(undefined),
-    setActiveSession: vi.fn().mockResolvedValue(undefined),
-    reorderSessions: vi.fn().mockResolvedValue(undefined),
-    onOpenRepoCommand: vi.fn().mockReturnValue(() => {}),
-    onOpenReviewCommand: vi.fn().mockReturnValue(() => {}),
-    onOpenRecentReviewsCommand: vi.fn().mockReturnValue(() => {}),
-    onExportReviewJsonCommand: vi.fn().mockReturnValue(() => {}),
-    onExportReviewMarkdownCommand: vi.fn().mockReturnValue(() => {}),
-    onCopyCommentPromptCommand: vi.fn().mockReturnValue(() => {}),
-    onCopyAllCommentsPromptCommand: vi.fn().mockReturnValue(() => {}),
-    onSessionsChanged: vi.fn().mockReturnValue(() => {}),
-    onNewTabCommand: vi.fn().mockReturnValue(() => {}),
-    onCloseTabCommand: vi.fn().mockReturnValue(() => {}),
-    onCycleTabCommand: vi.fn().mockReturnValue(() => {}),
-    onActivateTabCommand: vi.fn().mockReturnValue(() => {}),
-    ...overrides,
-  };
-}
-
-function resetStore(): void {
-  useReviewStore.setState({
-    boot: "ready",
-    sessions: {},
-    activeSessionId: null,
-    tabs: [],
-    activeStartTabId: null,
-    openFailure: null,
-    reviewOpenFailure: null,
-    reviewExportFailure: null,
-    promptCopy: null,
-    diffStyle: "split",
-  });
-}
+/** The store under test: a fresh instance per case, so nothing — not a slice, not a pending
+ * write-back, not a start tab counter — can travel from one test to the next. */
+let store: ReviewStore;
 
 function active(): SessionSlice {
-  const state = useReviewStore.getState();
+  const state = store.getState();
   if (state.activeSessionId === null) {
     throw new Error("no active session");
   }
@@ -161,24 +65,28 @@ function active(): SessionSlice {
 }
 
 function slice(id: string): SessionSlice {
-  const found = useReviewStore.getState().sessions[id];
+  const found = store.getState().sessions[id];
   if (found === undefined) {
     throw new Error(`no slice for ${id}`);
   }
   return found;
 }
 
+/** Arrange the active slice directly, for the fields nothing but a load or an import ever
+ * writes — the diff, the layers, the comment list. Anything an action owns is arranged
+ * *through* that action instead (see `setActiveLayer` below), or the test writes around the
+ * code it is supposed to be covering. */
 function patchActive(partial: Partial<SessionSlice>): void {
-  const state = useReviewStore.getState();
+  const state = store.getState();
   const current = active();
-  useReviewStore.setState({
+  store.setState({
     sessions: { ...state.sessions, [current.id]: { ...current, ...partial } },
   });
 }
 
 async function openFixtureRepo(bridge: ReviewerBridge): Promise<void> {
   vi.stubGlobal("window", { reviewer: bridge });
-  await useReviewStore.getState().openRepository();
+  await store.getState().openRepository();
 }
 
 function storedSession(id: string, repoPath: string, overrides: Partial<Session> = {}): Session {
@@ -234,8 +142,8 @@ function frozenReviewSession(id: string, repoPath: string, patch: string): Sessi
 async function hydrateWith(bridge: ReviewerBridge, snapshot: SessionSnapshot): Promise<void> {
   vi.mocked(bridge.listSessions).mockResolvedValue(snapshot);
   vi.stubGlobal("window", { reviewer: bridge });
-  useReviewStore.setState({ boot: "pending" });
-  await useReviewStore.getState().hydrate();
+  store.setState({ boot: "pending" });
+  await store.getState().hydrate();
 }
 
 function totalBridgeCalls(bridge: ReviewerBridge): number {
@@ -245,14 +153,15 @@ function totalBridgeCalls(bridge: ReviewerBridge): number {
   );
 }
 
-beforeEach(resetStore);
+beforeEach(() => {
+  store = createReviewStore();
+});
 afterEach(() => {
-  // Pending debounce timers must not fire into a later test: flush them against
-  // this test's bridge (or into the void) before the window stub goes away.
-  if (typeof window === "undefined") {
-    vi.stubGlobal("window", {});
-  }
-  useReviewStore.getState().flushWriteBacks();
+  // The instance this test ran on is finished with, so its pending write-backs are dropped
+  // rather than sent: a debounce timer surviving the test would fire half a second later
+  // against whatever `window` the *next* one installed. Nothing else needs undoing — the store
+  // is thrown away here, not reset, so no field can be forgotten.
+  store.getState().cancelWriteBacks();
   vi.unstubAllGlobals();
   vi.useRealTimers();
 });
@@ -288,7 +197,7 @@ describe("useReviewStore.openRepository", () => {
     expect(bridge.createSession).toHaveBeenCalledWith({
       source: { kind: "local", repo: { path: "/repo", name: "repo" } },
     });
-    expect(useReviewStore.getState().activeSessionId).toBe(SESSION_ID);
+    expect(store.getState().activeSessionId).toBe(SESSION_ID);
   });
 
   it("opens on the checked-out branch's own history, with no comparison asked for", async () => {
@@ -307,8 +216,8 @@ describe("useReviewStore.openRepository", () => {
       }),
     );
 
-    expect(useReviewStore.getState().sessions).toEqual({});
-    expect(useReviewStore.getState().activeSessionId).toBeNull();
+    expect(store.getState().sessions).toEqual({});
+    expect(store.getState().activeSessionId).toBeNull();
   });
 
   it("surfaces a failed log as a typed failure in the diff pane, never a crash", async () => {
@@ -359,8 +268,8 @@ describe("useReviewStore.openRepository", () => {
       }),
     );
 
-    expect(useReviewStore.getState().sessions).toEqual({});
-    expect(useReviewStore.getState().openFailure).toEqual({ code: "gitMissing" });
+    expect(store.getState().sessions).toEqual({});
+    expect(store.getState().openFailure).toEqual({ code: "gitMissing" });
   });
 
   it("a failed open with a session active stays app-level and leaves the slice untouched", async () => {
@@ -372,18 +281,18 @@ describe("useReviewStore.openRepository", () => {
       ok: false,
       failure: { code: "notARepo", path: "/picked" },
     });
-    await useReviewStore.getState().openRepository();
+    await store.getState().openRepository();
 
-    expect(useReviewStore.getState().openFailure).toEqual({ code: "notARepo", path: "/picked" });
+    expect(store.getState().openFailure).toEqual({ code: "notARepo", path: "/picked" });
     expect(active()).toBe(before);
   });
 
   it("does nothing without the bridge (browser gate run)", async () => {
     vi.stubGlobal("window", {});
 
-    await useReviewStore.getState().openRepository();
+    await store.getState().openRepository();
 
-    expect(useReviewStore.getState().sessions).toEqual({});
+    expect(store.getState().sessions).toEqual({});
   });
 
   it("a canceled second open does not strand the first open's in-flight fetches", async () => {
@@ -396,10 +305,10 @@ describe("useReviewStore.openRepository", () => {
       ),
     });
     vi.stubGlobal("window", { reviewer: bridge });
-    const first = useReviewStore.getState().openRepository();
+    const first = store.getState().openRepository();
 
     vi.mocked(bridge.openRepo).mockResolvedValue({ ok: true, value: { kind: "canceled" } });
-    await useReviewStore.getState().openRepository();
+    await store.getState().openRepository();
 
     resolveLog({ ok: true, value: { entries: DIRTY_ENTRIES } });
     await first;
@@ -413,7 +322,7 @@ describe("brush selection driving the diff", () => {
     const bridge = makeBridge({});
     await openFixtureRepo(bridge);
 
-    useReviewStore.getState().applyBrush({ type: "extend", index: 1 });
+    store.getState().applyBrush({ type: "extend", index: 1 });
     await vi.waitFor(() => {
       expect(active().diff.phase).toBe("loaded");
     });
@@ -432,8 +341,8 @@ describe("brush selection driving the diff", () => {
     const bridge = makeBridge({});
     await openFixtureRepo(bridge);
 
-    useReviewStore.getState().applyBrush({ type: "set", index: 1 });
-    useReviewStore.getState().applyBrush({ type: "extend", index: 2 });
+    store.getState().applyBrush({ type: "set", index: 1 });
+    store.getState().applyBrush({ type: "extend", index: 2 });
     await vi.waitFor(() => {
       expect(active().selection).toEqual({
         kind: "commitRange",
@@ -448,11 +357,11 @@ describe("brush selection driving the diff", () => {
     await openFixtureRepo(bridge);
     const callsAfterOpen = vi.mocked(bridge.getDiff).mock.calls.length;
 
-    useReviewStore.getState().previewBrush({ type: "extend", index: 2 });
+    store.getState().previewBrush({ type: "extend", index: 2 });
     expect(active().brush).toEqual({ anchor: 0, focus: 2 });
     expect(vi.mocked(bridge.getDiff).mock.calls.length).toBe(callsAfterOpen);
 
-    useReviewStore.getState().commitBrush();
+    store.getState().commitBrush();
     await vi.waitFor(() => {
       expect(vi.mocked(bridge.getDiff).mock.calls.length).toBe(callsAfterOpen + 1);
     });
@@ -463,10 +372,26 @@ describe("brush selection driving the diff", () => {
     await openFixtureRepo(bridge);
     const callsAfterOpen = vi.mocked(bridge.getDiff).mock.calls.length;
 
-    useReviewStore.getState().applyBrush({ type: "set", index: 0 });
+    store.getState().applyBrush({ type: "set", index: 0 });
     await Promise.resolve();
 
     expect(vi.mocked(bridge.getDiff).mock.calls.length).toBe(callsAfterOpen);
+  });
+
+  it("a keypress the brush cannot answer persists nothing", async () => {
+    vi.useFakeTimers();
+    const bridge = makeBridge({});
+    await openFixtureRepo(bridge);
+    await vi.advanceTimersByTimeAsync(WRITE_BACK_DEBOUNCE_MS);
+    const writesAfterOpen = vi.mocked(bridge.updateSession).mock.calls.length;
+
+    // The brush opens on the newest row, so every ArrowUp — the first press and every
+    // repeat after it — lands here. `runDiffLoad`'s sameSelection guard absorbs the
+    // refetch; an unguarded commit would still queue an IPC write-back per keypress.
+    store.getState().applyBrush({ type: "step", direction: -1, extend: false });
+    await vi.advanceTimersByTimeAsync(WRITE_BACK_DEBOUNCE_MS);
+
+    expect(vi.mocked(bridge.updateSession).mock.calls.length).toBe(writesAfterOpen);
   });
 
   it("a vanished repo surfaces as a typed failure on the next selection", async () => {
@@ -477,7 +402,7 @@ describe("brush selection driving the diff", () => {
       failure: { code: "notARepo", path: "/repo" },
     });
 
-    useReviewStore.getState().applyBrush({ type: "extend", index: 1 });
+    store.getState().applyBrush({ type: "extend", index: 1 });
     await vi.waitFor(() => {
       expect(active().diff).toEqual({
         phase: "failed",
@@ -494,7 +419,7 @@ describe("brush selection driving the diff", () => {
       failure: { code: "unknownRevision" },
     });
 
-    useReviewStore.getState().applyBrush({ type: "extend", index: 2 });
+    store.getState().applyBrush({ type: "extend", index: 2 });
     await vi.waitFor(() => {
       expect(active().diff).toEqual({
         phase: "failed",
@@ -509,7 +434,7 @@ describe("the picker's two refs", () => {
     const bridge = makeBridge({});
     await openFixtureRepo(bridge);
 
-    useReviewStore.getState().setHead("main");
+    store.getState().setHead("main");
     await vi.waitFor(() => {
       expect(bridge.getCommitLog).toHaveBeenLastCalledWith({
         repoPath: "/repo",
@@ -529,7 +454,7 @@ describe("the picker's two refs", () => {
     });
     await openFixtureRepo(bridge);
 
-    useReviewStore.getState().setHead("main");
+    store.getState().setHead("main");
     await vi.waitFor(() => {
       expect(active().selection).toEqual({
         kind: "commitRange",
@@ -539,12 +464,49 @@ describe("the picker's two refs", () => {
     });
   });
 
+  it("applies only the newest walk when two land on the same pair of endpoints", async () => {
+    const walks: ((value: unknown) => void)[] = [];
+    const bridge = makeBridge({
+      getCommitLog: vi
+        .fn()
+        .mockResolvedValueOnce({ ok: true, value: { entries: DIRTY_ENTRIES } })
+        .mockImplementation(
+          () =>
+            new Promise((resolve) => {
+              walks.push(resolve);
+            }),
+        ),
+    });
+    await openFixtureRepo(bridge);
+
+    // main → feature/x → main, all three faster than git answers. The first and third
+    // walks are for the same endpoints, so comparing `head`/`base` cannot tell them apart —
+    // only the ticket can, and without it the first would win by resolving last.
+    store.getState().setHead("main");
+    store.getState().setHead("feature/x");
+    store.getState().setHead("main");
+    expect(walks).toHaveLength(3);
+
+    const newest = [commitEntry("c".repeat(40))];
+    walks[2]?.({ ok: true, value: { entries: newest } });
+    await vi.waitFor(() => {
+      expect(active().log).toEqual({ phase: "loaded", entries: newest });
+    });
+
+    walks[0]?.({ ok: true, value: { entries: [commitEntry("d".repeat(40))] } });
+    // A macrotask, so every continuation the resolution queued has had its turn.
+    await new Promise((resolve) => {
+      setTimeout(resolve, 0);
+    });
+    expect(active().log).toEqual({ phase: "loaded", entries: newest });
+  });
+
   it("persists the listed branch, so a restored session re-locates its own selection", async () => {
     vi.useFakeTimers();
     const bridge = makeBridge({});
     await openFixtureRepo(bridge);
 
-    useReviewStore.getState().setHead("main");
+    store.getState().setHead("main");
     await vi.waitFor(() => expect(active().head).toBe("main"));
     await vi.advanceTimersByTimeAsync(WRITE_BACK_DEBOUNCE_MS);
     expect(bridge.updateSession).toHaveBeenLastCalledWith(
@@ -555,12 +517,12 @@ describe("the picker's two refs", () => {
   it("is not offered to a review session, whose list is the review's own range", async () => {
     const bridge = makeBridge({});
     await openFixtureRepo(bridge);
-    const id = useReviewStore.getState().activeSessionId as string;
-    useReviewStore.setState({
+    const id = store.getState().activeSessionId as string;
+    store.setState({
       sessions: {
-        ...useReviewStore.getState().sessions,
+        ...store.getState().sessions,
         [id]: {
-          ...(useReviewStore.getState().sessions[id] as SessionSlice),
+          ...(store.getState().sessions[id] as SessionSlice),
           reviewOrigin: {
             repo: { path: "/repo", name: "repo" },
             base: "a",
@@ -571,7 +533,7 @@ describe("the picker's two refs", () => {
       },
     });
 
-    useReviewStore.getState().setHead("main");
+    store.getState().setHead("main");
     expect(active().head).not.toBe("main");
   });
 });
@@ -581,7 +543,7 @@ describe("a comparison driving the diff", () => {
     const bridge = makeBridge({});
     await openFixtureRepo(bridge);
 
-    useReviewStore.getState().setBase("main");
+    store.getState().setBase("main");
     await vi.waitFor(() => {
       expect(active().selection).toEqual({
         kind: "branches",
@@ -598,12 +560,12 @@ describe("a comparison driving the diff", () => {
   it("swap exchanges base and head and reloads", async () => {
     const bridge = makeBridge({});
     await openFixtureRepo(bridge);
-    useReviewStore.getState().setBase("main");
+    store.getState().setBase("main");
     await vi.waitFor(() => {
       expect(active().diff.phase).toBe("loaded");
     });
 
-    useReviewStore.getState().swapBranches();
+    store.getState().swapBranches();
     await vi.waitFor(() => {
       expect(active().selection).toEqual({
         kind: "branches",
@@ -618,7 +580,7 @@ describe("a comparison driving the diff", () => {
     await openFixtureRepo(bridge);
     vi.mocked(bridge.getDiff).mockResolvedValue({ ok: true, value: { patch: "" } });
 
-    useReviewStore.getState().setBase("main");
+    store.getState().setBase("main");
     await vi.waitFor(() => {
       expect(active().diff.phase).toBe("empty");
     });
@@ -765,7 +727,7 @@ describe("review-pinned diff", () => {
     expect(slice(ID_A).brush).toEqual({ anchor: 0, focus: 1 });
 
     // Narrow to the newest commit alone.
-    useReviewStore.getState().applyBrush({ type: "set", index: 0 });
+    store.getState().applyBrush({ type: "set", index: 0 });
     await vi.waitFor(() => {
       expect(slice(ID_A).selection).toEqual({ kind: "commitRange", first: SHA_A, last: SHA_A });
     });
@@ -775,7 +737,7 @@ describe("review-pinned diff", () => {
     expect(slice(ID_A).commitSelection).toBeNull();
 
     // Reset returns to the whole review: no subrange, the diff back on the pinned refs.
-    useReviewStore.getState().resetReviewSubrange();
+    store.getState().resetReviewSubrange();
     await vi.waitFor(() => {
       expect(slice(ID_A).selection).toEqual({ kind: "reviewRefs", base: "main", head: SHA_A });
     });
@@ -787,37 +749,15 @@ describe("review-pinned diff", () => {
 describe("useReviewStore.selectAdjacentFile", () => {
   beforeEach(() => {
     const files = parsePatch(MULTI_STATUS_PATCH, "test");
-    const seeded: SessionSlice = {
-      id: SESSION_ID,
-      repo: { path: "/repo", name: "repo" },
-      log: null,
-      branches: null,
-      brush: null,
-      base: null,
-      head: null,
-      selection: null,
-      diff: { phase: "loaded", loadId: 1, files },
-      selectedFilePath: files[0]?.path ?? null,
-      scrollTop: 0,
-      commitSelection: null,
-      comments: [],
-      layers: [],
-      reviewDiff: null,
-      reviewSubrange: null,
-      reviewOrigin: null,
-      overview: null,
-      overviewOpen: false,
-      lastChapterId: null,
-      activeLayerId: null,
-      activeCommentId: null,
-      readFiles: NO_READ_FILES,
-      collapsedFiles: NO_COLLAPSED_FILES,
-      readTotal: 0,
-      reviewPath: null,
-      needsDerive: false,
-      requestTicket: 1,
-    };
-    useReviewStore.setState({
+    const seeded = createSessionSlice(
+      { id: SESSION_ID, repo: { path: "/repo", name: "repo" } },
+      {
+        ...DERIVED,
+        diff: { phase: "loaded", loadId: 1, files },
+        selectedFilePath: files[0]?.path ?? null,
+      },
+    );
+    store.setState({
       boot: "ready",
       sessions: { [SESSION_ID]: seeded },
       activeSessionId: SESSION_ID,
@@ -826,23 +766,23 @@ describe("useReviewStore.selectAdjacentFile", () => {
   });
 
   it("steps forward and back through the changed files", () => {
-    useReviewStore.getState().selectAdjacentFile(1);
+    store.getState().selectAdjacentFile(1);
     expect(active().selectedFilePath).toBe("doomed.txt");
-    useReviewStore.getState().selectAdjacentFile(-1);
+    store.getState().selectAdjacentFile(-1);
     expect(active().selectedFilePath).toBe("added.txt");
   });
 
   it("clamps at both ends", () => {
-    useReviewStore.getState().selectAdjacentFile(-1);
+    store.getState().selectAdjacentFile(-1);
     expect(active().selectedFilePath).toBe("added.txt");
     patchActive({ selectedFilePath: "notes.txt" });
-    useReviewStore.getState().selectAdjacentFile(1);
+    store.getState().selectAdjacentFile(1);
     expect(active().selectedFilePath).toBe("notes.txt");
   });
 
   it("ignores navigation while no diff is loaded", () => {
     patchActive({ diff: { phase: "loading" }, selectedFilePath: null });
-    useReviewStore.getState().selectAdjacentFile(1);
+    store.getState().selectAdjacentFile(1);
     expect(active().selectedFilePath).toBeNull();
   });
 
@@ -859,16 +799,71 @@ describe("useReviewStore.selectAdjacentFile", () => {
         ],
       },
     ];
-    patchActive({ layers: solo, activeLayerId: "two-files", selectedFilePath: "added.txt" });
+    // The solo is arranged through the action that arranges it in the app, so a regression in
+    // `setActiveLayer` fails here too rather than being written around.
+    patchActive({ layers: solo, selectedFilePath: "added.txt" });
+    store.getState().setActiveLayer("two-files");
     // From a file the solo hides, forward lands on the layer's first — never on doomed.txt,
     // which is next in the full diff and absent from the screen.
-    useReviewStore.getState().selectAdjacentFile(1);
+    store.getState().selectAdjacentFile(1);
     expect(active().selectedFilePath).toBe("greet.ts");
-    useReviewStore.getState().selectAdjacentFile(1);
+    store.getState().selectAdjacentFile(1);
     expect(active().selectedFilePath).toBe("notes.txt");
     // And it clamps at the layer's last file rather than walking out the far side of it.
-    useReviewStore.getState().selectAdjacentFile(1);
+    store.getState().selectAdjacentFile(1);
     expect(active().selectedFilePath).toBe("notes.txt");
+  });
+});
+
+describe("setSlice's structural no-op guard", () => {
+  beforeEach(() => {
+    const seeded = createSessionSlice(
+      { id: SESSION_ID, repo: { path: "/repo", name: "repo" } },
+      {
+        ...DERIVED,
+        diff: { phase: "loading" },
+        selectedFilePath: "greet.ts",
+        scrollTop: 40,
+      },
+    );
+    store.setState({
+      boot: "ready",
+      sessions: { [SESSION_ID]: seeded },
+      activeSessionId: SESSION_ID,
+      tabs: [{ kind: "session", id: SESSION_ID }],
+    });
+  });
+
+  // `selectFile` and `setScrollTop` write unconditionally -- neither checks its argument
+  // against the slice's current value the way `previewBrush`/`setFileCollapsed` do. The
+  // guard lives in `setSlice` itself instead, so it protects every action funnelled through
+  // it, including these two: a redundant call never reallocates the `sessions` record, which
+  // is what a subscriber like `TabBar` (keyed off the record) would otherwise re-render on.
+
+  it("re-selecting the already-selected file leaves the sessions record untouched", () => {
+    const before = store.getState().sessions;
+    store.getState().selectFile("greet.ts");
+    expect(store.getState().sessions).toBe(before);
+  });
+
+  it("selecting a different file still writes", () => {
+    const before = store.getState().sessions;
+    store.getState().selectFile("other.ts");
+    expect(store.getState().sessions).not.toBe(before);
+    expect(active().selectedFilePath).toBe("other.ts");
+  });
+
+  it("re-reporting the same scroll position leaves the sessions record untouched", () => {
+    const before = store.getState().sessions;
+    store.getState().setScrollTop(40);
+    expect(store.getState().sessions).toBe(before);
+  });
+
+  it("a genuinely new scroll position still writes", () => {
+    const before = store.getState().sessions;
+    store.getState().setScrollTop(80);
+    expect(store.getState().sessions).not.toBe(before);
+    expect(active().scrollTop).toBe(80);
   });
 });
 
@@ -884,7 +879,7 @@ describe("session hydration", () => {
       activeSessionId: ID_B,
     });
 
-    expect(useReviewStore.getState().boot).toBe("ready");
+    expect(store.getState().boot).toBe("ready");
     expect(bridge.getCommitLog).toHaveBeenCalledTimes(1);
     expect(bridge.getCommitLog).toHaveBeenCalledWith({ repoPath: "/repo-b", range: null });
     expect(bridge.listBranches).toHaveBeenCalledTimes(1);
@@ -893,15 +888,15 @@ describe("session hydration", () => {
     expect(slice(ID_A).diff.phase).toBe("idle");
     expect(slice(ID_C).diff.phase).toBe("idle");
 
-    useReviewStore.getState().activateSession(ID_A);
+    store.getState().activateSession(ID_A);
     await vi.waitFor(() => {
       expect(slice(ID_A).diff.phase).toBe("loaded");
     });
     expect(bridge.getCommitLog).toHaveBeenCalledTimes(2);
     expect(bridge.getCommitLog).toHaveBeenLastCalledWith({ repoPath: "/repo-a", range: null });
 
-    useReviewStore.getState().activateSession(ID_B);
-    useReviewStore.getState().activateSession(ID_A);
+    store.getState().activateSession(ID_B);
+    store.getState().activateSession(ID_A);
     expect(bridge.getCommitLog).toHaveBeenCalledTimes(2);
     expect(bridge.listBranches).toHaveBeenCalledTimes(2);
     expect(bridge.getDiff).toHaveBeenCalledTimes(2);
@@ -949,14 +944,14 @@ describe("session hydration", () => {
     });
     const before = slice(ID_A);
 
-    useReviewStore.getState().activateSession(ID_B);
+    store.getState().activateSession(ID_B);
     await vi.waitFor(() => {
       expect(slice(ID_B).diff.phase).toBe("loaded");
     });
     expect(slice(ID_A)).toBe(before);
 
     const callsBeforeReturn = totalBridgeCalls(bridge);
-    useReviewStore.getState().activateSession(ID_A);
+    store.getState().activateSession(ID_A);
 
     expect(totalBridgeCalls(bridge)).toBe(callsBeforeReturn);
     const after = slice(ID_A);
@@ -981,10 +976,10 @@ describe("session hydration", () => {
       }),
     );
 
-    useReviewStore.getState().applyBrush({ type: "extend", index: 1 });
+    store.getState().applyBrush({ type: "extend", index: 1 });
     expect(slice(ID_A).diff.phase).toBe("loading");
 
-    useReviewStore.getState().activateSession(ID_B);
+    store.getState().activateSession(ID_B);
     await vi.waitFor(() => {
       expect(slice(ID_B).diff.phase).toBe("loaded");
     });
@@ -997,7 +992,7 @@ describe("session hydration", () => {
 
     expect(slice(ID_A).selection).toEqual({ kind: "commitRangeWithUncommitted", first: SHA_A });
     expect(slice(ID_B).diff).toBe(bDiff);
-    expect(useReviewStore.getState().activeSessionId).toBe(ID_B);
+    expect(store.getState().activeSessionId).toBe(ID_B);
   });
 
   it("a failed derivation surfaces as a typed GitFailure in that session only", async () => {
@@ -1018,7 +1013,7 @@ describe("session hydration", () => {
     });
     expect(slice(ID_A).diff.phase).toBe("loaded");
 
-    useReviewStore.getState().activateSession(ID_B);
+    store.getState().activateSession(ID_B);
     await vi.waitFor(() => {
       expect(slice(ID_B).log).toEqual({
         phase: "failed",
@@ -1047,13 +1042,13 @@ describe("session hydration", () => {
       activeSessionId: ID_A,
     });
     vi.stubGlobal("window", { reviewer: bridge });
-    useReviewStore.setState({ boot: "pending" });
-    const hydration = useReviewStore.getState().hydrate();
+    store.setState({ boot: "pending" });
+    const hydration = store.getState().hydrate();
     await vi.waitFor(() => {
       expect(slice(ID_A).log).toEqual({ phase: "loading" });
     });
 
-    useReviewStore.getState().setBase("main");
+    store.getState().setBase("main");
 
     resolveLog({ ok: true, value: { entries: DIRTY_ENTRIES } });
     await hydration;
@@ -1124,7 +1119,7 @@ describe("session hydration", () => {
     }
 
     // Activating one other tab derives it exactly once; the rest stay idle.
-    useReviewStore.getState().activateSession(otherSession.id);
+    store.getState().activateSession(otherSession.id);
     await vi.waitFor(() => {
       expect(slice(otherSession.id).diff.phase).toBe("loaded");
     });
@@ -1160,13 +1155,13 @@ describe("session hydration", () => {
       expect(slice(ID_B).diff).toEqual({ phase: "failed", failure: { code: "unknownRevision" } });
     });
 
-    useReviewStore.getState().activateSession(ID_A);
+    store.getState().activateSession(ID_A);
     await vi.waitFor(() => {
       expect(slice(ID_A).diff.phase).toBe("loaded");
     });
     // The broken tab is shown broken, never silently dropped; the sibling
     // restores healthy on its own first activation.
-    expect(useReviewStore.getState().sessions[ID_B]).toBeDefined();
+    expect(store.getState().sessions[ID_B]).toBeDefined();
   });
 
   it("recovers the active tab when a salvaged store kept sessions but nulled the pointer", async () => {
@@ -1178,15 +1173,60 @@ describe("session hydration", () => {
 
     // Lands on the first surviving tab instead of the empty state behind a
     // populated strip; only that tab derives, so bounded boot still holds.
-    expect(useReviewStore.getState().activeSessionId).toBe(ID_A);
+    expect(store.getState().activeSessionId).toBe(ID_A);
     expect(slice(ID_A).diff.phase).toBe("loaded");
     expect(slice(ID_B).diff.phase).toBe("idle");
     expect(bridge.getCommitLog).toHaveBeenCalledTimes(1);
     expect(bridge.getCommitLog).toHaveBeenCalledWith({ repoPath: "/repo-a", range: null });
 
     // The recovered pointer heals main's null on the debounced write-back.
-    useReviewStore.getState().flushWriteBacks();
+    store.getState().flushWriteBacks();
     expect(bridge.setActiveSession).toHaveBeenCalledWith({ id: ID_A });
+  });
+
+  it("keeps a review pushed mid-hydration instead of losing it to the boot snapshot", async () => {
+    const bridge = makeBridge({});
+    let resolveBootList: (snapshot: SessionSnapshot) => void = () => {};
+    // The boot round-trip is held open, and only it: anything listed afterwards sees main's
+    // newer state, the CLI's session included.
+    vi.mocked(bridge.listSessions)
+      .mockImplementationOnce(
+        () =>
+          new Promise<SessionSnapshot>((resolve) => {
+            resolveBootList = resolve;
+          }),
+      )
+      .mockResolvedValue({
+        sessions: [storedSession(ID_A, "/repo-a"), storedSession(ID_B, "/repo-b")],
+        activeSessionId: ID_B,
+      });
+    vi.stubGlobal("window", { reviewer: bridge });
+    store.setState({ boot: "pending" });
+
+    const hydration = store.getState().hydrate();
+    // `rvw emit` while the app is still launching: main wrote the session and pushed
+    // `sessions:changed` before hydrate's `sessions:list` came back.
+    const sync = store.getState().syncSessions();
+    resolveBootList({ sessions: [storedSession(ID_A, "/repo-a")], activeSessionId: ID_A });
+    await Promise.all([hydration, sync]);
+
+    // The pushed review is here on the first push — the older snapshot landing late must not
+    // rebuild the strip without it.
+    expect(Object.keys(store.getState().sessions)).toEqual([ID_A, ID_B]);
+    expect(store.getState().tabs).toEqual([
+      { kind: "session", id: ID_A },
+      { kind: "session", id: ID_B },
+    ]);
+    expect(store.getState().activeSessionId).toBe(ID_B);
+    expect(store.getState().boot).toBe("ready");
+    // The push re-listed rather than being dropped, and the review it carried is *shown*, not
+    // merely in the strip — a guard that returned early would leave both of these behind.
+    expect(bridge.listSessions).toHaveBeenCalledTimes(2);
+    expect(slice(ID_B).diff.phase).toBe("loaded");
+    // And boot's own derivation, in flight across the re-list's wholesale `set`, still lands:
+    // waiting only for the restore is safe because the rebuild keeps live slices by identity.
+    expect(slice(ID_A).log).toEqual({ phase: "loaded", entries: DIRTY_ENTRIES });
+    expect(slice(ID_A).diff.phase).toBe("loaded");
   });
 });
 
@@ -1202,11 +1242,11 @@ describe("session lifecycle", () => {
       activeSessionId: ID_B,
     });
 
-    useReviewStore.getState().closeSession();
+    store.getState().closeSession();
 
     expect(bridge.deleteSession).toHaveBeenCalledWith({ id: ID_B });
-    expect(useReviewStore.getState().sessions[ID_B]).toBeUndefined();
-    expect(useReviewStore.getState().activeSessionId).toBe(ID_C);
+    expect(store.getState().sessions[ID_B]).toBeUndefined();
+    expect(store.getState().activeSessionId).toBe(ID_C);
     // The neighbor was never derived; activation-by-close derives it like a switch.
     await vi.waitFor(() => {
       expect(slice(ID_C).diff.phase).toBe("loaded");
@@ -1220,9 +1260,9 @@ describe("session lifecycle", () => {
       activeSessionId: ID_B,
     });
 
-    useReviewStore.getState().closeSession(ID_B);
+    store.getState().closeSession(ID_B);
 
-    expect(useReviewStore.getState().activeSessionId).toBe(ID_A);
+    expect(store.getState().activeSessionId).toBe(ID_A);
   });
 
   it("closing the last tab lands on the empty state", async () => {
@@ -1232,12 +1272,12 @@ describe("session lifecycle", () => {
       activeSessionId: ID_A,
     });
 
-    useReviewStore.getState().closeSession();
+    store.getState().closeSession();
 
     // What App renders as the start screen: a settled boot with no sessions.
-    expect(useReviewStore.getState().boot).toBe("ready");
-    expect(useReviewStore.getState().sessions).toEqual({});
-    expect(useReviewStore.getState().activeSessionId).toBeNull();
+    expect(store.getState().boot).toBe("ready");
+    expect(store.getState().sessions).toEqual({});
+    expect(store.getState().activeSessionId).toBeNull();
     expect(bridge.deleteSession).toHaveBeenCalledWith({ id: ID_A });
   });
 
@@ -1249,10 +1289,10 @@ describe("session lifecycle", () => {
     });
     const activeBefore = slice(ID_A);
 
-    useReviewStore.getState().closeSession(ID_B);
+    store.getState().closeSession(ID_B);
 
     expect(bridge.deleteSession).toHaveBeenCalledWith({ id: ID_B });
-    expect(useReviewStore.getState().activeSessionId).toBe(ID_A);
+    expect(store.getState().activeSessionId).toBe(ID_A);
     expect(slice(ID_A)).toBe(activeBefore);
     expect(bridge.setActiveSession).not.toHaveBeenCalled();
   });
@@ -1262,8 +1302,8 @@ describe("session lifecycle", () => {
     const bridge = makeBridge({});
     await openFixtureRepo(bridge);
 
-    useReviewStore.getState().setScrollTop(300);
-    useReviewStore.getState().closeSession();
+    store.getState().setScrollTop(300);
+    store.getState().closeSession();
 
     // Sent synchronously, inside the close, rather than left to a debounce that would land on
     // a session main has already dropped. Everything on this session dies with the tab except
@@ -1292,11 +1332,11 @@ describe("session lifecycle", () => {
       value: { kind: "opened", repo: { path: "/repo-a", name: "repo-a" } },
     });
 
-    await useReviewStore.getState().openRepository();
+    await store.getState().openRepository();
 
     expect(bridge.createSession).not.toHaveBeenCalled();
-    expect(useReviewStore.getState().activeSessionId).toBe(ID_A);
-    expect(Object.keys(useReviewStore.getState().sessions)).toEqual([ID_A, ID_B]);
+    expect(store.getState().activeSessionId).toBe(ID_A);
+    expect(Object.keys(store.getState().sessions)).toEqual([ID_A, ID_B]);
     // Re-activation is a first activation for this restored tab: it derives.
     await vi.waitFor(() => {
       expect(slice(ID_A).diff.phase).toBe("loaded");
@@ -1306,11 +1346,11 @@ describe("session lifecycle", () => {
   it("a duplicate open clears a lingering open failure", async () => {
     const bridge = makeBridge({});
     await openFixtureRepo(bridge);
-    useReviewStore.setState({ openFailure: { code: "gitMissing" } });
+    store.setState({ openFailure: { code: "gitMissing" } });
 
-    await useReviewStore.getState().openRepository();
+    await store.getState().openRepository();
 
-    expect(useReviewStore.getState().openFailure).toBeNull();
+    expect(store.getState().openFailure).toBeNull();
     expect(bridge.createSession).toHaveBeenCalledTimes(1);
   });
 
@@ -1325,14 +1365,14 @@ describe("session lifecycle", () => {
       activeSessionId: ID_A,
     });
 
-    useReviewStore.getState().activateTabByOrdinal(2);
-    expect(useReviewStore.getState().activeSessionId).toBe(ID_B);
+    store.getState().activateTabByOrdinal(2);
+    expect(store.getState().activeSessionId).toBe(ID_B);
 
-    useReviewStore.getState().activateTabByOrdinal(9);
-    expect(useReviewStore.getState().activeSessionId).toBe(ID_C);
+    store.getState().activateTabByOrdinal(9);
+    expect(store.getState().activeSessionId).toBe(ID_C);
 
-    useReviewStore.getState().activateTabByOrdinal(7);
-    expect(useReviewStore.getState().activeSessionId).toBe(ID_C);
+    store.getState().activateTabByOrdinal(7);
+    expect(store.getState().activeSessionId).toBe(ID_C);
   });
 
   it("⌃Tab cycles forward and ⌃⇧Tab backward, wrapping at both ends", async () => {
@@ -1346,14 +1386,14 @@ describe("session lifecycle", () => {
       activeSessionId: ID_C,
     });
 
-    useReviewStore.getState().cycleActiveSession("next");
-    expect(useReviewStore.getState().activeSessionId).toBe(ID_A);
+    store.getState().cycleActiveSession("next");
+    expect(store.getState().activeSessionId).toBe(ID_A);
 
-    useReviewStore.getState().cycleActiveSession("previous");
-    expect(useReviewStore.getState().activeSessionId).toBe(ID_C);
+    store.getState().cycleActiveSession("previous");
+    expect(store.getState().activeSessionId).toBe(ID_C);
 
-    useReviewStore.getState().cycleActiveSession("previous");
-    expect(useReviewStore.getState().activeSessionId).toBe(ID_B);
+    store.getState().cycleActiveSession("previous");
+    expect(store.getState().activeSessionId).toBe(ID_B);
   });
 });
 
@@ -1364,13 +1404,12 @@ describe("start tabs", () => {
   // closed, and the review opened from it takes its slot.
 
   const startIds = (): string[] =>
-    useReviewStore
+    store
       .getState()
       .tabs.filter((stop) => stop.kind === "start")
       .map((stop) => stop.id);
 
-  const strip = (): string[] =>
-    useReviewStore.getState().tabs.map((stop) => `${stop.kind}:${stop.id}`);
+  const strip = (): string[] => store.getState().tabs.map((stop) => `${stop.kind}:${stop.id}`);
 
   it("goes up over the active session without disturbing it", async () => {
     const bridge = makeBridge({});
@@ -1380,12 +1419,12 @@ describe("start tabs", () => {
     });
     const openBefore = slice(ID_A);
 
-    useReviewStore.getState().openStartTab();
+    store.getState().openStartTab();
 
-    expect(useReviewStore.getState().activeStartTabId).not.toBeNull();
+    expect(store.getState().activeStartTabId).not.toBeNull();
     // The review behind it is still the active one, untouched — leaving the start tab is what
     // returns to it, and it must not have to be re-derived to come back.
-    expect(useReviewStore.getState().activeSessionId).toBe(ID_A);
+    expect(store.getState().activeSessionId).toBe(ID_A);
     expect(slice(ID_A)).toBe(openBefore);
   });
 
@@ -1396,9 +1435,9 @@ describe("start tabs", () => {
       activeSessionId: ID_A,
     });
 
-    useReviewStore.getState().openStartTab();
-    useReviewStore.getState().openStartTab();
-    useReviewStore.getState().openStartTab();
+    store.getState().openStartTab();
+    store.getState().openStartTab();
+    store.getState().openStartTab();
 
     const ids = startIds();
     expect(ids).toHaveLength(3);
@@ -1406,11 +1445,11 @@ describe("start tabs", () => {
     // Appended, in the order they were opened, after the session.
     expect(strip()).toEqual([`session:${ID_A}`, ...ids.map((id) => `start:${id}`)]);
     // The newest one is the one on screen.
-    expect(useReviewStore.getState().activeStartTabId).toBe(ids.at(-1));
+    expect(store.getState().activeStartTabId).toBe(ids.at(-1));
   });
 
   it("is the whole strip on a machine with no sessions", () => {
-    useReviewStore.getState().openStartTab();
+    store.getState().openStartTab();
     expect(strip()).toEqual([`start:${startIds()[0]}`]);
   });
 
@@ -1421,21 +1460,21 @@ describe("start tabs", () => {
       activeSessionId: ID_A,
     });
 
-    useReviewStore.getState().openStartTab();
+    store.getState().openStartTab();
     const [start] = startIds();
-    useReviewStore.getState().activateSession(ID_B);
+    store.getState().activateSession(ID_B);
 
-    expect(useReviewStore.getState().activeStartTabId).toBeNull();
+    expect(store.getState().activeStartTabId).toBeNull();
     expect(startIds()).toEqual([start]);
 
     // And it can be gone back to, which is the point of it still being there.
-    useReviewStore.getState().activateStartTab(start as string);
-    expect(useReviewStore.getState().activeStartTabId).toBe(start);
+    store.getState().activateStartTab(start as string);
+    expect(store.getState().activeStartTabId).toBe(start);
   });
 
   it("refuses to focus a tab that is not in the strip", () => {
-    useReviewStore.getState().activateStartTab("start-does-not-exist");
-    expect(useReviewStore.getState().activeStartTabId).toBeNull();
+    store.getState().activateStartTab("start-does-not-exist");
+    expect(store.getState().activeStartTabId).toBeNull();
   });
 
   it("is what ⌘W closes while it is focused — the session behind it survives", async () => {
@@ -1444,13 +1483,13 @@ describe("start tabs", () => {
       sessions: [storedSession(ID_A, "/repo-a")],
       activeSessionId: ID_A,
     });
-    useReviewStore.getState().openStartTab();
+    store.getState().openStartTab();
 
-    useReviewStore.getState().closeSession();
+    store.getState().closeSession();
 
     expect(startIds()).toEqual([]);
-    expect(useReviewStore.getState().activeStartTabId).toBeNull();
-    expect(useReviewStore.getState().sessions[ID_A]).toBeDefined();
+    expect(store.getState().activeStartTabId).toBeNull();
+    expect(store.getState().sessions[ID_A]).toBeDefined();
     expect(bridge.deleteSession).not.toHaveBeenCalled();
   });
 
@@ -1460,15 +1499,15 @@ describe("start tabs", () => {
       sessions: [storedSession(ID_A, "/repo-a"), storedSession(ID_B, "/repo-b")],
       activeSessionId: ID_A,
     });
-    useReviewStore.getState().openStartTab();
+    store.getState().openStartTab();
     const [start] = startIds();
 
-    useReviewStore.getState().closeStartTab(start as string);
+    store.getState().closeStartTab(start as string);
 
     // Nothing to its right, so the tab on its left — which is a session, and becomes the
     // surface on screen.
-    expect(useReviewStore.getState().activeStartTabId).toBeNull();
-    expect(useReviewStore.getState().activeSessionId).toBe(ID_B);
+    expect(store.getState().activeStartTabId).toBeNull();
+    expect(store.getState().activeSessionId).toBe(ID_B);
   });
 
   it("stays put when a background tab of either kind is closed", async () => {
@@ -1477,17 +1516,17 @@ describe("start tabs", () => {
       sessions: [storedSession(ID_A, "/repo-a"), storedSession(ID_B, "/repo-b")],
       activeSessionId: ID_A,
     });
-    useReviewStore.getState().openStartTab();
-    useReviewStore.getState().openStartTab();
+    store.getState().openStartTab();
+    store.getState().openStartTab();
     const [first, second] = startIds();
 
     // A pointer close names its tab; only the un-named form means "the focused one".
-    useReviewStore.getState().closeSession(ID_B);
-    expect(useReviewStore.getState().activeStartTabId).toBe(second);
+    store.getState().closeSession(ID_B);
+    expect(store.getState().activeStartTabId).toBe(second);
 
-    useReviewStore.getState().closeStartTab(first as string);
+    store.getState().closeStartTab(first as string);
     expect(startIds()).toEqual([second]);
-    expect(useReviewStore.getState().activeStartTabId).toBe(second);
+    expect(store.getState().activeStartTabId).toBe(second);
     expect(bridge.deleteSession).toHaveBeenCalledWith({ id: ID_B });
   });
 
@@ -1497,10 +1536,10 @@ describe("start tabs", () => {
       sessions: [storedSession(ID_A, "/repo-a")],
       activeSessionId: ID_A,
     });
-    useReviewStore.getState().openStartTab();
+    store.getState().openStartTab();
     const [start] = startIds();
 
-    useReviewStore.getState().closeSession(ID_A);
+    store.getState().closeSession(ID_A);
 
     expect(strip()).toEqual([`start:${start}`]);
   });
@@ -1511,16 +1550,16 @@ describe("start tabs", () => {
       sessions: [storedSession(ID_A, "/repo-a"), storedSession(ID_B, "/repo-b")],
       activeSessionId: ID_B,
     });
-    useReviewStore.getState().openStartTab();
+    store.getState().openStartTab();
     const [start] = startIds();
 
-    useReviewStore.getState().cycleActiveSession("next");
-    expect(useReviewStore.getState().activeStartTabId).toBeNull();
-    expect(useReviewStore.getState().activeSessionId).toBe(ID_A);
+    store.getState().cycleActiveSession("next");
+    expect(store.getState().activeStartTabId).toBeNull();
+    expect(store.getState().activeSessionId).toBe(ID_A);
 
     // And back onto it from the far end, because it is still there to step onto.
-    useReviewStore.getState().cycleActiveSession("previous");
-    expect(useReviewStore.getState().activeStartTabId).toBe(start);
+    store.getState().cycleActiveSession("previous");
+    expect(store.getState().activeStartTabId).toBe(start);
   });
 
   it("answers the ⌘-digit for its own position, and ⌘9 when it is last", async () => {
@@ -1529,20 +1568,20 @@ describe("start tabs", () => {
       sessions: [storedSession(ID_A, "/repo-a"), storedSession(ID_B, "/repo-b")],
       activeSessionId: ID_A,
     });
-    useReviewStore.getState().openStartTab();
+    store.getState().openStartTab();
     const [start] = startIds();
 
-    useReviewStore.getState().activateTabByOrdinal(9);
-    expect(useReviewStore.getState().activeStartTabId).toBe(start);
+    store.getState().activateTabByOrdinal(9);
+    expect(store.getState().activeStartTabId).toBe(start);
 
     // ⌘2 is still the second session, whatever is beyond it.
-    useReviewStore.getState().activateTabByOrdinal(2);
-    expect(useReviewStore.getState().activeStartTabId).toBeNull();
-    expect(useReviewStore.getState().activeSessionId).toBe(ID_B);
+    store.getState().activateTabByOrdinal(2);
+    expect(store.getState().activeStartTabId).toBeNull();
+    expect(store.getState().activeSessionId).toBe(ID_B);
 
     // ⌘3 is this tab's own position.
-    useReviewStore.getState().activateTabByOrdinal(3);
-    expect(useReviewStore.getState().activeStartTabId).toBe(start);
+    store.getState().activateTabByOrdinal(3);
+    expect(store.getState().activeStartTabId).toBe(start);
   });
 
   it("drags anywhere in the strip, and only the session order reaches main", async () => {
@@ -1551,11 +1590,11 @@ describe("start tabs", () => {
       sessions: [storedSession(ID_A, "/repo-a"), storedSession(ID_B, "/repo-b")],
       activeSessionId: ID_A,
     });
-    useReviewStore.getState().openStartTab();
+    store.getState().openStartTab();
     const [start] = startIds();
 
     // Dropped between the two sessions.
-    useReviewStore.getState().reorderTabs([
+    store.getState().reorderTabs([
       { kind: "session", id: ID_A },
       { kind: "start", id: start as string },
       { kind: "session", id: ID_B },
@@ -1580,9 +1619,9 @@ describe("start tabs", () => {
     // Focused, and dragged into the middle: the slot it holds is the slot the review must land
     // in — a review appearing at the far end while the spent front door stays put is the strip
     // rearranging itself behind the reader.
-    useReviewStore.getState().openStartTab();
+    store.getState().openStartTab();
     const [start] = startIds();
-    useReviewStore.getState().reorderTabs([
+    store.getState().reorderTabs([
       { kind: "session", id: ID_A },
       { kind: "start", id: start as string },
       { kind: "session", id: ID_B },
@@ -1596,38 +1635,38 @@ describe("start tabs", () => {
       activeSessionId: ID_C,
     });
 
-    await useReviewStore.getState().openReviewByPath("/abs/x.reviewer.json");
+    await store.getState().openReviewByPath("/abs/x.reviewer.json");
 
     expect(strip()).toEqual([`session:${ID_A}`, `session:${ID_C}`, `session:${ID_B}`]);
-    expect(useReviewStore.getState().activeStartTabId).toBeNull();
-    expect(useReviewStore.getState().activeSessionId).toBe(ID_C);
+    expect(store.getState().activeStartTabId).toBeNull();
+    expect(store.getState().activeSessionId).toBe(ID_C);
   });
 
   it("is replaced in place by the repository opened from it", async () => {
     const bridge = makeBridge({});
     vi.stubGlobal("window", { reviewer: bridge });
-    useReviewStore.getState().openStartTab();
+    store.getState().openStartTab();
     const [start] = startIds();
 
-    await useReviewStore.getState().openRepository();
+    await store.getState().openRepository();
 
-    const opened = useReviewStore.getState().activeSessionId;
+    const opened = store.getState().activeSessionId;
     expect(opened).not.toBeNull();
     expect(strip()).toEqual([`session:${opened}`]);
     expect(startIds()).not.toContain(start);
-    expect(useReviewStore.getState().activeStartTabId).toBeNull();
+    expect(store.getState().activeStartTabId).toBeNull();
   });
 
   it("is spent even when the repository it opened was already in a tab", async () => {
     const bridge = makeBridge({});
     await openFixtureRepo(bridge);
-    const first = useReviewStore.getState().activeSessionId;
-    useReviewStore.getState().openStartTab();
+    const first = store.getState().activeSessionId;
+    store.getState().openStartTab();
 
     // Same path: one tab per repository, so this re-activates rather than creating one.
-    await useReviewStore.getState().openRepository();
+    await store.getState().openRepository();
 
-    expect(useReviewStore.getState().activeSessionId).toBe(first);
+    expect(store.getState().activeSessionId).toBe(first);
     expect(startIds()).toEqual([]);
   });
 
@@ -1637,7 +1676,7 @@ describe("start tabs", () => {
       sessions: [storedSession(ID_A, "/repo-a")],
       activeSessionId: ID_A,
     });
-    useReviewStore.getState().openStartTab();
+    store.getState().openStartTab();
 
     // What a CLI publish looks like from here: main wrote a session and pushed; the renderer
     // re-lists and finds a session it has never seen as the active one.
@@ -1645,11 +1684,11 @@ describe("start tabs", () => {
       sessions: [storedSession(ID_A, "/repo-a"), storedSession(ID_B, "/repo-b")],
       activeSessionId: ID_B,
     });
-    await useReviewStore.getState().syncSessions();
+    await store.getState().syncSessions();
 
     expect(strip()).toEqual([`session:${ID_A}`, `session:${ID_B}`]);
-    expect(useReviewStore.getState().activeStartTabId).toBeNull();
-    expect(useReviewStore.getState().activeSessionId).toBe(ID_B);
+    expect(store.getState().activeStartTabId).toBeNull();
+    expect(store.getState().activeSessionId).toBe(ID_B);
   });
 
   it("survives a review arriving while the reader is on another tab", async () => {
@@ -1660,18 +1699,18 @@ describe("start tabs", () => {
     });
     // Parked in the strip, not focused: nothing here is the reader's front door right now, so
     // nothing here may close their tab.
-    useReviewStore.getState().openStartTab();
+    store.getState().openStartTab();
     const [start] = startIds();
-    useReviewStore.getState().activateSession(ID_A);
+    store.getState().activateSession(ID_A);
 
     vi.mocked(bridge.listSessions).mockResolvedValue({
       sessions: [storedSession(ID_A, "/repo-a"), storedSession(ID_B, "/repo-b")],
       activeSessionId: ID_B,
     });
-    await useReviewStore.getState().syncSessions();
+    await store.getState().syncSessions();
 
     expect(startIds()).toEqual([start]);
-    expect(useReviewStore.getState().activeStartTabId).toBeNull();
+    expect(store.getState().activeStartTabId).toBeNull();
   });
 
   it("stays focused through a re-list that changes nothing", async () => {
@@ -1680,12 +1719,12 @@ describe("start tabs", () => {
       sessions: [storedSession(ID_A, "/repo-a")],
       activeSessionId: ID_A,
     });
-    useReviewStore.getState().openStartTab();
+    store.getState().openStartTab();
     const [start] = startIds();
 
-    await useReviewStore.getState().syncSessions();
+    await store.getState().syncSessions();
 
-    expect(useReviewStore.getState().activeStartTabId).toBe(start);
+    expect(store.getState().activeStartTabId).toBe(start);
     expect(startIds()).toEqual([start]);
   });
 });
@@ -1696,8 +1735,8 @@ describe("debounced write-back", () => {
     const bridge = makeBridge({});
     await openFixtureRepo(bridge);
 
-    useReviewStore.getState().setBase("main");
-    useReviewStore.getState().swapBranches();
+    store.getState().setBase("main");
+    store.getState().swapBranches();
     expect(bridge.updateSession).not.toHaveBeenCalled();
 
     await vi.advanceTimersByTimeAsync(WRITE_BACK_DEBOUNCE_MS);
@@ -1732,18 +1771,18 @@ describe("debounced write-back", () => {
     const bridge = makeBridge({});
     await openFixtureRepo(bridge);
 
-    useReviewStore.getState().setScrollTop(120);
-    useReviewStore.getState().setBase("main");
+    store.getState().setScrollTop(120);
+    store.getState().setBase("main");
     expect(bridge.updateSession).not.toHaveBeenCalled();
 
-    useReviewStore.getState().flushWriteBacks();
+    store.getState().flushWriteBacks();
 
     expect(bridge.updateSession).toHaveBeenCalledTimes(1);
     expect(bridge.updateSession).toHaveBeenCalledWith(
       expect.objectContaining({ id: SESSION_ID, base: "main", scrollTop: 120 }),
     );
 
-    useReviewStore.getState().flushWriteBacks();
+    store.getState().flushWriteBacks();
     expect(bridge.updateSession).toHaveBeenCalledTimes(1);
   });
 
@@ -1754,15 +1793,43 @@ describe("debounced write-back", () => {
       activeSessionId: ID_A,
     });
 
-    useReviewStore.getState().activateSession(ID_B);
-    useReviewStore.getState().activateSession(ID_A);
-    useReviewStore.getState().activateSession(ID_B);
+    store.getState().activateSession(ID_B);
+    store.getState().activateSession(ID_A);
+    store.getState().activateSession(ID_B);
     expect(bridge.setActiveSession).not.toHaveBeenCalled();
 
-    useReviewStore.getState().flushWriteBacks();
+    store.getState().flushWriteBacks();
 
     expect(bridge.setActiveSession).toHaveBeenCalledTimes(1);
     expect(bridge.setActiveSession).toHaveBeenCalledWith({ id: ID_B });
+  });
+
+  it("a discarded store goes quiet: cancel drops both pending writes rather than sending them", async () => {
+    vi.useFakeTimers();
+    const bridge = makeBridge({});
+    await hydrateWith(bridge, {
+      sessions: [storedSession(ID_A, "/repo-a"), storedSession(ID_B, "/repo-b")],
+      activeSessionId: ID_A,
+    });
+    store.getState().activateSession(ID_B);
+    store.getState().setScrollTop(120);
+
+    // What `afterEach` does to every store in this file, and the reason a store may be
+    // instantiated more than once: an instance nobody holds any more must not spend the next
+    // half-second writing through whichever bridge the next one installs.
+    store.getState().cancelWriteBacks();
+    await vi.advanceTimersByTimeAsync(WRITE_BACK_DEBOUNCE_MS);
+
+    expect(bridge.updateSession).not.toHaveBeenCalled();
+    expect(bridge.setActiveSession).not.toHaveBeenCalled();
+
+    // Cancelled is idle, not dead — the store it belongs to still persists what happens next.
+    store.getState().setScrollTop(300);
+    await vi.advanceTimersByTimeAsync(WRITE_BACK_DEBOUNCE_MS);
+    expect(bridge.updateSession).toHaveBeenCalledTimes(1);
+    expect(bridge.updateSession).toHaveBeenCalledWith(
+      expect.objectContaining({ id: ID_B, scrollTop: 300 }),
+    );
   });
 });
 
@@ -1781,7 +1848,7 @@ describe("scroll capture into the owning slice", () => {
       activeSessionId: ID_A,
     });
     // Wired the way DiffView binds it: captures for repo A commit to A's slice.
-    const capture = createScrollCapture((top) => useReviewStore.getState().setScrollTop(top, ID_A));
+    const capture = createScrollCapture((top) => store.getState().setScrollTop(top, ID_A));
 
     capture.notify(400);
     capture.notify(900);
@@ -1801,7 +1868,7 @@ describe("scroll capture into the owning slice", () => {
       sessions: [storedSession(ID_A, "/repo-a")],
       activeSessionId: ID_A,
     });
-    const capture = createScrollCapture((top) => useReviewStore.getState().setScrollTop(top, ID_A));
+    const capture = createScrollCapture((top) => store.getState().setScrollTop(top, ID_A));
 
     capture.notify(760);
     capture.flush();
@@ -1822,29 +1889,37 @@ describe("useReviewStore review-open flows", () => {
         activeSessionId: ID_A,
       }),
     });
-    useReviewStore.setState({ reviewOpenFailure: { code: "unreadable" } });
+    store.setState({ reviewOpenFailure: { code: "unreadable" } });
     vi.stubGlobal("window", { reviewer: bridge });
 
-    await useReviewStore.getState().openReviewByPath("/abs/x.reviewer.json");
+    await store.getState().openReviewByPath("/abs/x.reviewer.json");
 
     expect(bridge.openReviewByPath).toHaveBeenCalledWith({ path: "/abs/x.reviewer.json" });
-    expect(useReviewStore.getState().activeSessionId).toBe(ID_A);
+    expect(store.getState().activeSessionId).toBe(ID_A);
     expect(slice(ID_A).repo).toEqual({ path: "/repo-a", name: "repo-a" });
     // Main marked it active; the new slice derives (log/branches fetched).
     expect(slice(ID_A).log?.phase).toBe("loaded");
-    expect(useReviewStore.getState().reviewOpenFailure).toBeNull();
+    expect(store.getState().reviewOpenFailure).toBeNull();
   });
 
   it("surfaces a typed failure and creates no session when the open fails", async () => {
     const bridge = makeBridge({
-      openReview: vi.fn().mockResolvedValue({ ok: false, failure: { code: "invalidContent" } }),
+      openReview: vi.fn().mockResolvedValue({
+        ok: false,
+        failure: { code: "invalidContent", reason: "repo — Repo path must be absolute" },
+      }),
     });
     vi.stubGlobal("window", { reviewer: bridge });
 
-    await useReviewStore.getState().openReview();
+    await store.getState().openReview();
 
-    expect(useReviewStore.getState().reviewOpenFailure).toEqual({ code: "invalidContent" });
-    expect(useReviewStore.getState().sessions).toEqual({});
+    // The failure lands whole, reason included: the banner renders what main said, so a
+    // store that kept only the code would quietly drop the useful half of it.
+    expect(store.getState().reviewOpenFailure).toEqual({
+      code: "invalidContent",
+      reason: "repo — Repo path must be absolute",
+    });
+    expect(store.getState().sessions).toEqual({});
     expect(bridge.listSessions).not.toHaveBeenCalled();
   });
 
@@ -1854,10 +1929,10 @@ describe("useReviewStore review-open flows", () => {
     });
     vi.stubGlobal("window", { reviewer: bridge });
 
-    await useReviewStore.getState().openReview();
+    await store.getState().openReview();
 
-    expect(useReviewStore.getState().sessions).toEqual({});
-    expect(useReviewStore.getState().reviewOpenFailure).toBeNull();
+    expect(store.getState().sessions).toEqual({});
+    expect(store.getState().reviewOpenFailure).toBeNull();
     expect(bridge.listSessions).not.toHaveBeenCalled();
   });
 
@@ -1865,9 +1940,9 @@ describe("useReviewStore review-open flows", () => {
     const bridge = makeBridge({ getPathForFile: vi.fn().mockReturnValue(null) });
     vi.stubGlobal("window", { reviewer: bridge });
 
-    await useReviewStore.getState().openDroppedFile(new File(["{}"], "x.reviewer.json"));
+    await store.getState().openDroppedFile(new File(["{}"], "x.reviewer.json"));
 
-    expect(useReviewStore.getState().reviewOpenFailure).toEqual({ code: "unreadable" });
+    expect(store.getState().reviewOpenFailure).toEqual({ code: "unreadable" });
     expect(bridge.openReviewByPath).not.toHaveBeenCalled();
   });
 
@@ -1878,7 +1953,7 @@ describe("useReviewStore review-open flows", () => {
     });
     vi.stubGlobal("window", { reviewer: bridge });
 
-    await useReviewStore.getState().openDroppedFile(new File(["{}"], "x.reviewer.json"));
+    await store.getState().openDroppedFile(new File(["{}"], "x.reviewer.json"));
 
     expect(bridge.getPathForFile).toHaveBeenCalledTimes(1);
     expect(bridge.openReviewByPath).toHaveBeenCalledWith({ path: "/abs/x.reviewer.json" });
@@ -1897,11 +1972,11 @@ describe("useReviewStore review-open flows", () => {
       sessions: [storedSession(ID_A, "/repo-a"), storedSession(ID_B, "/repo-b")],
       activeSessionId: ID_B,
     });
-    await useReviewStore.getState().syncSessions();
+    await store.getState().syncSessions();
 
     // The live slice is kept by identity (same reference), never re-derived.
     expect(slice(ID_A)).toBe(derivedA);
-    expect(useReviewStore.getState().activeSessionId).toBe(ID_B);
+    expect(store.getState().activeSessionId).toBe(ID_B);
     expect(slice(ID_B).needsDerive).toBe(false);
     expect(slice(ID_B).log?.phase).toBe("loaded");
   });
@@ -1915,7 +1990,7 @@ describe("comment curation", () => {
     const bridge = makeBridge({});
     await openFixtureRepo(bridge);
 
-    useReviewStore.getState().addComment(ANCHOR, "  needs a guard  ");
+    store.getState().addComment(ANCHOR, "  needs a guard  ");
 
     const [added] = active().comments;
     expect(added?.body).toBe("needs a guard");
@@ -1933,10 +2008,10 @@ describe("comment curation", () => {
     const bridge = makeBridge({});
     await openFixtureRepo(bridge);
 
-    useReviewStore.getState().addComment(ANCHOR, "   ");
+    store.getState().addComment(ANCHOR, "   ");
 
     expect(active().comments).toHaveLength(0);
-    useReviewStore.getState().flushWriteBacks();
+    store.getState().flushWriteBacks();
     expect(bridge.updateSession).not.toHaveBeenCalled();
   });
 
@@ -1944,10 +2019,10 @@ describe("comment curation", () => {
     vi.useFakeTimers();
     const bridge = makeBridge({});
     await openFixtureRepo(bridge);
-    useReviewStore.getState().addComment(ANCHOR, "first");
+    store.getState().addComment(ANCHOR, "first");
     const original = active().comments[0];
 
-    useReviewStore.getState().editComment(original?.id ?? "", "second");
+    store.getState().editComment(original?.id ?? "", "second");
 
     const edited = active().comments[0];
     expect(edited?.body).toBe("second");
@@ -1962,9 +2037,9 @@ describe("comment curation", () => {
   it("editComment with an empty body is a no-op, never an empty-body write", async () => {
     const bridge = makeBridge({});
     await openFixtureRepo(bridge);
-    useReviewStore.getState().addComment(ANCHOR, "keep me");
+    store.getState().addComment(ANCHOR, "keep me");
 
-    useReviewStore.getState().editComment(active().comments[0]?.id ?? "", "  ");
+    store.getState().editComment(active().comments[0]?.id ?? "", "  ");
 
     expect(active().comments[0]?.body).toBe("keep me");
   });
@@ -1973,10 +2048,10 @@ describe("comment curation", () => {
     vi.useFakeTimers();
     const bridge = makeBridge({});
     await openFixtureRepo(bridge);
-    useReviewStore.getState().addComment(ANCHOR, "temporary");
+    store.getState().addComment(ANCHOR, "temporary");
     const target = active().comments[0];
 
-    useReviewStore.getState().discardComment(target?.id ?? "");
+    store.getState().discardComment(target?.id ?? "");
 
     expect(active().comments).toHaveLength(0);
     await vi.advanceTimersByTimeAsync(WRITE_BACK_DEBOUNCE_MS);
@@ -2031,37 +2106,24 @@ describe("useReviewStore layer navigation", () => {
   // exactly as they were.
   beforeEach(() => {
     const files = parsePatch(MULTI_STATUS_PATCH, "test");
-    const seeded: SessionSlice = {
-      id: SESSION_ID,
-      repo: { path: "/repo", name: "repo" },
-      log: null,
-      branches: null,
-      brush: null,
-      base: "main" as BranchName,
-      head: "feature/x" as BranchName,
-      selection: { kind: "branches", base: "main" as BranchName, head: "feature/x" as BranchName },
-      diff: { phase: "loaded", loadId: 1, files },
-      selectedFilePath: "notes.txt",
-      scrollTop: 640,
-      commitSelection: null,
-      comments: [],
-      layers: LAYERS,
-      reviewDiff: null,
-      reviewSubrange: null,
-      reviewOrigin: null,
-      overview: null,
-      overviewOpen: false,
-      lastChapterId: null,
-      activeLayerId: null,
-      activeCommentId: null,
-      readFiles: NO_READ_FILES,
-      collapsedFiles: NO_COLLAPSED_FILES,
-      readTotal: 0,
-      reviewPath: null,
-      needsDerive: false,
-      requestTicket: 1,
-    };
-    useReviewStore.setState({
+    const seeded = createSessionSlice(
+      { id: SESSION_ID, repo: { path: "/repo", name: "repo" } },
+      {
+        ...DERIVED,
+        base: "main" as BranchName,
+        head: "feature/x" as BranchName,
+        selection: {
+          kind: "branches",
+          base: "main" as BranchName,
+          head: "feature/x" as BranchName,
+        },
+        diff: { phase: "loaded", loadId: 1, files },
+        selectedFilePath: "notes.txt",
+        scrollTop: 640,
+        layers: LAYERS,
+      },
+    );
+    store.setState({
       boot: "ready",
       sessions: { [SESSION_ID]: seeded },
       activeSessionId: SESSION_ID,
@@ -2070,9 +2132,9 @@ describe("useReviewStore layer navigation", () => {
   });
 
   it("solos a layer and clears back to the full diff", () => {
-    useReviewStore.getState().setActiveLayer("layer-b");
+    store.getState().setActiveLayer("layer-b");
     expect(active().activeLayerId).toBe("layer-b");
-    useReviewStore.getState().setActiveLayer(null);
+    store.getState().setActiveLayer(null);
     expect(active().activeLayerId).toBeNull();
   });
 
@@ -2080,7 +2142,7 @@ describe("useReviewStore layer navigation", () => {
     // The three layers cover three single lines of a multi-file diff, so a coverable
     // gap remains: the inferred "not covered by layers" layer is the last stop in the
     // effective order, reachable by stepping past the last authored layer.
-    const { stepLayer: step } = useReviewStore.getState();
+    const { stepLayer: step } = store.getState();
     step(1);
     expect(active().activeLayerId).toBe("layer-a");
     step(1);
@@ -2097,8 +2159,8 @@ describe("useReviewStore layer navigation", () => {
 
   it("never mutates the persisted diff selection, file focus, or scroll", () => {
     const before = active();
-    useReviewStore.getState().setActiveLayer("layer-c");
-    useReviewStore.getState().stepLayer(-1);
+    store.getState().setActiveLayer("layer-c");
+    store.getState().stepLayer(-1);
     const after = active();
     expect(after.selection).toBe(before.selection);
     expect(after.selectedFilePath).toBe("notes.txt");
@@ -2110,8 +2172,8 @@ describe("useReviewStore layer navigation", () => {
     vi.useFakeTimers();
     const bridge = makeBridge({});
     vi.stubGlobal("window", { reviewer: bridge });
-    useReviewStore.getState().setActiveLayer("layer-a");
-    useReviewStore.getState().stepLayer(1);
+    store.getState().setActiveLayer("layer-a");
+    store.getState().stepLayer(1);
     await vi.advanceTimersByTimeAsync(WRITE_BACK_DEBOUNCE_MS);
     expect(bridge.updateSession).not.toHaveBeenCalled();
   });
@@ -2119,11 +2181,11 @@ describe("useReviewStore layer navigation", () => {
   it("does not carry the active layer into the persisted session", () => {
     const bridge = makeBridge({});
     vi.stubGlobal("window", { reviewer: bridge });
-    useReviewStore.getState().setActiveLayer("layer-b");
+    store.getState().setActiveLayer("layer-b");
     // A subsequent real mutation flushes a write-back; the payload must omit the
     // active layer entirely — a relaunch always reopens on the full diff.
-    useReviewStore.getState().setScrollTop(720);
-    useReviewStore.getState().flushWriteBacks();
+    store.getState().setScrollTop(720);
+    store.getState().flushWriteBacks();
     expect(bridge.updateSession).toHaveBeenCalledTimes(1);
     const persisted = vi.mocked(bridge.updateSession).mock.calls[0]?.[0];
     expect(persisted).not.toHaveProperty("activeLayerId");
@@ -2151,38 +2213,19 @@ describe("useReviewStore tour doc navigation", () => {
 
   function seedTour(overrides: Partial<SessionSlice> = {}): void {
     const files = parsePatch(MULTI_STATUS_PATCH, "test");
-    const seeded: SessionSlice = {
-      id: SESSION_ID,
-      repo: { path: "/repo", name: "repo" },
-      log: null,
-      branches: null,
-      brush: null,
-      base: null,
-      head: null,
-      selection: null,
-      diff: { phase: "loaded", loadId: 1, files },
-      selectedFilePath: "greet.ts",
-      scrollTop: 0,
-      commitSelection: null,
-      comments: [],
-      layers: LAYERS,
-      reviewDiff: null,
-      reviewSubrange: null,
-      reviewOrigin: null,
-      overview: OVERVIEW,
-      overviewOpen: true,
-      lastChapterId: null,
-      activeLayerId: null,
-      activeCommentId: null,
-      readFiles: NO_READ_FILES,
-      collapsedFiles: NO_COLLAPSED_FILES,
-      readTotal: 0,
-      reviewPath: null,
-      needsDerive: false,
-      requestTicket: 1,
-      ...overrides,
-    };
-    useReviewStore.setState({
+    const seeded = createSessionSlice(
+      { id: SESSION_ID, repo: { path: "/repo", name: "repo" } },
+      {
+        ...DERIVED,
+        diff: { phase: "loaded", loadId: 1, files },
+        selectedFilePath: "greet.ts",
+        layers: LAYERS,
+        overview: OVERVIEW,
+        overviewOpen: true,
+        ...overrides,
+      },
+    );
+    store.setState({
       boot: "ready",
       sessions: { [SESSION_ID]: seeded },
       activeSessionId: SESSION_ID,
@@ -2191,29 +2234,13 @@ describe("useReviewStore tour doc navigation", () => {
   }
 
   it("a restored review with a doc opens on it; one without opens on its diff", async () => {
-    const withDoc: Session = {
-      id: SESSION_ID,
-      source: { kind: "local", repo: { path: "/repo", name: "repo" } },
-      base: null,
-      head: null,
-      commitSelection: null,
-      selectedFilePath: null,
-      scrollTop: 0,
-      comments: [],
-      layers: LAYERS,
-      overview: OVERVIEW,
-      reviewDiff: null,
-      reviewSubrange: null,
-      reviewOrigin: null,
-      reviewPath: null,
-      ...NO_PROGRESS,
-    };
+    const withDoc = storedSession(SESSION_ID, "/repo", { layers: LAYERS, overview: OVERVIEW });
     const bridge = makeBridge({
       listSessions: vi.fn().mockResolvedValue({ sessions: [withDoc], activeSessionId: SESSION_ID }),
     });
     vi.stubGlobal("window", { reviewer: bridge });
-    useReviewStore.setState({ boot: "pending" });
-    await useReviewStore.getState().hydrate();
+    store.setState({ boot: "pending" });
+    await store.getState().hydrate();
     expect(active().overviewOpen).toBe(true);
 
     const withoutDoc: Session = { ...withDoc, overview: null };
@@ -2223,18 +2250,18 @@ describe("useReviewStore tour doc navigation", () => {
         .mockResolvedValue({ sessions: [withoutDoc], activeSessionId: SESSION_ID }),
     });
     vi.stubGlobal("window", { reviewer: plainBridge });
-    useReviewStore.setState({ boot: "pending" });
-    await useReviewStore.getState().hydrate();
+    store.setState({ boot: "pending" });
+    await store.getState().hydrate();
     expect(active().overviewOpen).toBe(false);
   });
 
   it("entering a chapter leaves the doc, and the doc clears the solo when re-entered", () => {
     seedTour();
-    useReviewStore.getState().setActiveLayer("layer-b");
+    store.getState().setActiveLayer("layer-b");
     expect(active().overviewOpen).toBe(false);
     expect(active().activeLayerId).toBe("layer-b");
 
-    useReviewStore.getState().openOverview();
+    store.getState().openOverview();
     // Exactly one selected stop: the doc's own invariant.
     expect(active().overviewOpen).toBe(true);
     expect(active().activeLayerId).toBeNull();
@@ -2242,7 +2269,7 @@ describe("useReviewStore tour doc navigation", () => {
 
   it("steps the doc as stop zero: forward enters chapter one, back off it returns", () => {
     seedTour();
-    const { stepLayer: step } = useReviewStore.getState();
+    const { stepLayer: step } = store.getState();
 
     step(-1);
     expect(active().overviewOpen).toBe(true); // already at the start
@@ -2259,23 +2286,23 @@ describe("useReviewStore tour doc navigation", () => {
 
   it("without a doc, stepping back off the first chapter still clamps", () => {
     seedTour({ overview: null, overviewOpen: false, activeLayerId: "layer-a" });
-    useReviewStore.getState().stepLayer(-1);
+    store.getState().stepLayer(-1);
     expect(active()).toMatchObject({ overviewOpen: false, activeLayerId: "layer-a" });
   });
 
   it("remembers the chapter last entered so the doc can return the reader to it", () => {
     seedTour();
-    useReviewStore.getState().setActiveLayer("layer-b");
-    useReviewStore.getState().openOverview();
+    store.getState().setActiveLayer("layer-b");
+    store.getState().openOverview();
     expect(active().lastChapterId).toBe("layer-b");
     // Clearing back to the full diff is not a chapter, so it leaves the bookmark alone.
-    useReviewStore.getState().setActiveLayer(null);
+    store.getState().setActiveLayer(null);
     expect(active().lastChapterId).toBe("layer-b");
   });
 
   it("any navigation that targets the diff leaves the doc", () => {
     seedTour();
-    useReviewStore.getState().selectFile("notes.txt");
+    store.getState().selectFile("notes.txt");
     expect(active().overviewOpen).toBe(false);
 
     const comment: Comment = {
@@ -2287,7 +2314,7 @@ describe("useReviewStore tour doc navigation", () => {
       id: "22222222-2222-4222-8222-222222222222",
     };
     seedTour({ comments: [comment] });
-    useReviewStore.getState().focusComment(comment.id);
+    store.getState().focusComment(comment.id);
     expect(active().overviewOpen).toBe(false);
   });
 
@@ -2295,9 +2322,9 @@ describe("useReviewStore tour doc navigation", () => {
     seedTour();
     const bridge = makeBridge({});
     vi.stubGlobal("window", { reviewer: bridge });
-    useReviewStore.getState().setActiveLayer("layer-a");
-    useReviewStore.getState().setScrollTop(120);
-    useReviewStore.getState().flushWriteBacks();
+    store.getState().setActiveLayer("layer-a");
+    store.getState().setScrollTop(120);
+    store.getState().flushWriteBacks();
     const persisted = vi.mocked(bridge.updateSession).mock.calls[0]?.[0];
     expect(persisted).not.toHaveProperty("overviewOpen");
     expect(persisted).not.toHaveProperty("lastChapterId");
@@ -2337,37 +2364,22 @@ describe("useReviewStore comment navigation", () => {
 
   function seedComments(comments: Comment[], overrides: Partial<SessionSlice> = {}): void {
     const files = parsePatch(MULTI_STATUS_PATCH, "test");
-    const base: SessionSlice = {
-      id: SESSION_ID,
-      repo: { path: "/repo", name: "repo" },
-      log: null,
-      branches: null,
-      brush: null,
-      base: "main" as BranchName,
-      head: "feature/x" as BranchName,
-      selection: { kind: "branches", base: "main" as BranchName, head: "feature/x" as BranchName },
-      diff: { phase: "loaded", loadId: 1, files },
-      selectedFilePath: null,
-      scrollTop: 0,
-      commitSelection: null,
-      comments,
-      layers: [],
-      reviewDiff: null,
-      reviewSubrange: null,
-      reviewOrigin: null,
-      overview: null,
-      overviewOpen: false,
-      lastChapterId: null,
-      activeLayerId: null,
-      activeCommentId: null,
-      readFiles: NO_READ_FILES,
-      collapsedFiles: NO_COLLAPSED_FILES,
-      readTotal: 0,
-      reviewPath: null,
-      needsDerive: false,
-      requestTicket: 1,
-    };
-    useReviewStore.setState({
+    const base = createSessionSlice(
+      { id: SESSION_ID, repo: { path: "/repo", name: "repo" } },
+      {
+        ...DERIVED,
+        base: "main" as BranchName,
+        head: "feature/x" as BranchName,
+        selection: {
+          kind: "branches",
+          base: "main" as BranchName,
+          head: "feature/x" as BranchName,
+        },
+        diff: { phase: "loaded", loadId: 1, files },
+        comments,
+      },
+    );
+    store.setState({
       boot: "ready",
       sessions: { [SESSION_ID]: { ...base, ...overrides } },
       activeSessionId: SESSION_ID,
@@ -2377,7 +2389,7 @@ describe("useReviewStore comment navigation", () => {
 
   it("focuses a comment: sets the active id and moves file focus onto its file", () => {
     seedComments([C_ADDED, C_GREET, C_NOTES]);
-    useReviewStore.getState().focusComment(ID_B);
+    store.getState().focusComment(ID_B);
     expect(active().activeCommentId).toBe(ID_B);
     expect(active().selectedFilePath).toBe("greet.ts");
   });
@@ -2388,7 +2400,7 @@ describe("useReviewStore comment navigation", () => {
     // carries — the old one matches no file, so it would focus and unfold nothing.
     const beforeRename: Comment = { ...C_ADDED, file: "oldname.txt" };
     seedComments([beforeRename], { collapsedFiles: new Set(["newname.txt"]) });
-    useReviewStore.getState().focusComment(ID_A);
+    store.getState().focusComment(ID_A);
     expect(active().activeCommentId).toBe(ID_A);
     expect(active().selectedFilePath).toBe("newname.txt");
     expect(active().collapsedFiles.has("newname.txt")).toBe(false);
@@ -2396,7 +2408,7 @@ describe("useReviewStore comment navigation", () => {
 
   it("steps in document order from nothing, forward lands on the first comment", () => {
     seedComments([C_NOTES, C_ADDED, C_GREET]);
-    const { stepComment } = useReviewStore.getState();
+    const { stepComment } = store.getState();
     stepComment(1);
     expect(active().activeCommentId).toBe(ID_A);
     stepComment(1);
@@ -2407,7 +2419,7 @@ describe("useReviewStore comment navigation", () => {
 
   it("wraps at both ends so the walk is a cycle", () => {
     seedComments([C_ADDED, C_GREET, C_NOTES]);
-    const { stepComment } = useReviewStore.getState();
+    const { stepComment } = store.getState();
     stepComment(-1); // from nothing, backward lands on the last
     expect(active().activeCommentId).toBe(ID_C);
     stepComment(1); // last → first
@@ -2426,7 +2438,7 @@ describe("useReviewStore comment navigation", () => {
       },
     ];
     seedComments([C_ADDED, C_GREET, C_NOTES], { layers: soloGreet, activeLayerId: "only-greet" });
-    const { stepComment } = useReviewStore.getState();
+    const { stepComment } = store.getState();
     stepComment(1);
     expect(active().activeCommentId).toBe(ID_B);
     stepComment(1); // only one navigable under the solo → wraps back to itself
@@ -2443,29 +2455,29 @@ describe("useReviewStore comment navigation", () => {
       },
     ];
     seedComments([C_ADDED, C_GREET], { layers: soloGreet, activeLayerId: "only-greet" });
-    useReviewStore.getState().focusComment(ID_A); // added.txt is outside the solo
+    store.getState().focusComment(ID_A); // added.txt is outside the solo
     expect(active().activeLayerId).toBeNull();
     expect(active().activeCommentId).toBe(ID_A);
   });
 
   it("clears a dangling active id when the focused comment is discarded", () => {
     seedComments([C_ADDED, C_GREET]);
-    useReviewStore.getState().focusComment(ID_A);
-    useReviewStore.getState().discardComment(ID_A);
+    store.getState().focusComment(ID_A);
+    store.getState().discardComment(ID_A);
     expect(active().activeCommentId).toBeNull();
     // Discarding a different comment leaves the focus alone.
-    useReviewStore.getState().focusComment(ID_B);
-    useReviewStore.getState().discardComment("no-such-id");
+    store.getState().focusComment(ID_B);
+    store.getState().discardComment("no-such-id");
     expect(active().activeCommentId).toBe(ID_B);
   });
 
   it("plain file navigation (tree click, j/k) dismisses the comment step-through", () => {
     seedComments([C_ADDED, C_GREET, C_NOTES]);
-    useReviewStore.getState().focusComment(ID_B);
-    useReviewStore.getState().selectFile("notes.txt");
+    store.getState().focusComment(ID_B);
+    store.getState().selectFile("notes.txt");
     expect(active().activeCommentId).toBeNull();
-    useReviewStore.getState().focusComment(ID_B);
-    useReviewStore.getState().selectAdjacentFile(1);
+    store.getState().focusComment(ID_B);
+    store.getState().selectAdjacentFile(1);
     expect(active().activeCommentId).toBeNull();
   });
 
@@ -2473,8 +2485,8 @@ describe("useReviewStore comment navigation", () => {
     const bridge = makeBridge({});
     vi.stubGlobal("window", { reviewer: bridge });
     seedComments([C_ADDED]);
-    useReviewStore.getState().focusComment(ID_A);
-    useReviewStore.getState().flushWriteBacks();
+    store.getState().focusComment(ID_A);
+    store.getState().flushWriteBacks();
     const persisted = vi.mocked(bridge.updateSession).mock.calls.at(-1)?.[0];
     expect(persisted).not.toHaveProperty("activeCommentId");
     // The file focus half of focusComment does persist.
@@ -2502,37 +2514,11 @@ describe("review export actions", () => {
 
   function seedSlice(overrides: Partial<SessionSlice>): void {
     const files = parsePatch(MULTI_STATUS_PATCH, "test");
-    const base: SessionSlice = {
-      id: SESSION_ID,
-      repo: REPO,
-      log: null,
-      branches: null,
-      brush: null,
-      base: null,
-      head: null,
-      selection: null,
-      diff: { phase: "loaded", loadId: 1, files },
-      selectedFilePath: null,
-      scrollTop: 0,
-      commitSelection: null,
-      comments: [],
-      layers: [],
-      reviewDiff: null,
-      reviewSubrange: null,
-      reviewOrigin: null,
-      overview: null,
-      overviewOpen: false,
-      lastChapterId: null,
-      activeLayerId: null,
-      activeCommentId: null,
-      readFiles: NO_READ_FILES,
-      collapsedFiles: NO_COLLAPSED_FILES,
-      readTotal: 0,
-      reviewPath: null,
-      needsDerive: false,
-      requestTicket: 1,
-    };
-    useReviewStore.setState({
+    const base = createSessionSlice(
+      { id: SESSION_ID, repo: REPO },
+      { ...DERIVED, diff: { phase: "loaded", loadId: 1, files } },
+    );
+    store.setState({
       boot: "ready",
       sessions: { [SESSION_ID]: { ...base, ...overrides } },
       activeSessionId: SESSION_ID,
@@ -2552,7 +2538,7 @@ describe("review export actions", () => {
     vi.stubGlobal("window", { reviewer: bridge });
     seed(ORIGIN);
 
-    await useReviewStore.getState().exportReviewJson();
+    await store.getState().exportReviewJson();
 
     expect(bridge.saveReviewJson).toHaveBeenCalledTimes(1);
     const request = vi.mocked(bridge.saveReviewJson).mock.calls[0]?.[0];
@@ -2571,7 +2557,7 @@ describe("review export actions", () => {
     vi.stubGlobal("window", { reviewer: bridge });
     seed(ORIGIN);
 
-    await useReviewStore.getState().exportReviewMarkdown();
+    await store.getState().exportReviewMarkdown();
 
     expect(bridge.saveReviewMarkdown).toHaveBeenCalledTimes(1);
     const request = vi.mocked(bridge.saveReviewMarkdown).mock.calls[0]?.[0];
@@ -2585,8 +2571,8 @@ describe("review export actions", () => {
     vi.stubGlobal("window", { reviewer: bridge });
     seedSlice({ selection: null });
 
-    await useReviewStore.getState().exportReviewJson();
-    await useReviewStore.getState().exportReviewMarkdown();
+    await store.getState().exportReviewJson();
+    await store.getState().exportReviewMarkdown();
 
     expect(bridge.saveReviewJson).not.toHaveBeenCalled();
     expect(bridge.saveReviewMarkdown).not.toHaveBeenCalled();
@@ -2601,7 +2587,7 @@ describe("review export actions", () => {
       layers: [LAYER],
     });
 
-    await useReviewStore.getState().exportReviewJson();
+    await store.getState().exportReviewJson();
 
     // A branch comparison round-trips as refs — no frozen patch, so no diff re-read.
     expect(bridge.getDiff).not.toHaveBeenCalled();
@@ -2622,7 +2608,7 @@ describe("review export actions", () => {
       comments: [COMMENT],
     });
 
-    await useReviewStore.getState().exportReviewJson();
+    await store.getState().exportReviewJson();
 
     // The on-screen diff is re-read and frozen so its comments place verbatim; the
     // source records the session HEAD (first committed log entry).
@@ -2648,10 +2634,10 @@ describe("review export actions", () => {
       comments: [COMMENT],
     });
 
-    await useReviewStore.getState().exportReviewJson();
+    await store.getState().exportReviewJson();
 
     expect(bridge.saveReviewJson).not.toHaveBeenCalled();
-    expect(useReviewStore.getState().reviewExportFailure).toEqual({ kind: "diffUnreadable" });
+    expect(store.getState().reviewExportFailure).toEqual({ kind: "diffUnreadable" });
   });
 
   it("surfaces a failed write rather than swallowing it", async () => {
@@ -2661,16 +2647,16 @@ describe("review export actions", () => {
     vi.stubGlobal("window", { reviewer: bridge });
     seed(ORIGIN);
 
-    await useReviewStore.getState().exportReviewJson();
+    await store.getState().exportReviewJson();
 
-    expect(useReviewStore.getState().reviewExportFailure).toEqual({
+    expect(store.getState().reviewExportFailure).toEqual({
       kind: "write",
       failure: { code: "writeFailed" },
     });
 
     // A subsequent successful (canceled) export clears the stale failure.
-    await useReviewStore.getState().exportReviewMarkdown();
-    expect(useReviewStore.getState().reviewExportFailure).toBeNull();
+    await store.getState().exportReviewMarkdown();
+    expect(store.getState().reviewExportFailure).toBeNull();
   });
 });
 
@@ -2757,37 +2743,17 @@ describe("exit gate", () => {
   }
 
   function seedImportedReview(review: ImportedReview): void {
-    const seeded: SessionSlice = {
-      id: SESSION_ID,
-      repo: review.repo,
-      log: null,
-      branches: null,
-      brush: null,
-      base: null,
-      head: null,
-      selection: null,
-      diff: { phase: "loaded", loadId: 1, files: [] },
-      selectedFilePath: null,
-      scrollTop: 0,
-      commitSelection: null,
-      comments: review.comments,
-      layers: review.layers,
-      reviewDiff: null,
-      reviewSubrange: null,
-      reviewOrigin: reviewOriginFor(review),
-      overview: null,
-      overviewOpen: false,
-      lastChapterId: null,
-      activeLayerId: null,
-      activeCommentId: null,
-      readFiles: NO_READ_FILES,
-      collapsedFiles: NO_COLLAPSED_FILES,
-      readTotal: 0,
-      reviewPath: null,
-      needsDerive: false,
-      requestTicket: 1,
-    };
-    useReviewStore.setState({
+    const seeded = createSessionSlice(
+      { id: SESSION_ID, repo: review.repo },
+      {
+        ...DERIVED,
+        diff: { phase: "loaded", loadId: 1, files: [] },
+        comments: review.comments,
+        layers: review.layers,
+        reviewOrigin: reviewOriginFor(review),
+      },
+    );
+    store.setState({
       boot: "ready",
       sessions: { [SESSION_ID]: seeded },
       activeSessionId: SESSION_ID,
@@ -2815,17 +2781,17 @@ describe("exit gate", () => {
     const discardId = opened.comments[1]!.id;
 
     // Curate through the real store actions — add, edit, discard.
-    useReviewStore
+    store
       .getState()
       .addComment(
         { file: "src/keep.ts", side: "additions", startLine: 9, endLine: 9 },
         "curated: added",
       );
-    useReviewStore.getState().editComment(editId, "curated: edited guard");
-    useReviewStore.getState().discardComment(discardId);
+    store.getState().editComment(editId, "curated: edited guard");
+    store.getState().discardComment(discardId);
 
     // Export through the real serializer, then re-import the emitted bytes.
-    await useReviewStore.getState().exportReviewJson();
+    await store.getState().exportReviewJson();
     const content = vi.mocked(bridge.saveReviewJson).mock.calls[0]?.[0]?.content ?? "";
     const reopened = importReview(content, realStamp());
     expect(reopened.ok).toBe(true);
@@ -2982,7 +2948,7 @@ describe("exit gate", () => {
     });
 
     // Its sibling review derives cleanly and stays healthy.
-    useReviewStore.getState().activateSession(ID_B);
+    store.getState().activateSession(ID_B);
     await vi.waitFor(() => {
       expect(slice(ID_B).diff.phase).toBe("loaded");
     });
@@ -3014,37 +2980,16 @@ describe("reading progress", () => {
 
   beforeEach(() => {
     const files = parsePatch(MULTI_STATUS_PATCH, "read-test");
-    const seeded: SessionSlice = {
-      id: SESSION_ID,
-      repo: { path: "/repo", name: "repo" },
-      log: null,
-      branches: null,
-      brush: null,
-      base: null,
-      head: null,
-      selection: null,
-      diff: { phase: "loaded", loadId: 1, files },
-      selectedFilePath: "greet.ts",
-      scrollTop: 0,
-      commitSelection: null,
-      comments: [],
-      layers,
-      reviewDiff: null,
-      reviewSubrange: null,
-      reviewOrigin: null,
-      overview: null,
-      overviewOpen: false,
-      lastChapterId: null,
-      activeLayerId: null,
-      activeCommentId: null,
-      readFiles: NO_READ_FILES,
-      collapsedFiles: NO_COLLAPSED_FILES,
-      readTotal: 0,
-      reviewPath: null,
-      needsDerive: false,
-      requestTicket: 1,
-    };
-    useReviewStore.setState({
+    const seeded = createSessionSlice(
+      { id: SESSION_ID, repo: { path: "/repo", name: "repo" } },
+      {
+        ...DERIVED,
+        diff: { phase: "loaded", loadId: 1, files },
+        selectedFilePath: "greet.ts",
+        layers,
+      },
+    );
+    store.setState({
       boot: "ready",
       sessions: { [SESSION_ID]: seeded },
       activeSessionId: SESSION_ID,
@@ -3053,51 +2998,51 @@ describe("reading progress", () => {
   });
 
   it("marking a file read folds it away, and unmarking opens it back up", () => {
-    useReviewStore.getState().setFileRead("greet.ts", true);
+    store.getState().setFileRead("greet.ts", true);
     expect([...active().readFiles.keys()]).toEqual(["greet.ts"]);
     expect(active().collapsedFiles.has("greet.ts")).toBe(true);
 
-    useReviewStore.getState().setFileRead("greet.ts", false);
+    store.getState().setFileRead("greet.ts", false);
     expect(active().readFiles.size).toBe(0);
     expect(active().collapsedFiles.has("greet.ts")).toBe(false);
   });
 
   it("folding a file by hand leaves the read mark alone, either way round", () => {
-    useReviewStore.getState().setFileCollapsed("greet.ts", true);
+    store.getState().setFileCollapsed("greet.ts", true);
     expect(active().readFiles.size).toBe(0);
 
-    useReviewStore.getState().setFileRead("greet.ts", true);
-    useReviewStore.getState().setFileCollapsed("greet.ts", false);
+    store.getState().setFileRead("greet.ts", true);
+    store.getState().setFileCollapsed("greet.ts", false);
     expect(active().collapsedFiles.has("greet.ts")).toBe(false);
     expect([...active().readFiles.keys()]).toEqual(["greet.ts"]);
   });
 
   it("`r` flips the focused file when no path is named", () => {
-    useReviewStore.getState().toggleFileRead();
+    store.getState().toggleFileRead();
     expect([...active().readFiles.keys()]).toEqual(["greet.ts"]);
-    useReviewStore.getState().toggleFileRead();
+    store.getState().toggleFileRead();
     expect(active().readFiles.size).toBe(0);
   });
 
   it("marks a whole layer's extent, and only the files the diff carries", () => {
-    useReviewStore.getState().setLayerRead("greeting", true);
+    store.getState().setLayerRead("greeting", true);
     expect([...active().readFiles.keys()].toSorted()).toEqual(["added.txt", "greet.ts"]);
     expect(active().collapsedFiles.has("notes.txt")).toBe(false);
   });
 
   it("clearing is scoped to the paths it was given", () => {
-    useReviewStore.getState().setLayerRead("greeting", true);
-    useReviewStore.getState().setLayerRead("notes", true);
-    useReviewStore.getState().clearFilesRead(["greet.ts"]);
+    store.getState().setLayerRead("greeting", true);
+    store.getState().setLayerRead("notes", true);
+    store.getState().clearFilesRead(["greet.ts"]);
     expect([...active().readFiles.keys()].toSorted()).toEqual(["added.txt", "notes.txt"]);
   });
 
   it("persists: a reader who quits mid-review comes back to the review mid-read", () => {
     const bridge = makeBridge({});
     vi.stubGlobal("window", { reviewer: bridge });
-    useReviewStore.getState().setFileRead("greet.ts", true);
-    useReviewStore.getState().setLayerRead("greeting", true);
-    useReviewStore.getState().flushWriteBacks();
+    store.getState().setFileRead("greet.ts", true);
+    store.getState().setLayerRead("greeting", true);
+    store.getState().flushWriteBacks();
 
     // The marks cross as the wire shape, keyed by path against the signature of what was
     // read, and the fold that came with each mark rides along — restoring the marks without
@@ -3111,21 +3056,21 @@ describe("reading progress", () => {
   it("a gesture that changes nothing costs no write-back, and so no disk write", () => {
     const bridge = makeBridge({});
     vi.stubGlobal("window", { reviewer: bridge });
-    useReviewStore.getState().setFileRead("greet.ts", true);
-    useReviewStore.getState().flushWriteBacks();
+    store.getState().setFileRead("greet.ts", true);
+    store.getState().flushWriteBacks();
     vi.mocked(bridge.updateSession).mockClear();
 
     // Already read, marked read again: `markFilesRead` hands back the same map, so the store
     // never changes and nothing is scheduled. The no-op contract is what keeps a redundant
     // click from rewriting the review's progress record.
-    useReviewStore.getState().setFileRead("greet.ts", true);
-    useReviewStore.getState().flushWriteBacks();
+    store.getState().setFileRead("greet.ts", true);
+    store.getState().flushWriteBacks();
     expect(bridge.updateSession).not.toHaveBeenCalled();
   });
 
   it("a path the loaded diff does not carry is a no-op, never a mark for nothing", () => {
     const before = active().readFiles;
-    useReviewStore.getState().setFileRead("nope.ts", true);
+    store.getState().setFileRead("nope.ts", true);
     expect(active().readFiles).toBe(before);
   });
 
@@ -3139,10 +3084,10 @@ describe("reading progress", () => {
       body: "b",
     };
     patchActive({ comments: [comment] });
-    useReviewStore.getState().setFileRead("greet.ts", true);
+    store.getState().setFileRead("greet.ts", true);
     expect(active().collapsedFiles.has("greet.ts")).toBe(true);
 
-    useReviewStore.getState().focusComment(ID_A);
+    store.getState().focusComment(ID_A);
     expect(active().collapsedFiles.has("greet.ts")).toBe(false);
     // The mark itself survives: reading a finding again is not un-reading the file.
     expect(active().readFiles.has("greet.ts")).toBe(true);
@@ -3169,10 +3114,10 @@ describe("copying comments as a prompt", () => {
     const writeText = stubClipboard();
     const bridge = makeBridge({});
     await openFixtureRepo(bridge);
-    useReviewStore.getState().addComment(GREET_ANCHOR, "why not take a formatter?");
+    store.getState().addComment(GREET_ANCHOR, "why not take a formatter?");
     const target = active().comments[0];
 
-    await expect(useReviewStore.getState().copyCommentPrompt(target?.id ?? "")).resolves.toBe(true);
+    await expect(store.getState().copyCommentPrompt(target?.id ?? "")).resolves.toBe(true);
 
     const payload = writeText.mock.calls[0]?.[0];
     expect(payload).toContain("Fix this code review comment.");
@@ -3180,7 +3125,7 @@ describe("copying comments as a prompt", () => {
     expect(payload).toContain("why not take a formatter?");
     expect(payload).toContain("  return greet(name).toUpperCase();");
     // The record is what lets the card's glyph answer a keystroke it never saw.
-    expect(useReviewStore.getState().promptCopy).toEqual({
+    expect(store.getState().promptCopy).toEqual({
       scope: "comment",
       commentId: target?.id,
       nonce: expect.any(Number),
@@ -3191,26 +3136,26 @@ describe("copying comments as a prompt", () => {
     stubClipboard();
     const bridge = makeBridge({});
     await openFixtureRepo(bridge);
-    useReviewStore.getState().addComment(GREET_ANCHOR, "again");
+    store.getState().addComment(GREET_ANCHOR, "again");
     const id = active().comments[0]?.id ?? "";
 
-    await useReviewStore.getState().copyCommentPrompt(id);
-    const first = useReviewStore.getState().promptCopy;
-    await useReviewStore.getState().copyCommentPrompt(id);
+    await store.getState().copyCommentPrompt(id);
+    const first = store.getState().promptCopy;
+    await store.getState().copyCommentPrompt(id);
 
-    expect(useReviewStore.getState().promptCopy).not.toEqual(first);
+    expect(store.getState().promptCopy).not.toEqual(first);
   });
 
   it("copyActiveCommentPrompt aims at the comment the reader is on", async () => {
     const writeText = stubClipboard();
     const bridge = makeBridge({});
     await openFixtureRepo(bridge);
-    useReviewStore.getState().addComment(GREET_ANCHOR, "first comment");
-    useReviewStore.getState().addComment(NOTES_ANCHOR, "second comment");
+    store.getState().addComment(GREET_ANCHOR, "first comment");
+    store.getState().addComment(NOTES_ANCHOR, "second comment");
     const second = active().comments[1];
-    useReviewStore.getState().focusComment(second?.id ?? "");
+    store.getState().focusComment(second?.id ?? "");
 
-    await expect(useReviewStore.getState().copyActiveCommentPrompt()).resolves.toBe(true);
+    await expect(store.getState().copyActiveCommentPrompt()).resolves.toBe(true);
 
     expect(writeText.mock.calls[0]?.[0]).toContain("second comment");
   });
@@ -3219,20 +3164,20 @@ describe("copying comments as a prompt", () => {
     const writeText = stubClipboard();
     const bridge = makeBridge({});
     await openFixtureRepo(bridge);
-    useReviewStore.getState().addComment(GREET_ANCHOR, "unfocused");
+    store.getState().addComment(GREET_ANCHOR, "unfocused");
 
-    await expect(useReviewStore.getState().copyActiveCommentPrompt()).resolves.toBe(false);
+    await expect(store.getState().copyActiveCommentPrompt()).resolves.toBe(false);
 
     expect(writeText).not.toHaveBeenCalled();
-    expect(useReviewStore.getState().promptCopy).toBeNull();
+    expect(store.getState().promptCopy).toBeNull();
   });
 
   it("copies every comment in the review, including ones the soloed layer hides", async () => {
     const writeText = stubClipboard();
     const bridge = makeBridge({});
     await openFixtureRepo(bridge);
-    useReviewStore.getState().addComment(GREET_ANCHOR, "in the soloed layer");
-    useReviewStore.getState().addComment(NOTES_ANCHOR, "outside it");
+    store.getState().addComment(GREET_ANCHOR, "in the soloed layer");
+    store.getState().addComment(NOTES_ANCHOR, "outside it");
     const layers: ReviewLayer[] = [
       {
         id: "greet",
@@ -3240,9 +3185,10 @@ describe("copying comments as a prompt", () => {
         ranges: [{ file: "greet.ts", side: "additions", startLine: 1, endLine: 7 }],
       },
     ];
-    patchActive({ layers, activeLayerId: "greet" });
+    patchActive({ layers });
+    store.getState().setActiveLayer("greet");
 
-    await expect(useReviewStore.getState().copyAllCommentsPrompt()).resolves.toBe(true);
+    await expect(store.getState().copyAllCommentsPrompt()).resolves.toBe(true);
 
     const payload = writeText.mock.calls[0]?.[0];
     expect(payload).toContain("2 comments from a code review of");
@@ -3251,7 +3197,7 @@ describe("copying comments as a prompt", () => {
     expect(payload).toContain("outside it");
     expect(payload).toContain("## Greeting");
     expect(payload).toContain("## Other comments");
-    expect(useReviewStore.getState().promptCopy).toEqual({
+    expect(store.getState().promptCopy).toEqual({
       scope: "all",
       nonce: expect.any(Number),
     });
@@ -3261,9 +3207,9 @@ describe("copying comments as a prompt", () => {
     const writeText = stubClipboard();
     const bridge = makeBridge({});
     await openFixtureRepo(bridge);
-    useReviewStore.getState().addComment(GREET_ANCHOR, "mine");
+    store.getState().addComment(GREET_ANCHOR, "mine");
 
-    await useReviewStore.getState().copyAllCommentsPrompt();
+    await store.getState().copyAllCommentsPrompt();
 
     expect(writeText.mock.calls[0]?.[0]).toContain("1 comment from a code review of `repo`.");
   });
@@ -3273,7 +3219,7 @@ describe("copying comments as a prompt", () => {
     const bridge = makeBridge({});
     await openFixtureRepo(bridge);
 
-    await expect(useReviewStore.getState().copyAllCommentsPrompt()).resolves.toBe(false);
+    await expect(store.getState().copyAllCommentsPrompt()).resolves.toBe(false);
 
     expect(writeText).not.toHaveBeenCalled();
   });
@@ -3282,12 +3228,12 @@ describe("copying comments as a prompt", () => {
     stubClipboard(vi.fn().mockRejectedValue(new Error("denied")));
     const bridge = makeBridge({});
     await openFixtureRepo(bridge);
-    useReviewStore.getState().addComment(GREET_ANCHOR, "never landed");
+    store.getState().addComment(GREET_ANCHOR, "never landed");
 
-    await expect(
-      useReviewStore.getState().copyCommentPrompt(active().comments[0]?.id ?? ""),
-    ).resolves.toBe(false);
+    await expect(store.getState().copyCommentPrompt(active().comments[0]?.id ?? "")).resolves.toBe(
+      false,
+    );
 
-    expect(useReviewStore.getState().promptCopy).toBeNull();
+    expect(store.getState().promptCopy).toBeNull();
   });
 });

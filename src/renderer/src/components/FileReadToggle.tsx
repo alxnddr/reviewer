@@ -3,7 +3,7 @@ import { Check } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { TooltipHint } from "@/components/ui/tooltip";
 import { ShortcutHint } from "@/components/ui/kbd";
-import { isFileRead, NO_READ_FILES } from "@/lib/read-progress";
+import { fileSignatures } from "@/lib/read-progress";
 import { cn } from "@/lib/utils";
 import { selectActiveSlice, useReviewStore } from "@/stores/review";
 
@@ -27,43 +27,53 @@ type FileReadToggleProps = { path: string };
  * by the tooltip and the accessible name, which say it in full.
  *
  * Memoized on its one prop: Pierre re-renders every visible file's header slots whenever
- * the portal host re-renders, and this component answers four store selectors per render.
- * The click that changes it comes through its own subscription, not through the parent. */
+ * the portal host re-renders, and this component answers three store selectors per render —
+ * each a primitive, not an object, so a store write that changes nothing about this file
+ * costs a comparison, not a re-render. The click that changes it comes through its own
+ * subscription, not through the parent. */
 export const FileReadToggle = memo(function FileReadToggle({
   path,
 }: FileReadToggleProps): ReactElement | null {
-  const file = useReviewStore((state) => {
-    const diff = selectActiveSlice(state)?.diff;
-    return diff !== undefined && diff.phase === "loaded"
-      ? (diff.files.find((candidate) => candidate.path === path) ?? null)
-      : null;
+  // One selector, one primitive: whether `path` is on the loaded diff, and if so whether
+  // it is read. `fileSignatures` keys every file's signature by path once per `diff.files`
+  // identity, so this is a `Map.get` on every store write, not the O(files) `find` + a
+  // freshly joined `fileSignature` this used to redo per header, per render — see
+  // `fileSignatures`' own comment for why that matters while scrolling.
+  const readState = useReviewStore((state): "missing" | "read" | "unread" => {
+    const slice = selectActiveSlice(state);
+    if (slice === null || slice.diff.phase !== "loaded") {
+      return "missing";
+    }
+    const signature = fileSignatures(slice.diff.files).get(path);
+    if (signature === undefined) {
+      return "missing";
+    }
+    return slice.readFiles.get(path) === signature ? "read" : "unread";
   });
-  const readFiles = useReviewStore((state) => selectActiveSlice(state)?.readFiles ?? NO_READ_FILES);
   // `r` acts on the focused file, so the key only rides the hint on the file it would
   // actually reach — a shortcut advertised on a row it does not apply to is worse than no
   // shortcut at all.
   const focused = useReviewStore((state) => selectActiveSlice(state)?.selectedFilePath === path);
   const setFileRead = useReviewStore((state) => state.setFileRead);
 
-  if (file === null) {
+  if (readState === "missing") {
     return null;
   }
-  const read = isFileRead(readFiles, file);
+  const read = readState === "read";
   const action = read ? "Mark unread" : "Mark read";
 
   return (
     <TooltipHint
       side="bottom"
       align="end"
-      content={focused ? <ShortcutHint action={action} keys="R" /> : action}
+      content={focused ? <ShortcutHint id="file.read" label={action} /> : action}
     >
       <Button
-        variant="ghost"
+        variant="chrome"
         size="icon-xs"
         aria-pressed={read}
         aria-label={read ? `Mark ${path} unread` : `Mark ${path} read`}
         onClick={() => setFileRead(path, !read)}
-        className="hover:bg-border/60 dark:hover:bg-border/60"
       >
         {/* A real checkbox shape — the one control everybody already knows this job by.
             It fills with the theme's own ink rather than an accent, matching how the shell

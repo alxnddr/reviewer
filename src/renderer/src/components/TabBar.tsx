@@ -7,9 +7,9 @@ import {
   type PointerEvent,
   type ReactElement,
   type ReactNode,
-  type RefObject,
 } from "react";
 import { PlusIcon, XIcon } from "lucide-react";
+import { useShallow } from "zustand/react/shallow";
 import { Button } from "@/components/ui/button";
 import {
   Tooltip,
@@ -21,7 +21,10 @@ import {
 import { ShortcutHint } from "@/components/ui/kbd";
 import { shortRef } from "@/lib/refs";
 import { tabNames, type TabSubject } from "@/lib/tab-name";
+import { useOverflowing } from "@/lib/use-overflowing";
+import { useScrollIntoViewById } from "@/lib/use-scroll-into-view";
 import { cn } from "@/lib/utils";
+import { clamp } from "../../../shared/clamp";
 import type { SessionId } from "../../../shared/session";
 import {
   activeTabStop,
@@ -31,12 +34,16 @@ import {
   type TabStop,
 } from "@/stores/review";
 
-// Hand-built tablist: Base UI's Tabs.Tab renders a native button element, which
-// cannot legally contain the per-tab close, and its Root/Panel pairing assumes
-// the tabs own their panel — here the "panel" is the whole app surface driven by
-// activeSessionId. Focused tab == active tab (roving tabindex, switch-on-move),
-// so keyboard handling lives on the tablist; ⌘1…9 / ⌃Tab / ⌘W arrive through the
-// native menu, not DOM handlers.
+// Hand-built tablist. Not because Base UI's Tabs cannot render the shape: a tab
+// defaults to a native button, which cannot legally contain the per-tab close, but
+// `<Tabs.Tab nativeButton={false} render={<div />} />` opts out of that and has Base UI
+// re-apply the activation behaviour the native element was carrying (the role is `tab`
+// either way). What it does not give is the rest of this file — the drag reorder,
+// the per-tab container query and the clipped-name fade, and a Root/Panel pairing that
+// assumes the tabs own their panel, where here the "panel" is the whole app surface
+// driven by activeSessionId. Focused tab == active tab (roving tabindex,
+// switch-on-move), so keyboard handling lives on the tablist; ⌘1…9 / ⌃Tab / ⌘W arrive
+// through the native menu, not DOM handlers.
 //
 // Crowding is absorbed by the tabs, not by the strip: each claims the same
 // preferred width and they shrink together toward a floor, so the strip only
@@ -98,28 +105,17 @@ function tabHint(slice: SessionSlice): string {
     : `${slice.repo.name} · ${shortRef(review.base)} → ${shortRef(review.head)}`;
 }
 
-/** True while the element's text is wider than the box holding it. Drives the
- * fade — a name is only faded when there is actually something cut off, so a
- * comfortable strip shows hard-edged names. Re-measures on every resize, which
- * is what shrinking tabs produce as siblings open and close. */
-function useClipped(ref: RefObject<HTMLElement | null>, text: string): boolean {
-  const [clipped, setClipped] = useState(false);
-
-  useEffect(() => {
-    const element = ref.current;
-    if (element === null) {
-      return;
-    }
-    const measure = (): void => {
-      setClipped(element.scrollWidth > element.clientWidth);
-    };
-    measure();
-    const observer = new ResizeObserver(measure);
-    observer.observe(element);
-    return () => observer.disconnect();
-  }, [ref, text]);
-
-  return clipped;
+/** True while a tab is not wholly inside the scrollable strip — the gate on the
+ * activation scroll below. Only a clipped tab scrolls: an unconditional nudge leaves
+ * the strip resting a few px in. */
+function clippedInStrip(tab: HTMLElement): boolean {
+  const strip = tab.closest('[role="tablist"]');
+  if (strip === null) {
+    return false;
+  }
+  const tabRect = tab.getBoundingClientRect();
+  const stripRect = strip.getBoundingClientRect();
+  return tabRect.left < stripRect.left || tabRect.right > stripRect.right;
 }
 
 /** How long the reveal ring stands on a tab an open request landed on. Long enough to be
@@ -202,7 +198,10 @@ function TabShell({
   onPointerDown: (event: PointerEvent<HTMLDivElement>) => void;
 }): ReactElement {
   const nameRef = useRef<HTMLSpanElement>(null);
-  const clipped = useClipped(nameRef, name);
+  // Drives the fade — a name is only faded when there is actually something cut off,
+  // so a comfortable strip shows hard-edged names. Re-measured on every resize, which
+  // is what shrinking tabs produce as siblings open and close.
+  const clipped = useOverflowing(nameRef, name);
 
   return (
     // The hover delay rides on the trigger, not a shared provider: a provider
@@ -226,6 +225,11 @@ function TabShell({
             // filled.
             data-active={active}
             aria-selected={active}
+            // Every tab controls the same region: the "panel" a tab switches is the whole
+            // app surface driven by activeSessionId, not a pane of its own (see the module
+            // comment above) — so this is the one id every tab points at, matching
+            // AppShell's `<main id="app-content">`.
+            aria-controls="app-content"
             tabIndex={focusStop ? 0 : -1}
             onClick={onActivate}
             onPointerDown={onPointerDown}
@@ -339,7 +343,17 @@ type DragState = {
  * moves `activeSessionId` / `activeStartTabId`, so per-session state survives untouched. The
  * strip is the `no-drag` island — the title bar around it keeps dragging the window. */
 export function TabBar(): ReactElement {
-  const sessions = useReviewStore((state) => state.sessions);
+  // Reactive to which sessions exist, not to their contents. `setSlice` (review/slice.ts)
+  // reallocates a fresh top-level `sessions` record on every write to any session, so
+  // subscribing to the record itself re-rendered every tab on every slice mutation
+  // anywhere in the app — up to 60 Hz while dragging the commit brush. `tabSubject` and
+  // `tabHint` below only read fields (`repo`, `reviewOrigin`, `overview`) that are fixed
+  // at session creation and never rewritten in place, so reading the record's current
+  // snapshot straight off the store, rather than subscribing to it, stays correct — this
+  // only needs to re-render when a session actually opens or closes. If any of those three
+  // ever becomes writable on a live session, the tab label goes stale instead of updating,
+  // because the key set hasn't changed: project the label strings into this selector then.
+  useReviewStore(useShallow((state) => Object.keys(state.sessions)));
   const tabs = useReviewStore((state) => state.tabs);
   const activeSessionId = useReviewStore((state) => state.activeSessionId);
   const activeStartTabId = useReviewStore((state) => state.activeStartTabId);
@@ -350,6 +364,7 @@ export function TabBar(): ReactElement {
   const openStartTab = useReviewStore((state) => state.openStartTab);
   const closeStartTab = useReviewStore((state) => state.closeStartTab);
   const revealedId = useRevealedTab();
+  const sessions = useReviewStore.getState().sessions;
 
   // Named as a set, and only the sessions take part: `tabNames` disambiguates against the other
   // *reviews* in the strip, and every start tab is called the same thing on purpose.
@@ -396,27 +411,14 @@ export function TabBar(): ReactElement {
     };
   }, [tabs.length]);
 
-  useEffect(() => {
-    // Activation from anywhere (click, menu ⌘n, a re-opened duplicate, a start tab) must
-    // keep the active tab visible inside the scrollable strip. Only a clipped
-    // tab scrolls — an unconditional nudge leaves the strip resting a few px in.
-    if (current === null) {
-      return;
-    }
-    const tab = document.getElementById(tabDomId(current));
-    const strip = tab?.closest('[role="tablist"]');
-    if (!tab || !strip) {
-      return;
-    }
-    const tabRect = tab.getBoundingClientRect();
-    const stripRect = strip.getBoundingClientRect();
-    if (tabRect.left < stripRect.left || tabRect.right > stripRect.right) {
-      tab.scrollIntoView({ block: "nearest", inline: "nearest" });
-    }
-    // `current` is a fresh object every render, so the effect is keyed on the two ids it is
-    // built from rather than on it.
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- see above
-  }, [activeSessionId, activeStartTabId]);
+  // Activation from anywhere (click, menu ⌘n, a re-opened duplicate, a start tab) must
+  // keep the active tab visible inside the scrollable strip. Keyed on the two ids `current`
+  // is built from rather than on `current`, which is a fresh object every render.
+  useScrollIntoViewById(
+    current === null ? null : tabDomId(current),
+    { block: "nearest", inline: "nearest", when: clippedInStrip },
+    [activeSessionId, activeStartTabId],
+  );
 
   /** Show a stop and take the keyboard with it. */
   const activate = (stop: TabStop): void => {
@@ -434,6 +436,22 @@ export function TabBar(): ReactElement {
     if (target !== undefined) {
       activate(target);
     }
+  };
+
+  /** ⌥⇧←/→: the keyboard's path to what a drag does with the pointer — move the
+   * focused stop one slot over and keep the keyboard on it. Focused tab == active tab
+   * here (see the module comment), so this always moves the one the reader is on. */
+  const moveFocused = (delta: number): void => {
+    const target = clamp(focusIndex + delta, 0, tabs.length - 1);
+    if (target === focusIndex) {
+      return;
+    }
+    const stop = tabs[focusIndex];
+    if (stop === undefined) {
+      return;
+    }
+    reorderTabs(moved(tabs, focusIndex, target));
+    document.getElementById(tabDomId(stop))?.focus();
   };
 
   /** Pointer closes only: the close button unmounts with its tab, so DOM focus
@@ -494,7 +512,7 @@ export function TabBar(): ReactElement {
     const stops = useReviewStore.getState().tabs;
     const shift = Math.round(offset / state.step);
     if (shift !== 0) {
-      const target = Math.min(Math.max(state.index + shift, 0), stops.length - 1);
+      const target = clamp(state.index + shift, 0, stops.length - 1);
       if (target !== state.index) {
         reorderTabs(moved(stops, state.index, target));
         // Re-base onto the new slot so the tab keeps tracking the pointer rather
@@ -519,14 +537,25 @@ export function TabBar(): ReactElement {
   };
 
   const onKeyDown = (event: KeyboardEvent<HTMLDivElement>): void => {
+    // ⌥⇧ exactly — not ⌘⌥⇧ or ⌃⌥⇧, which the sheet does not claim and which a reader
+    // holding either of those for some other reason should not silently reorder a tab.
+    const moveChord = event.altKey && event.shiftKey && !event.metaKey && !event.ctrlKey;
     switch (event.key) {
       case "ArrowLeft":
         event.preventDefault();
-        activateAt(Math.max(focusIndex - 1, 0));
+        if (moveChord) {
+          moveFocused(-1);
+        } else {
+          activateAt(Math.max(focusIndex - 1, 0));
+        }
         break;
       case "ArrowRight":
         event.preventDefault();
-        activateAt(Math.min(focusIndex + 1, tabs.length - 1));
+        if (moveChord) {
+          moveFocused(1);
+        } else {
+          activateAt(Math.min(focusIndex + 1, tabs.length - 1));
+        }
         break;
       case "Home":
         event.preventDefault();
@@ -608,18 +637,12 @@ export function TabBar(): ReactElement {
           offering "Open Repository…" and "Open Review…", which made the strip's only
           affordance a pair of file pickers — the two errands a reader is *least* likely to
           be on, and both of them still in the File menu and on the start screen itself. */}
-      <TooltipHint
-        side="bottom"
-        align="start"
-        content={<ShortcutHint action="New tab" keys="⌘T" />}
-      >
+      <TooltipHint side="bottom" align="start" content={<ShortcutHint id="tab.new" />}>
         <Button
-          variant="ghost"
+          variant="chrome"
           size="icon"
           aria-label="New tab"
-          // Ghost hover on bg-sidebar chrome comes from the border tone; the
-          // dark: twin outranks the ghost variant's own dark hover arm.
-          className="shrink-0 hover:bg-border/60 dark:hover:bg-border/60"
+          className="shrink-0"
           onClick={openStartTab}
         >
           <PlusIcon />

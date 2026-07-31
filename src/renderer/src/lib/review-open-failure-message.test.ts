@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { ReviewOpenFailure } from "../../../shared/review-open";
+import type { ReviewOpenFailure } from "../../../shared/review-ipc";
 import { reviewOpenFailureMessage } from "./review-open-failure-message";
 
 describe("reviewOpenFailureMessage", () => {
@@ -9,12 +9,23 @@ describe("reviewOpenFailureMessage", () => {
       { code: "fileNotFound" },
       { code: "tooLarge" },
       { code: "unreadable" },
-      { code: "invalidContent" },
+      { code: "invalidContent", reason: "comments[0].side — Invalid option" },
       { code: "repoUnavailable", reason: { code: "gitMissing" } },
     ];
     for (const failure of failures) {
       expect(reviewOpenFailureMessage(failure).length).toBeGreaterThan(0);
     }
+  });
+
+  it("names what the schema objected to in a hand-edited artifact", () => {
+    const message = reviewOpenFailureMessage({
+      code: "invalidContent",
+      reason: 'comments[0].side — Invalid option: expected one of "deletions"|"additions"',
+    });
+    // A file that will not open is a file the reader can go and fix, which is only true if
+    // the banner says which part of it is wrong.
+    expect(message).toContain("not a valid review");
+    expect(message).toContain("comments[0].side");
   });
 
   it("names the repo the artifact pointed at when git refused it", () => {

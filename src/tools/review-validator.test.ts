@@ -1,38 +1,12 @@
 import { describe, expect, it } from "vitest";
 import type { ReviewArtifact, ReviewLayerDraft } from "../shared/review";
-import { RENAMES_PATCH, TWO_HUNKS_PATCH } from "../renderer/src/lib/diff/fixtures";
+import { RENAMES_PATCH, TWO_FILE_PATCH, TWO_HUNKS_PATCH } from "../shared/diff/fixtures";
 import {
   parseReviewArtifact,
   validatePlacement,
   type ValidationProblem,
   type ValidationReport,
 } from "./review-validator";
-
-// Two files so anchoring, layer ranges, and description links all have real diff
-// to place against. `src/foo.ts` carries a modification hunk covering additions
-// 10..14 / deletions 10..12; `src/bar.ts` covers additions 1..3.
-const PATCH = [
-  "diff --git a/src/foo.ts b/src/foo.ts",
-  "index 1111111..2222222 100644",
-  "--- a/src/foo.ts",
-  "+++ b/src/foo.ts",
-  "@@ -10,3 +10,5 @@",
-  " ctx10",
-  "-old11",
-  "+new11",
-  "+new12",
-  "+new13",
-  " ctx14",
-  "diff --git a/src/bar.ts b/src/bar.ts",
-  "index 3333333..4444444 100644",
-  "--- a/src/bar.ts",
-  "+++ b/src/bar.ts",
-  "@@ -1,2 +1,3 @@",
-  " keep1",
-  "+added2",
-  " keep3",
-  "",
-].join("\n");
 
 /** The artifact as authored — the shape these fixtures write, before the parse fills in
  * `ranges`/`children`. */
@@ -51,7 +25,7 @@ function validArtifact(overrides: Partial<Draft> = {}): Draft {
     repo: "/repo",
     base: "main",
     head: "feature",
-    patch: PATCH,
+    patch: TWO_FILE_PATCH,
     comments: [{ file: "src/foo.ts", side: "additions", startLine: 11, endLine: 13, body: "note" }],
     layers: [
       {
@@ -313,11 +287,11 @@ describe("parseReviewArtifact + validatePlacement", () => {
     expect(report.ok).toBe(false);
     if (report.ok) return;
     expect(report.problems).toContainEqual(
-      expect.objectContaining({ kind: "schema", path: "comments.0.side" }),
+      expect.objectContaining({ kind: "schema", path: "comments[0].side" }),
     );
   });
 
-  it("reports a descending range as a schema problem, exercising the ascending refine", () => {
+  it("reports a descending range as a schema problem, at the endLine that has to change", () => {
     // A valid side isolates the range refine: `side: "old"` would fail the enum first
     // and short-circuit before `rangeIsAscending` ever runs (review.ts), so this is the
     // only fixture that proves a descending range is rejected on its own.
@@ -331,7 +305,7 @@ describe("parseReviewArtifact + validatePlacement", () => {
     expect(report.ok).toBe(false);
     if (report.ok) return;
     expect(report.problems).toContainEqual(
-      expect.objectContaining({ kind: "schema", path: "comments.0" }),
+      expect.objectContaining({ kind: "schema", path: "comments[0].endLine" }),
     );
   });
 
@@ -374,15 +348,29 @@ describe("the outline contract", () => {
     expect(problemsFor([stop("Parent", [stop()])])).toEqual([]);
   });
 
-  it("refuses nesting past the depth cap", () => {
+  it("refuses nesting past the depth cap, naming the shallowest offender once per chain", () => {
+    // Eight levels: five legal, then three that are not. One authoring mistake reads as one
+    // problem — the first layer past the cap — rather than one per layer below it, which
+    // would hand an agent the same fix three times over.
     const chain = group("l1", [
-      group("l2", [group("l3", [group("l4", [group("l5", [stop("l6")])])])]),
+      group("l2", [
+        group("l3", [group("l4", [group("l5", [group("l6", [group("l7", [stop("l8")])])])])]),
+      ]),
     ]);
-    expect(problemsFor([chain])).toContainEqual({
-      kind: "nestingTooDeep",
-      layer: "1.1.1.1.1.1",
-      depth: 6,
-    });
+    expect(problemsFor([chain])).toEqual([
+      { kind: "nestingTooDeep", layer: "1.1.1.1.1.1", depth: 6 },
+    ]);
+
+    // Once per *chain*, not once per outline: a layer that branches below the cap is two
+    // separate things to unnest, and an agent told about only the first would have to re-run
+    // the gate to discover the second.
+    const branching = group("l1", [
+      group("l2", [group("l3", [group("l4", [group("l5", [stop("l6a"), stop("l6b")])])])]),
+    ]);
+    expect(problemsFor([branching])).toEqual([
+      { kind: "nestingTooDeep", layer: "1.1.1.1.1.1", depth: 6 },
+      { kind: "nestingTooDeep", layer: "1.1.1.1.1.2", depth: 6 },
+    ]);
   });
 
   it("refuses a layer that reaches no code at all, at any depth", () => {

@@ -1,6 +1,7 @@
 import type { ReactElement } from "react";
 
 import { cn } from "@/lib/utils";
+import { shortcut, shortcutLabel, type ShortcutId } from "@/lib/shortcuts";
 
 /** A keystroke, set as a key rather than spelled out in the sentence beside it. The shell's
  * tooltip already reserves a slot for these (`data-slot="kbd"` in `ui/tooltip.tsx` trims the
@@ -26,12 +27,20 @@ export function Kbd({ children, className }: { children: string; className?: str
 }
 
 /** A hint that names an action and the key that performs it — the one shape every
- * shortcut-carrying tooltip in the app takes, so the key always lands in the same place. */
-export function ShortcutHint({ action, keys }: { action: string; keys: string }): ReactElement {
+ * shortcut-carrying tooltip in the app takes, so the key always lands in the same place.
+ *
+ * The key comes from the registry rather than from the call site, which is what stops a
+ * tooltip and the shortcut sheet from claiming two different chords for one action (they
+ * already had: `n`/`p` here against `N`/`P` on the sheet). `label` overrides the registered
+ * wording for the one hint whose sentence depends on state — the read checkbox, which says
+ * which way the click will go — and everything else takes the registry's own. */
+export function ShortcutHint({ id, label }: { id: ShortcutId; label?: string }): ReactElement {
   return (
     <>
-      {action}
-      <Kbd>{keys}</Kbd>
+      {label ?? shortcutLabel(id)}
+      {shortcut(id).keys.map((key) => (
+        <Kbd key={key}>{key}</Kbd>
+      ))}
     </>
   );
 }

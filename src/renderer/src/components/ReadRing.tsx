@@ -1,4 +1,5 @@
 import type { ReactElement } from "react";
+import { countLabel } from "../../../shared/plural";
 import { cn } from "@/lib/utils";
 import type { ReadTally } from "@/lib/read-progress";
 
@@ -123,5 +124,5 @@ export function ReadRing({ tally, label = null, className }: ReadRingProps): Rea
 
 /** The sentence that goes with the glyph, in one voice everywhere it is printed. */
 export function readLabel(tally: ReadTally): string {
-  return `${tally.read} of ${tally.total} file${tally.total === 1 ? "" : "s"} read`;
+  return `${tally.read} of ${countLabel(tally.total, "file")} read`;
 }

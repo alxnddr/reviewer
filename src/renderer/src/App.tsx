@@ -3,10 +3,12 @@ import { AppShell } from "@/components/AppShell";
 import { CliBanner } from "@/components/CliBanner";
 import { DiffScreen } from "@/components/DiffScreen";
 import { DiffWorkerPool } from "@/components/DiffWorkerPool";
-import { OpenFailureBanner } from "@/components/OpenFailureBanner";
+import {
+  OpenFailureBanner,
+  ReviewExportFailureBanner,
+  ReviewOpenFailureBanner,
+} from "@/components/FailureBanner";
 import { ReviewDropZone } from "@/components/ReviewDropZone";
-import { ReviewExportFailureBanner } from "@/components/ReviewExportFailureBanner";
-import { ReviewOpenFailureBanner } from "@/components/ReviewOpenFailureBanner";
 import { OverviewScreen } from "@/components/OverviewScreen";
 import { RecentReviews } from "@/components/RecentReviews";
 import { ShortcutsDialog } from "@/components/ShortcutsDialog";

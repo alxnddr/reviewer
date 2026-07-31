@@ -3,15 +3,18 @@ import { FileTree, useFileTree } from "@pierre/trees/react";
 import type { GitStatus } from "@pierre/trees";
 import { Search } from "lucide-react";
 import { assertNever } from "../../../shared/assert";
+import type { Comment } from "../../../shared/review";
+import { countLabel } from "../../../shared/plural";
+import { commentCountsByFile } from "@/lib/diff/comment-navigation";
 import { RailFoot, RailNote } from "@/components/rail";
 import { Button } from "@/components/ui/button";
 import { InputGroup, InputGroupAddon, InputGroupInput } from "@/components/ui/input-group";
 import { TooltipHint } from "@/components/ui/tooltip";
 import { ReadRing, readLabel } from "@/components/ReadRing";
-import type { FileChangeStatus, PatchFile } from "@/lib/diff/patch";
+import type { FileChangeStatus, PatchFile } from "../../../shared/diff/patch";
 import { NO_READ_FILES, readPaths, tallyRead } from "@/lib/read-progress";
 import { fuzzyMatches } from "@/lib/fuzzy";
-import { selectActiveSlice, useReviewStore } from "@/stores/review";
+import { selectActiveSlice, selectSoloedDiff, useReviewStore } from "@/stores/review";
 
 function toTreeGitStatus(status: FileChangeStatus): GitStatus {
   switch (status) {
@@ -28,18 +31,35 @@ function toTreeGitStatus(status: FileChangeStatus): GitStatus {
   }
 }
 
-type FileTreePanelProps = {
-  files: PatchFile[];
-  /** How many comments each file carries, for the per-file count badge. Keyed by
-   * `PatchFile.path`; a file with none gets no badge. */
-  commentCounts: Map<string, number>;
-};
+/** Stable empty arrays for the sessionless / unloaded case, so the selectors below return
+ * one constant reference rather than a fresh [] per tick. */
+const EMPTY_FILES: PatchFile[] = [];
+const EMPTY_COMMENTS: Comment[] = [];
 
 /** Changed-files tree for the loaded diff, behind a fuzzy path filter. Remount
- * with a new `key` when `files` changes identity — that also resets the filter,
- * which belongs to one subset, not the session. */
-export function FileTreePanel({ files, commentCounts }: FileTreePanelProps): ReactElement {
+ * with a new `key` when the listed subset changes identity — that also resets the filter,
+ * which belongs to one subset, not the session.
+ *
+ * A section, so it reads its own state (the rail's rule, `ReviewRail.tsx`): the rail hands
+ * it nothing but that key. */
+export function FileTreePanel(): ReactElement {
   const [filter, setFilter] = useState("");
+  // What the tree lists: the soloed subset, from the one derivation the rail and the code
+  // view also read (`lib/soloed-diff.ts`), so a solo narrows all three to the same files.
+  const files = useReviewStore((state) => selectSoloedDiff(state).files);
+  // Counted against the loaded diff, not the tree's (possibly soloed) subset: the badge
+  // is a property of the file, and the count is keyed on the path the tree rows carry —
+  // which is why the files go in at all (a comment authored before a rename badges the
+  // renamed row, the one its card is actually on).
+  const loadedFiles = useReviewStore((state) => {
+    const diff = selectActiveSlice(state)?.diff;
+    return diff !== undefined && diff.phase === "loaded" ? diff.files : EMPTY_FILES;
+  });
+  const comments = useReviewStore((state) => selectActiveSlice(state)?.comments ?? EMPTY_COMMENTS);
+  const commentCounts = useMemo(
+    () => commentCountsByFile(loadedFiles, comments),
+    [loadedFiles, comments],
+  );
   const readFiles = useReviewStore((state) => selectActiveSlice(state)?.readFiles ?? NO_READ_FILES);
   const clearFilesRead = useReviewStore((state) => state.clearFilesRead);
   const visibleFiles = useMemo(
@@ -118,10 +138,10 @@ function ReadStatusLine({ files, tally, onClear }: ReadStatusLineProps): ReactEl
           content={files.length === tally.total ? "Mark these files unread" : "Mark unread"}
         >
           <Button
-            variant="ghost"
+            variant="chrome"
             size="xs"
             onClick={() => onClear(files.map((file) => file.path))}
-            className="ml-auto shrink-0 text-text-muted hover:bg-border/60 hover:text-foreground dark:hover:bg-border/60"
+            className="ml-auto shrink-0 text-text-muted"
           >
             Reset
           </Button>
@@ -133,6 +153,8 @@ function ReadStatusLine({ files, tally, onClear }: ReadStatusLineProps): ReactEl
 
 type ChangedFileTreeProps = {
   files: PatchFile[];
+  /** How many comments each file carries, for the per-file count badge. Keyed by
+   * `PatchFile.path`; a file with none gets no badge. */
   commentCounts: Map<string, number>;
   /** Which of these files the reader has been through, resolved against the loaded diff's
    * content upstream so a row never has to re-derive a signature per render. */
@@ -203,7 +225,7 @@ function ChangedFileTree({
         return null;
       }
       const count = countsRef.current.get(context.item.path) ?? 0;
-      const comments = count === 1 ? "1 comment" : `${count} comments`;
+      const comments = countLabel(count, "comment");
       if (readRef.current.has(context.item.path)) {
         return { text: "✓", title: count === 0 ? "Read" : `Read · ${comments}` };
       }

@@ -7,6 +7,13 @@
     "src/shared/**/*",
     "src/tools/**/*"
   ],
+  // `src/shared/node/` is the main+CLI half of shared: it is free to import `node:`, so it is not
+  // part of the renderer program. Excluding it here is what enforces the direction — this project
+  // is composite, so an import of an excluded file is TS6307 ("not listed within the file list of
+  // project") rather than something that compiles and then dies in the Vite bundle. The other
+  // half of the rule — that renderer-bundled `shared/` code cannot import `node:` itself — is
+  // tsconfig.shared.json.
+  "exclude": ["src/shared/node/**"],
   "compilerOptions": {
     "composite": true,
     "jsx": "react-jsx",

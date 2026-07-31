@@ -1,4 +1,5 @@
 import type { ReactElement } from "react";
+import { countLabel } from "../../../shared/plural";
 import type { SnippetLine } from "@/lib/diff/snippet";
 import { cn } from "@/lib/utils";
 
@@ -10,10 +11,6 @@ import { cn } from "@/lib/utils";
 // reads better as continuous prose without them. It stays because the shape is right for
 // the next surface that wants an inline preview (a comment's context, a search hit), and
 // `buildOverview` still derives the lines it takes.
-
-function countLabel(n: number, noun: string): string {
-  return `${n} ${noun}${n === 1 ? "" : "s"}`;
-}
 
 type DiffSnippetProps = {
   /** The path the lines come from, shown as the preview's header. */

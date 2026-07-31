@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { RecentReview } from "../../../shared/recent-reviews";
+import type { RecentReview } from "../../../shared/review-ipc";
 import {
   filterRecents,
   groupRecents,

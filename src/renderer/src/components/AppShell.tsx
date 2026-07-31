@@ -28,7 +28,11 @@ export function AppShell({ banner, sidebar, children }: AppShellProps): ReactEle
       <div className="flex h-dvh flex-col">
         <TitleBar />
         {banner}
-        <main className="min-h-0 flex-1 bg-background">{children}</main>
+        {/* id read by TabBar's `aria-controls` — every tab controls this one region,
+            since the "panel" a tab switches is the whole app surface, not a per-tab pane. */}
+        <main id="app-content" className="min-h-0 flex-1 bg-background">
+          {children}
+        </main>
       </div>
     );
   }
@@ -57,7 +61,10 @@ export function AppShell({ banner, sidebar, children }: AppShellProps): ReactEle
         </ResizablePanel>
         <ResizableHandle className="max-md:hidden" />
         <ResizablePanel id="main" minSize="360px">
-          <main className="h-full min-w-0 bg-background">{children}</main>
+          {/* Same id as the sidebar-less branch above, and read the same way. */}
+          <main id="app-content" className="h-full min-w-0 bg-background">
+            {children}
+          </main>
         </ResizablePanel>
       </ResizablePanelGroup>
     </div>

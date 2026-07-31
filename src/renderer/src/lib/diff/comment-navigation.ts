@@ -1,6 +1,6 @@
 import type { Comment } from "../../../../shared/review";
-import { filesByAnchorPath, type PatchFile } from "./patch";
-import { resolveAnchor } from "./anchor";
+import { filesByAnchorPath, type PatchFile } from "../../../../shared/diff/patch";
+import { resolveAnchor } from "../../../../shared/diff/anchor";
 
 // The navigation view over a session's comments: every comment resolved to where
 // it sits on the *loaded* diff and ordered exactly as the reader meets it scrolling

@@ -1,8 +1,9 @@
 import { readFile, realpath, stat } from "node:fs/promises";
 import { resolve } from "node:path";
-import { REVIEW_EXTENSION } from "../../shared/review-file";
+import { REVIEW_EXTENSION } from "../../shared/node/reviews-dir";
 import { importReview, type ImportedReview, type ReviewStamp } from "../../shared/review";
-import type { ReviewOpenFailure } from "../../shared/review-open";
+import { errnoCode } from "../../shared/errors";
+import type { ReviewOpenFailure } from "../../shared/review-ipc";
 
 // The one seam all three open paths funnel through: a path — from a renderer drop,
 // a dialog pick, or argv — is untrusted until every check here has passed, and no
@@ -21,12 +22,6 @@ export type ReviewImportResult =
    * canonicalizing a path two ways would quietly become two tabs over one review. */
   { ok: true; review: ImportedReview; path: string } | { ok: false; failure: ReviewOpenFailure };
 
-/** Node fs rejections are `Error` with an errno `code`; the cast is the boundary
- * where an untyped runtime shape becomes a checked string. */
-function isErrno(error: unknown, code: string): boolean {
-  return error instanceof Error && (error as NodeJS.ErrnoException).code === code;
-}
-
 export async function importReviewFromPath(
   rawPath: string,
   stamp: ReviewStamp,
@@ -42,9 +37,11 @@ export async function importReviewFromPath(
   try {
     stats = await stat(path);
   } catch (error) {
+    // Absence is a distinct answer from "exists and would not be read" — the reader who
+    // picked a file that has since moved gets told that, not a generic unreadable.
     return {
       ok: false,
-      failure: { code: isErrno(error, "ENOENT") ? "fileNotFound" : "unreadable" },
+      failure: { code: errnoCode(error) === "ENOENT" ? "fileNotFound" : "unreadable" },
     };
   }
   if (!stats.isFile()) {
@@ -63,7 +60,9 @@ export async function importReviewFromPath(
 
   const imported = importReview(bytes, stamp);
   if (!imported.ok) {
-    return { ok: false, failure: { code: "invalidContent" } };
+    // The schema's own objection rides along: a hand-edited artifact is the one failure here
+    // the reader can fix, and "not a valid review" alone does not tell them where to look.
+    return { ok: false, failure: { code: "invalidContent", reason: imported.reason } };
   }
   // Symlinks resolved last, once the file is known to be readable: a symlinked artifact is a
   // real way to keep a review around (`recent.ts` stats through them for the same reason),

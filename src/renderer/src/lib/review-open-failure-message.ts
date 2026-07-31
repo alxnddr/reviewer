@@ -1,5 +1,5 @@
 import { assertNever } from "../../../shared/assert";
-import type { ReviewOpenFailure } from "../../../shared/review-open";
+import type { ReviewOpenFailure } from "../../../shared/review-ipc";
 import { gitFailureMessage } from "./git-failure-message";
 
 /** User-facing sentence for each ReviewOpenFailure code. The open path maps every
@@ -17,7 +17,10 @@ export function reviewOpenFailureMessage(failure: ReviewOpenFailure): string {
     case "unreadable":
       return "That review file could not be read.";
     case "invalidContent":
-      return "That file is not a valid review.";
+      // The file *was* read, so the reader can go and fix it — the schema's own account of
+      // the first thing it objected to names the field, the way the git layer's sentence
+      // names the path below.
+      return `That file is not a valid review: ${failure.reason}`;
     case "repoUnavailable":
       // The review is fine; the repository it names is the problem — say so, then
       // let the git layer's own sentence name the path it refused.

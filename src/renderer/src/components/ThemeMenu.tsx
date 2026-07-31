@@ -11,7 +11,7 @@ import {
 import { TooltipHint } from "@/components/ui/tooltip";
 import { useThemeStore } from "@/stores/theme";
 import { ThemeId } from "../../../shared/contracts";
-import { THEMES } from "../../../shared/themes.generated";
+import { THEMES } from "../../../shared/themes";
 
 export function ThemeMenu(): ReactElement {
   const selection = useThemeStore((state) => state.selection);
@@ -26,12 +26,9 @@ export function ThemeMenu(): ReactElement {
         <DropdownMenuTrigger
           render={
             <Button
-              variant="ghost"
+              variant="chrome"
               size="icon"
-              // The ghost hover (bg-muted) is invisible on the bg-sidebar titlebar —
-              // the wash must come from the border tone to register on chrome
-              // surfaces, with dark: twins to outrank the variant's own dark arm.
-              className="app-region-no-drag hover:bg-border/60 aria-expanded:bg-border/60 dark:hover:bg-border/60 dark:aria-expanded:bg-border/60"
+              className="app-region-no-drag"
               aria-label="Change theme"
             />
           }

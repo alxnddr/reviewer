@@ -10,11 +10,12 @@ import {
   type ReviewSide,
 } from "../../../shared/review";
 import { assertNever } from "../../../shared/assert";
+import { countLabel } from "../../../shared/plural";
 import type { CommitSha, DiffSelection, RepoInfo, ReviewRef } from "../../../shared/git";
-import { resolveAnchor } from "./diff/anchor";
-import { filesByAnchorPath, type PatchFile } from "./diff/patch";
+import { resolveAnchor } from "../../../shared/diff/anchor";
+import { filesByAnchorPath, type PatchFile } from "../../../shared/diff/patch";
 import { snippetForAnchor, type DiffSnippet } from "./diff/snippet";
-import { layerOwning } from "./layers";
+import { layerOwning } from "../../../shared/layers";
 
 // The three review exports, all pure and headless so they snapshot and round-trip in
 // tests without a window. `serializeReview` re-emits the authored `.reviewer.json` —
@@ -71,7 +72,9 @@ export function serializeReview(review: ImportedReview): ReviewArtifactDraft {
  * are dropped — they are identity the app assigned, never something anyone wrote. An empty
  * `children` is omitted rather than emitted, for the same reason the import never asked for
  * it. A `parent` naming no layer in the array re-emits as a root, the same fail-soft the
- * outline reads it with, so an export can never silently lose a layer. */
+ * outline reads it with, so an export can never silently lose a layer.
+ *
+ * @internal Exported for its own unit test only — `serializeReview` is the one caller. */
 export function nestLayers(layers: readonly ReviewLayer[]): ReviewLayerDraft[] {
   const nodes = layers.map(
     (layer): ReviewLayerDraft => ({
@@ -258,12 +261,71 @@ function locationOf(comment: MarkdownComment): string {
   return tags.length === 0 ? range : `${range} (${tags.join(", ")})`;
 }
 
+// ── Serializing a value nothing validated as Markdown ───────────────────────────
+//
+// The prose tiers of a review (an overview body, a layer summary, a comment body) *are*
+// Markdown — they are authored as it and pass through verbatim. The fields below are not:
+// a layer `label`, an overview `title`, a repo name and a file path are values, and the
+// schema that admits them (`z.string().min(1)`, a filesystem path) constrains nothing about
+// the characters Markdown reads as structure. Interpolated raw, a label carrying a newline
+// splits the document at the heading and a path carrying a backtick ends the code span
+// early — output that parses cleanly as something other than what it says. So every such
+// value goes through one of the two helpers here on its way into a line, and the escaping
+// rule for a kind of position is decided once rather than at each interpolation.
+//
+// "Every" spans both exports, not just the Markdown one below: the prompt payload is the
+// same headings and the same code spans, read by an agent that will act on whatever
+// structure it finds — a label that splits a section there mis-files the work order.
+
+/** The longest run of backticks anywhere in a string — the number every backtick delimiter
+ * below is sized against, since content that carries backticks of its own is exactly the
+ * case where a fixed-length delimiter closes early. */
+function longestBacktickRun(content: string): number {
+  let longest = 0;
+  for (const run of content.matchAll(/`+/gu)) {
+    longest = Math.max(longest, run[0].length);
+  }
+  return longest;
+}
+
+/** Text on a heading line, from a field that was never constrained to one line. Line
+ * breaks collapse to a single space — the words survive, the document's structure does
+ * not move — and the two `#` runs an ATX line reads as markers are escaped: a leading one,
+ * so a label cannot spell a level of its own, and a trailing one, which CommonMark takes
+ * for the optional *closing* sequence and drops (`## Foo ##` is the heading "Foo", so an
+ * unescaped label ending in hashes silently loses them). Escaping the first `#` of each
+ * run is enough — the rest of the run is then no longer marker-adjacent. Everything else
+ * is left alone: a heading is a phrase, and escaping punctuation an author typed on
+ * purpose would make the export read worse than the app does. */
+function headingText(text: string): string {
+  const oneLine = text.replaceAll(/\s*[\r\n]+\s*/gu, " ").trim();
+  return oneLine.replace(/^#/u, "\\#").replace(/(\s)(#+)$/u, "$1\\$2");
+}
+
+/** A value as an inline code span that its own content cannot end: delimited by one more
+ * backtick than the longest run inside it, and padded with a space in the two cases
+ * CommonMark would otherwise read the edge of the content as part of the delimiter —
+ * content that starts or ends with a backtick (which would merge with the delimiter run),
+ * and content that both starts and ends with a space (which the parser strips one of from
+ * each side, unless the content is nothing but spaces). One pad answers both, because
+ * that strip is exactly what takes the padding back: the rendered span is the value either
+ * way. A line break would end the span too (a path may legally carry one), and collapses
+ * the same way a heading's does. */
+function codeSpan(value: string): string {
+  const inline = value.replaceAll(/[\r\n]+/gu, " ");
+  const ticks = "`".repeat(longestBacktickRun(inline) + 1);
+  const touchesTick = inline.startsWith("`") || inline.endsWith("`");
+  const wouldStrip = inline.startsWith(" ") && inline.endsWith(" ") && /[^ ]/u.test(inline);
+  const pad = touchesTick || wouldStrip ? " " : "";
+  return `${ticks}${pad}${inline}${pad}${ticks}`;
+}
+
 /** One comment as a list item: a machine-token header (`path` + location as code
  * spans) then the body inline, its continuation lines indented so a multi-line
  * body stays inside the item. */
 function commentBullet(comment: MarkdownComment): string {
   const [first, ...rest] = comment.body.split("\n");
-  const head = `- \`${comment.file}\` ${locationOf(comment)} — ${first ?? ""}`;
+  const head = `- ${codeSpan(comment.file)} ${locationOf(comment)} — ${first ?? ""}`;
   return [head, ...rest.map((line) => `  ${line}`)].join("\n");
 }
 
@@ -290,9 +352,9 @@ export function reviewToMarkdown(review: MarkdownReview): string {
   const overview = review.overview;
   const lines: string[] =
     overview === null
-      ? [`# Review — ${review.repo.name}`, ""]
-      : [`# ${overview.title}`, "", `Review — \`${review.repo.name}\``, ""];
-  lines.push(`\`${review.base}\` … \`${review.head}\``);
+      ? [`# Review — ${headingText(review.repo.name)}`, ""]
+      : [`# ${headingText(overview.title)}`, "", `Review — ${codeSpan(review.repo.name)}`, ""];
+  lines.push(`${codeSpan(review.base)} … ${codeSpan(review.head)}`);
   if (overview !== null) {
     lines.push("", overview.body.trim());
   }
@@ -300,7 +362,7 @@ export function reviewToMarkdown(review: MarkdownReview): string {
   review.layers.forEach((layer, index) => {
     // A layer's summary is optional, so a layer that carries only a label contributes a
     // heading and its comments — never a blank line standing in for prose nobody wrote.
-    lines.push("", `## ${layer.label}`);
+    lines.push("", `## ${headingText(layer.label)}`);
     if (layer.summary !== undefined) {
       lines.push("", layer.summary);
     }
@@ -361,11 +423,7 @@ export function promptCommentsFrom(
  * literals — a hard-coded ``` closes the block early on both, which is a payload that reads
  * as valid and is not. */
 function fenceFor(content: string): string {
-  let longest = 0;
-  for (const run of content.matchAll(/`+/gu)) {
-    longest = Math.max(longest, run[0].length);
-  }
-  return "`".repeat(Math.max(3, longest + 1));
+  return "`".repeat(Math.max(3, longestBacktickRun(content) + 1));
 }
 
 /** Where a comment sits, as its prompt states it: `path:line` or `path:start-end`.
@@ -411,7 +469,7 @@ function promptQualifiers(comment: PromptComment): string[] {
  * grouping form to prefix it and the two would drift apart by a character. */
 function promptBlock(comment: PromptComment): string[] {
   const qualifiers = promptQualifiers(comment);
-  const anchor = `\`${promptRange(comment)}\``;
+  const anchor = codeSpan(promptRange(comment));
   const lines = [
     `### ${qualifiers.length === 0 ? anchor : `${anchor} (${qualifiers.join("; ")})`}`,
     "",
@@ -496,18 +554,21 @@ export function commentsToPrompt(review: PromptReview): string {
 
   const title = review.overview?.title;
   const count = review.comments.length;
-  const refs = review.refs === null ? "" : ` (\`${review.refs.base}\` … \`${review.refs.head}\`)`;
+  const refs =
+    review.refs === null ? "" : ` (${codeSpan(review.refs.base)} … ${codeSpan(review.refs.head)})`;
   const lines: string[] = [
-    title === undefined ? "# Code review comments" : `# Code review comments — ${title}`,
+    title === undefined
+      ? "# Code review comments"
+      : `# Code review comments — ${headingText(title)}`,
     "",
-    `${count === 1 ? "1 comment" : `${count} comments`} from a code review of \`${review.repo.name}\`${refs}. Address each one.${
+    `${countLabel(count, "comment")} from a code review of ${codeSpan(review.repo.name)}${refs}. Address each one.${
       sections.length === 0 ? "" : " They are grouped in the review’s own reading order."
     }`,
   ];
   for (const section of sections) {
     lines.push(
       "",
-      `## ${section.label}`,
+      `## ${headingText(section.label)}`,
       "",
       ...promptBlocks(section.comments.toSorted(compareComments)),
     );

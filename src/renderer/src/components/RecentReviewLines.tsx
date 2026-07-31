@@ -1,6 +1,6 @@
 import type { ReactElement } from "react";
 import { FileWarning, Layers, MessageSquare, PackageCheck } from "lucide-react";
-import type { RecentReview } from "../../../shared/recent-reviews";
+import type { RecentReview } from "../../../shared/review-ipc";
 import { ReadRing } from "@/components/ReadRing";
 import { recentRange, recentTitle, showsRange } from "@/lib/recent-reviews";
 import { absoluteTime, shortAge } from "@/lib/relative-time";

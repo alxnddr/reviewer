@@ -8,14 +8,15 @@ import {
 } from "../../src/tools/review-validator";
 import {
   coverageOfPatch,
-  isComplete,
+  isFullyCovered,
   layerExtentsOf,
   type CoverageReport,
 } from "../../src/tools/review-coverage";
+import { errorMessage } from "../../src/shared/errors";
 import { coverageSummaryLines } from "../coverage-report";
 import { artifactDiff } from "../git";
 import { EXIT_PROBLEMS, EXIT_READY, type LocalContext } from "../context";
-import { errorMessage, writeCannotRun } from "../errors";
+import { writeCannotRun, writeJson } from "../errors";
 
 // `rvw check <artifact>` — the one question an agent asks about a review it already has: does
 // this open clean? It is the whole of the old `validate` (parse + placement, hard-fail) with
@@ -124,7 +125,7 @@ export const checkCommand = buildCommand<CheckFlags, [string], LocalContext>({
       return;
     }
 
-    const capture = artifactDiff(parsed.artifact);
+    const capture = artifactDiff(this.env, parsed.artifact);
     if (!capture.ok) {
       // The diff could not be re-derived (repo/ref gone or oversized): neither stage ran, so
       // it is a shell-cannot-run (exit 2), not a review verdict.
@@ -145,7 +146,7 @@ export const checkCommand = buildCommand<CheckFlags, [string], LocalContext>({
     if (flags.coverage !== true && !requireComplete) {
       const report: CheckReport = { ok: true, stage: "validate" };
       if (flags.json === true) {
-        this.process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
+        writeJson(this, report);
       } else {
         this.process.stdout.write(
           `${artifact}: valid — every anchor places, every link resolves\n`,
@@ -168,7 +169,7 @@ export const checkCommand = buildCommand<CheckFlags, [string], LocalContext>({
       return;
     }
 
-    const complete = isComplete(coverage.report);
+    const complete = isFullyCovered(coverage.report);
     const ok = complete || !requireComplete;
     const report: CheckReport = {
       ok,
@@ -179,7 +180,7 @@ export const checkCommand = buildCommand<CheckFlags, [string], LocalContext>({
     };
 
     if (flags.json === true) {
-      this.process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
+      writeJson(this, report);
     } else {
       writeCoverageOutcome(this, artifact, report, parsed.artifact.layers.length > 0);
     }
@@ -197,7 +198,7 @@ function writeValidationFailure(
 ): void {
   if (flags.json === true) {
     const report: CheckReport = { ok: false, stage: "validate", problems };
-    context.process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
+    writeJson(context, report);
     return;
   }
   context.process.stderr.write(`${artifact}: ${problems.length} problem(s) — not ready\n`);

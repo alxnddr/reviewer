@@ -6,7 +6,7 @@ import {
   uncoveredLayerFrom,
   UNCOVERED_LAYER_ID,
 } from "./coverage";
-import { parsePatch, type PatchFile } from "./diff/patch";
+import { parsePatch, type PatchFile } from "../../../shared/diff/patch";
 
 // A two-file diff measured by the real parser, so the changed-line universe the summary
 // scores against is the genuine one. foo.ts: additions {11,12,13}, deletion {11} — four

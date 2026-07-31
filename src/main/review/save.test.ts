@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ReviewArtifact } from "../../shared/review";
-import type { ReviewSaveRequest } from "../../shared/review-save";
+import type { ReviewSaveRequest } from "../../shared/review-ipc";
 
 // The write is the real boundary here: only the native sheet is mocked (it cannot
 // open under vitest), and every assertion is against actual disk state — a file

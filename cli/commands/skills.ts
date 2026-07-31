@@ -1,7 +1,7 @@
 import { buildCommand } from "@stricli/core";
 import { bundledSkillsRoot, findSkill, listSkills, type SkillSummary } from "../skills";
 import { EXIT_READY, type LocalContext } from "../context";
-import { writeCannotRun } from "../errors";
+import { writeCannotRun, writeJson } from "../errors";
 
 // `rvw skills [<name>]` — what reviews this toolchain can run. An agent landing in an
 // unfamiliar repo asks the tool, not out-of-band prose. The listing is read from the bundled
@@ -65,7 +65,7 @@ export const skillsCommand = buildCommand<SkillsFlags, [string | undefined], Loc
     }
 
     if (flags.json === true) {
-      this.process.stdout.write(`${JSON.stringify(skill, null, 2)}\n`);
+      writeJson(this, skill);
     } else {
       this.process.stdout.write(`${skill.path}\n`);
     }
@@ -81,7 +81,7 @@ function writeListing(
   skills: readonly SkillSummary[],
 ): void {
   if (flags.json) {
-    context.process.stdout.write(`${JSON.stringify(skills, null, 2)}\n`);
+    writeJson(context, skills);
     return;
   }
   if (skills.length === 0) {

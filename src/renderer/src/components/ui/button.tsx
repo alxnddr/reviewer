@@ -17,6 +17,15 @@ const buttonVariants = cva(
           "bg-secondary text-secondary-foreground hover:bg-[color-mix(in_oklch,var(--secondary),var(--foreground)_5%)] aria-expanded:bg-secondary aria-expanded:text-secondary-foreground",
         ghost:
           "hover:bg-muted hover:text-foreground aria-expanded:bg-muted aria-expanded:text-foreground dark:hover:bg-muted/50",
+        // Ghost's twin for the app's chrome — the titlebar, the rails, the panel
+        // headers. The only difference is where the wash comes from: `bg-muted` is
+        // invisible on `bg-sidebar`, so this takes the theme's border tone instead,
+        // which is `--selected` (index.css), the one neutral fill every active row in
+        // the app already wears. Same tone on both arms, so unlike `ghost` there is no
+        // dark hover of its own — which is what the fourteen call sites that used to
+        // spell this out inline each needed a `dark:` twin to outrank.
+        chrome:
+          "hover:bg-border/60 hover:text-foreground aria-expanded:bg-border/60 aria-expanded:text-foreground",
         destructive:
           "bg-destructive/10 text-destructive hover:bg-destructive/20 focus-visible:border-destructive/40 focus-visible:ring-destructive/20 dark:bg-destructive/20 dark:hover:bg-destructive/30 dark:focus-visible:ring-destructive/40",
         link: "text-primary underline-offset-4 hover:underline",

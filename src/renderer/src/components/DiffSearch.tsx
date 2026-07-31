@@ -3,8 +3,10 @@ import { CaseSensitive, ChevronDown, ChevronUp, Search, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { ShortcutHint } from "@/components/ui/kbd";
+import { POPOVER_SURFACE } from "@/components/ui/surface";
 import { Toggle } from "@/components/ui/toggle";
 import { TooltipHint } from "@/components/ui/tooltip";
+import { cn } from "@/lib/utils";
 
 type DiffSearchProps = {
   query: string;
@@ -56,12 +58,13 @@ export function DiffSearch({
   return (
     <div
       role="search"
-      // The kit's floating-surface idiom (select/dropdown/combobox all use it): a
-      // hairline `ring-foreground/10` rather than `border-border`, which on the dark
-      // themes is a near-invisible grey and left the bar with no edge against the
-      // diff. Kept a rounded rect, not the stepper's pill — this one holds a field,
-      // and the two overlays should stay tellable apart at a glance.
-      className="absolute top-2 right-3 z-20 flex items-center gap-1 rounded-lg bg-popover p-1 text-sm text-popover-foreground shadow-md ring-1 ring-foreground/10"
+      // The kit's floating surface, the same one the menus and the combobox are made of.
+      // Kept a rounded rect, not the stepper's pill — this one holds a field, and the two
+      // overlays should stay tellable apart at a glance.
+      className={cn(
+        POPOVER_SURFACE,
+        "absolute top-2 right-3 z-20 flex items-center gap-1 p-1 text-sm",
+      )}
     >
       <div className="relative">
         <Search
@@ -109,11 +112,7 @@ export function DiffSearch({
           <CaseSensitive />
         </Toggle>
       </TooltipHint>
-      <TooltipHint
-        content={<ShortcutHint action="Previous match" keys="⇧⏎" />}
-        side="bottom"
-        align="center"
-      >
+      <TooltipHint content={<ShortcutHint id="find.previous" />} side="bottom" align="center">
         <Button
           variant="ghost"
           size="icon-sm"
@@ -124,11 +123,7 @@ export function DiffSearch({
           <ChevronUp />
         </Button>
       </TooltipHint>
-      <TooltipHint
-        content={<ShortcutHint action="Next match" keys="⏎" />}
-        side="bottom"
-        align="center"
-      >
+      <TooltipHint content={<ShortcutHint id="find.next" />} side="bottom" align="center">
         <Button
           variant="ghost"
           size="icon-sm"
@@ -139,11 +134,7 @@ export function DiffSearch({
           <ChevronDown />
         </Button>
       </TooltipHint>
-      <TooltipHint
-        content={<ShortcutHint action="Close find" keys="Esc" />}
-        side="bottom"
-        align="end"
-      >
+      <TooltipHint content={<ShortcutHint id="find.close" />} side="bottom" align="end">
         <Button variant="ghost" size="icon-sm" aria-label="Close find" onClick={onClose}>
           <X />
         </Button>

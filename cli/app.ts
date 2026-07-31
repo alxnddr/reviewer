@@ -6,6 +6,7 @@ import { diffCommand } from "./commands/diff";
 import { openCommand } from "./commands/open";
 import { schemaCommand } from "./commands/schema";
 import { skillsCommand } from "./commands/skills";
+import { versionLine } from "./version";
 
 // The `rvw` application: one route map over the six review verbs, all live. The surface is
 // ordered the way it is used — `emit` presents a review, `check` and `diff` support authoring
@@ -57,6 +58,10 @@ export function buildRvwApplication(routeMap: RouteMap<LocalContext>): Applicati
     // Multi-word flags are declared camelCase but typed kebab on the wire (`--require-complete`,
     // not `--requireComplete`) — the convention every command's flags follow.
     scanner: { caseStyle: "allow-kebab-for-camel" },
+    // `--version`/`-v`, registered by Stricli for free. Only `currentVersion` is supplied:
+    // `getLatestVersion` is the optional half that would reach the network on every run, and a
+    // tool an agent shells out to has no business doing that. What the line says is version.ts's.
+    versionInfo: { currentVersion: versionLine() },
   });
 }
 

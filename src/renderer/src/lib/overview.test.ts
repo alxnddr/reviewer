@@ -1,44 +1,37 @@
 import { describe, expect, it } from "vitest";
 import type { Comment, ReviewLayer } from "../../../shared/review";
 import { UNCOVERED_LAYER_ID } from "./coverage";
-import { parsePatch, type PatchFile } from "./diff/patch";
+import { ONE_HUNK_PATCH } from "../../../shared/diff/fixtures";
+import { parsePatch, type PatchFile } from "../../../shared/diff/patch";
 import { snippetForAnchor } from "./diff/snippet";
 import { NO_READ_FILES } from "./read-progress";
 import { buildOverview } from "./overview";
 
 // A three-file diff read by the real parser, so every count below is measured against a
-// genuine changed-line universe rather than a hand-tallied one.
+// genuine changed-line universe rather than a hand-tallied one. foo.ts is the shared
+// one-hunk fixture; the other two files are this suite's own.
 // foo.ts: additions {11,12,13}, deletion {11}. bar.ts: additions {2,3}. skipped.ts:
 // additions {1}. Seven coverable changed lines in all.
-const PATCH = [
-  "diff --git a/src/foo.ts b/src/foo.ts",
-  "index 1111111..2222222 100644",
-  "--- a/src/foo.ts",
-  "+++ b/src/foo.ts",
-  "@@ -10,3 +10,5 @@",
-  " ctx10",
-  "-old11",
-  "+new11",
-  "+new12",
-  "+new13",
-  " ctx14",
-  "diff --git a/src/bar.ts b/src/bar.ts",
-  "index 3333333..4444444 100644",
-  "--- a/src/bar.ts",
-  "+++ b/src/bar.ts",
-  "@@ -1,1 +1,3 @@",
-  " ctx1",
-  "+new2",
-  "+new3",
-  "diff --git a/src/skipped.ts b/src/skipped.ts",
-  "new file mode 100644",
-  "index 0000000..5555555",
-  "--- /dev/null",
-  "+++ b/src/skipped.ts",
-  "@@ -0,0 +1 @@",
-  "+lonely",
-  "",
-].join("\n");
+const PATCH =
+  ONE_HUNK_PATCH +
+  [
+    "diff --git a/src/bar.ts b/src/bar.ts",
+    "index 3333333..4444444 100644",
+    "--- a/src/bar.ts",
+    "+++ b/src/bar.ts",
+    "@@ -1,1 +1,3 @@",
+    " ctx1",
+    "+new2",
+    "+new3",
+    "diff --git a/src/skipped.ts b/src/skipped.ts",
+    "new file mode 100644",
+    "index 0000000..5555555",
+    "--- /dev/null",
+    "+++ b/src/skipped.ts",
+    "@@ -0,0 +1 @@",
+    "+lonely",
+    "",
+  ].join("\n");
 
 const FILES: PatchFile[] = parsePatch(PATCH, "test");
 
@@ -175,6 +168,37 @@ describe("buildOverview", () => {
     expect(model.chapters[1]?.files.map((file) => file.path)).toEqual(["src/bar.ts"]);
   });
 
+  it("counts each file in a multi-file chapter against only its own ranges", () => {
+    // A group whose extent spans two files, both with a range starting at overlapping line
+    // numbers (2 and 11) — pins that per-file counting stays correct once ranges are
+    // bucketed by file rather than scanned whole (the coveredIn optimization in
+    // overview.ts), not just cheaper.
+    const group = layer("group", []);
+    const fooChild = layer(
+      "foo-child",
+      [{ file: "src/foo.ts", side: "additions", startLine: 11, endLine: 12 }],
+      { parent: "group" },
+    );
+    const barChild = layer(
+      "bar-child",
+      [{ file: "src/bar.ts", side: "additions", startLine: 2, endLine: 3 }],
+      { parent: "group" },
+    );
+    const model = buildOverview({
+      layers: [group, fooChild, barChild],
+      files: FILES,
+      comments: [],
+      frozen: false,
+      readFiles: NO_READ_FILES,
+    });
+
+    expect(model.chapters[0]?.files).toEqual([
+      { path: "src/foo.ts", status: "modified", additions: 2, deletions: 0, read: false },
+      { path: "src/bar.ts", status: "modified", additions: 2, deletions: 0, read: false },
+    ]);
+    expect(model.chapters[0]?.additions).toBe(4);
+  });
+
   it("numbers chapters by section, at any depth", () => {
     const parent = layer("parent", []);
     const child = layer("child", [], { parent: "parent" });
@@ -248,7 +272,7 @@ describe("buildOverview", () => {
       readFiles: NO_READ_FILES,
     });
 
-    // The frozen rule still needs the file to be in the diff (lib/layers.ts), so this one
+    // The frozen rule still needs the file to be in the diff (shared/layers.ts), so this one
     // is honestly outdated; a frozen chapter over a present file is not.
     expect(model.chapters[0]?.outdated).toBe(true);
     const present = buildOverview({

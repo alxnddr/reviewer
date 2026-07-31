@@ -1,9 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
 import type { ReviewAnchor, ReviewArtifact, ReviewLayerInput } from "../shared/review";
+import { ONE_HUNK_PATCH } from "../shared/diff/fixtures";
 import {
   changedLineUniverse,
   coverageOfPatch,
-  isComplete,
+  isFullyCovered,
   layerExtentsOf,
   type CoverageResult,
 } from "./review-coverage";
@@ -13,21 +14,8 @@ import {
 // spans — the load-bearing definition is the universe boundary (changed lines only, per
 // side), so the fixtures pin the precise line numbers a walkthrough must explain.
 
-// A hunk touching src/foo.ts: additions {11,12} (new-file coords), deletion {11}
-// (old-file coords); ctx lines are excluded from the universe.
-const FOO_HUNK = [
-  "diff --git a/src/foo.ts b/src/foo.ts",
-  "index 1111111..2222222 100644",
-  "--- a/src/foo.ts",
-  "+++ b/src/foo.ts",
-  "@@ -10,4 +10,5 @@",
-  " ctx10",
-  "-old11",
-  "+new11",
-  "+new12",
-  " ctx13",
-  " ctx14",
-];
+// The shared one-hunk fixture touches src/foo.ts: additions {11,12,13} (new-file coords),
+// deletion {11} (old-file coords); ctx lines are excluded from the universe.
 
 // A second file src/bar.ts with additions {5,6,7,8} — the whole-file gap fixture.
 const BAR_HUNK = [
@@ -43,8 +31,9 @@ const BAR_HUNK = [
   "+add8",
 ];
 
-function patch(...hunks: string[][]): string {
-  return `${hunks.flat().join("\n")}\n`;
+/** A patch from parts: a whole fixture string, or a file written here as its lines. */
+function patch(...parts: (string | string[])[]): string {
+  return parts.map((part) => (Array.isArray(part) ? `${part.join("\n")}\n` : part)).join("");
 }
 
 function artifact(embeddedPatch: string | undefined, layers: ReviewLayerInput[]): ReviewArtifact {
@@ -85,14 +74,14 @@ function coverageForArtifact(review: ReviewArtifact): CoverageResult {
 describe("coverage over an artifact's diff", () => {
   it("counts a nested layer's ranges: a grouping parent covers what its children do", () => {
     const result = coverageForArtifact(
-      artifact(patch(FOO_HUNK), [
+      artifact(patch(ONE_HUNK_PATCH), [
         {
           label: "Group",
           summary: "carries no ranges of its own",
           ranges: [],
           children: [
             layer("inner", [
-              { file: "src/foo.ts", side: "additions", startLine: 11, endLine: 12 },
+              { file: "src/foo.ts", side: "additions", startLine: 11, endLine: 13 },
               { file: "src/foo.ts", side: "deletions", startLine: 11, endLine: 11 },
             ]),
           ],
@@ -101,28 +90,28 @@ describe("coverage over an artifact's diff", () => {
     );
 
     expect(reportOf(result).headline).toEqual({
-      coverableChangedLines: 3,
-      coveredChangedLines: 3,
+      coverableChangedLines: 4,
+      coveredChangedLines: 4,
     });
   });
 
   it("reports 100% and no gaps when layers span every changed line, and stays complete", () => {
     const result = coverageForArtifact(
-      artifact(patch(FOO_HUNK), [
+      artifact(patch(ONE_HUNK_PATCH), [
         layer("l1", [
-          { file: "src/foo.ts", side: "additions", startLine: 11, endLine: 12 },
+          { file: "src/foo.ts", side: "additions", startLine: 11, endLine: 13 },
           { file: "src/foo.ts", side: "deletions", startLine: 11, endLine: 11 },
         ]),
       ]),
     );
     const report = reportOf(result);
 
-    expect(report.headline).toEqual({ coverableChangedLines: 3, coveredChangedLines: 3 });
+    expect(report.headline).toEqual({ coverableChangedLines: 4, coveredChangedLines: 4 });
     expect(report.uncoveredSpans).toEqual([]);
     expect(report.files).toEqual([
-      { file: "src/foo.ts", status: "covered", coverableChangedLines: 3, coveredChangedLines: 3 },
+      { file: "src/foo.ts", status: "covered", coverableChangedLines: 4, coveredChangedLines: 4 },
     ]);
-    expect(isComplete(report)).toBe(true);
+    expect(isFullyCovered(report)).toBe(true);
   });
 
   it("names the uncovered whole file and the partial hunk's exact contiguous spans", () => {
@@ -131,7 +120,7 @@ describe("coverage over an artifact's diff", () => {
     const result = coverageForArtifact(
       patchedGapArtifact([
         layer("covers-foo", [
-          { file: "src/foo.ts", side: "additions", startLine: 11, endLine: 12 },
+          { file: "src/foo.ts", side: "additions", startLine: 11, endLine: 13 },
         ]),
         layer("covers-foo-del", [
           { file: "src/foo.ts", side: "deletions", startLine: 11, endLine: 11 },
@@ -141,9 +130,9 @@ describe("coverage over an artifact's diff", () => {
     );
     const report = reportOf(result);
 
-    expect(report.headline).toEqual({ coverableChangedLines: 7, coveredChangedLines: 5 });
+    expect(report.headline).toEqual({ coverableChangedLines: 8, coveredChangedLines: 6 });
     expect(report.files).toEqual([
-      { file: "src/foo.ts", status: "covered", coverableChangedLines: 3, coveredChangedLines: 3 },
+      { file: "src/foo.ts", status: "covered", coverableChangedLines: 4, coveredChangedLines: 4 },
       {
         file: "src/bar.ts",
         status: "partiallyCovered",
@@ -154,14 +143,14 @@ describe("coverage over an artifact's diff", () => {
     expect(report.uncoveredSpans).toEqual([
       { file: "src/bar.ts", side: "additions", startLine: 7, endLine: 8 },
     ]);
-    expect(isComplete(report)).toBe(false);
+    expect(isFullyCovered(report)).toBe(false);
   });
 
   it("marks a file touched by no layer range as uncovered with its whole-hunk span", () => {
     const result = coverageForArtifact(
       patchedGapArtifact([
         layer("covers-foo", [
-          { file: "src/foo.ts", side: "additions", startLine: 11, endLine: 12 },
+          { file: "src/foo.ts", side: "additions", startLine: 11, endLine: 13 },
           { file: "src/foo.ts", side: "deletions", startLine: 11, endLine: 11 },
         ]),
       ]),
@@ -192,18 +181,18 @@ describe("coverage over an artifact's diff", () => {
       "rename to new.ts",
     ];
     const result = coverageForArtifact(
-      artifact(patch(FOO_HUNK, binary, rename), [
+      artifact(patch(ONE_HUNK_PATCH, binary, rename), [
         // A parent rollup with empty ranges contributes nothing and is not a failure.
         layer("rollup", []),
         layer("covers-foo", [
-          { file: "src/foo.ts", side: "additions", startLine: 11, endLine: 12 },
+          { file: "src/foo.ts", side: "additions", startLine: 11, endLine: 13 },
           { file: "src/foo.ts", side: "deletions", startLine: 11, endLine: 11 },
         ]),
       ]),
     );
     const report = reportOf(result);
 
-    expect(report.headline).toEqual({ coverableChangedLines: 3, coveredChangedLines: 3 });
+    expect(report.headline).toEqual({ coverableChangedLines: 4, coveredChangedLines: 4 });
     expect(report.files).toContainEqual({
       file: "logo.png",
       status: "nonCoverable",
@@ -215,25 +204,25 @@ describe("coverage over an artifact's diff", () => {
       reason: "pureRename",
     });
     expect(report.uncoveredSpans).toEqual([]);
-    expect(isComplete(report)).toBe(true);
+    expect(isFullyCovered(report)).toBe(true);
   });
 
   it("counts additions and deletions independently — a range on the wrong side does not cover", () => {
-    // The only range spans lines 11-12 on the *deletions* side. It covers deletion 11
-    // (in the universe) but cannot cover additions 11-12, which share the numbers on the
+    // The only range spans lines 11-13 on the *deletions* side. It covers deletion 11
+    // (in the universe) but cannot cover additions 11-13, which share the numbers on the
     // other coordinate space.
     const result = coverageForArtifact(
-      artifact(patch(FOO_HUNK), [
+      artifact(patch(ONE_HUNK_PATCH), [
         layer("wrong-side", [
-          { file: "src/foo.ts", side: "deletions", startLine: 11, endLine: 12 },
+          { file: "src/foo.ts", side: "deletions", startLine: 11, endLine: 13 },
         ]),
       ]),
     );
     const report = reportOf(result);
 
-    expect(report.headline).toEqual({ coverableChangedLines: 3, coveredChangedLines: 1 });
+    expect(report.headline).toEqual({ coverableChangedLines: 4, coveredChangedLines: 1 });
     expect(report.uncoveredSpans).toEqual([
-      { file: "src/foo.ts", side: "additions", startLine: 11, endLine: 12 },
+      { file: "src/foo.ts", side: "additions", startLine: 11, endLine: 13 },
     ]);
   });
 
@@ -265,7 +254,7 @@ describe("coverage over an artifact's diff", () => {
       coverageForArtifact(
         patchedGapArtifact([
           layer("foo", [
-            { file: "src/foo.ts", side: "additions", startLine: 11, endLine: 12 },
+            { file: "src/foo.ts", side: "additions", startLine: 11, endLine: 13 },
             { file: "src/foo.ts", side: "deletions", startLine: 11, endLine: 11 },
           ]),
           layer("bar", [{ file: "src/bar.ts", side: "additions", startLine: 6, endLine: 6 }]),
@@ -283,7 +272,7 @@ describe("coverage over an artifact's diff", () => {
     // but no `+`/`-` line exists to anchor into. Saying `covered` would credit a walkthrough
     // (here, one with no layers at all) for explaining something it never touched.
     const modeOnly = ["diff --git a/run.sh b/run.sh", "old mode 100644", "new mode 100755"];
-    const report = reportOf(coverageForArtifact(artifact(patch(FOO_HUNK, modeOnly), [])));
+    const report = reportOf(coverageForArtifact(artifact(patch(ONE_HUNK_PATCH, modeOnly), [])));
     expect(report.files).toContainEqual({
       file: "run.sh",
       status: "nonCoverable",
@@ -299,7 +288,7 @@ describe("coverage over an artifact's diff", () => {
     const modeOnly = ["diff --git a/run.sh b/run.sh", "old mode 100644", "new mode 100755"];
     const report = reportOf(coverageForArtifact(artifact(patch(modeOnly), [])));
     expect(report.headline).toEqual({ coverableChangedLines: 0, coveredChangedLines: 0 });
-    expect(isComplete(report)).toBe(true);
+    expect(isFullyCovered(report)).toBe(true);
     expect(report.files).toEqual([
       { file: "run.sh", status: "nonCoverable", reason: "noChangedLines" },
     ]);
@@ -317,8 +306,8 @@ describe("coverage over an artifact's diff", () => {
       "Binary files a/logo.png and b/logo.png differ",
     ];
     const strayBreak = ["diff --gitignore rules moved too", "---"];
-    const clean = reportOf(coverageOfPatch(patch(binary, FOO_HUNK), []));
-    const desynced = reportOf(coverageOfPatch(patch(strayBreak, binary, FOO_HUNK), []));
+    const clean = reportOf(coverageOfPatch(patch(binary, ONE_HUNK_PATCH), []));
+    const desynced = reportOf(coverageOfPatch(patch(strayBreak, binary, ONE_HUNK_PATCH), []));
     expect(clean.files).toContainEqual({
       file: "logo.png",
       status: "nonCoverable",
@@ -334,14 +323,14 @@ describe("coverage over an artifact's diff", () => {
 
 describe("changedLineUniverse", () => {
   it("lists each coverable file's per-side contiguous changed spans, in deletions-then-additions order", () => {
-    expect(changedLineUniverse(patch(FOO_HUNK, BAR_HUNK))).toEqual([
+    expect(changedLineUniverse(patch(ONE_HUNK_PATCH, BAR_HUNK))).toEqual([
       {
         file: "src/foo.ts",
         status: "modified",
         coverable: true,
         spans: [
           { side: "deletions", startLine: 11, endLine: 11 },
-          { side: "additions", startLine: 11, endLine: 12 },
+          { side: "additions", startLine: 11, endLine: 13 },
         ],
       },
       {
@@ -375,7 +364,7 @@ describe("changedLineUniverse", () => {
     // The load-bearing shared-derivation guarantee (one universe, two consumers): the spans
     // `rvw diff --json` lists are exactly what `rvw check --coverage` treats as the universe, so an
     // anchor authored from the listing lands inside what coverage will later measure.
-    const source = patch(FOO_HUNK, BAR_HUNK);
+    const source = patch(ONE_HUNK_PATCH, BAR_HUNK);
     const universeSpans = changedLineUniverse(source).flatMap((file) =>
       file.coverable ? file.spans.map((span) => ({ file: file.file, ...span })) : [],
     );
@@ -386,5 +375,5 @@ describe("changedLineUniverse", () => {
 /** foo (fully coverable) + bar (a whole-file gap) with the given layers — the shared
  * two-file fixture the gap tests vary only the layers of. */
 function patchedGapArtifact(layers: ReviewLayerInput[]): ReviewArtifact {
-  return artifact(patch(FOO_HUNK, BAR_HUNK), layers);
+  return artifact(patch(ONE_HUNK_PATCH, BAR_HUNK), layers);
 }
