@@ -94,6 +94,21 @@ export type SessionSlice = {
    * The one source the sidebar list, the floating counter, and `DiffView`'s
    * scroll-to-comment all read. */
   activeCommentId: string | null;
+  /** The focused comment whose scroll the diff surface still owes, or null once it has
+   * been performed. Separate from `activeCommentId` because the two answer different
+   * questions — *which* comment is focused (the ring, the counter) versus whether
+   * focusing it is still an *unmet request to move the viewport* — and only the second
+   * survives the surface not being mounted.
+   *
+   * That is the whole reason it exists: the tour doc replaces the diff pane, so clicking
+   * a comment from the doc sets the focus in the same commit the surface *mounts*, where
+   * `DiffView`'s "did the focused comment change" compare has nothing to compare against
+   * and stands down — the reader landed on the file's first line with the card far below.
+   * A request that is consumed rather than diffed is true on that mount and false on a
+   * bare remount (a tab bounce), which is exactly the distinction the old ref-compare was
+   * reaching for and could not make. Write it through `commentFocus` and clear it through
+   * `commentScrolled`; never persisted, like the focus itself. */
+  pendingCommentScroll: string | null;
   /** How much of the diff the reader has been through: each read file's path against the
    * signature of the content they read (see `lib/read-progress.ts`).
    *
@@ -146,6 +161,19 @@ export type SessionsView = Pick<ReviewState, "sessions" | "activeSessionId">;
 
 export function selectActiveSlice(state: SessionsView): SessionSlice | null {
   return state.activeSessionId === null ? null : (state.sessions[state.activeSessionId] ?? null);
+}
+
+/** Moving the comment focus, as one value. Every site that changes which comment is
+ * focused — walkthrough's focus/clear, a discard that takes the focused one, plain file
+ * navigation dismissing the step-through — writes this rather than the two fields, so the
+ * surface can never be left owing a scroll to a comment nothing is focused on. Spelling
+ * out `pendingCommentScroll` at a call site is the one thing that would reintroduce that
+ * bug, so no call site does; the sole exception is `commentScrolled`, which clears the
+ * request *because* the scroll happened and must leave the focus standing. */
+export function commentFocus(
+  commentId: string | null,
+): Pick<SessionSlice, "activeCommentId" | "pendingCommentScroll"> {
+  return { activeCommentId: commentId, pendingCommentScroll: commentId };
 }
 
 /** The slice's soloed diff: the authored layers plus the inferred "not covered by layers"

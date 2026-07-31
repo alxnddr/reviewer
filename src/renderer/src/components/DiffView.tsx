@@ -37,9 +37,14 @@ type DiffViewProps = {
    * top (in `useDiffScroll`); solo filtering of `files` is done upstream. */
   activeLayerId: string | null;
   /** The comment the reader is focused on (via `n`/`p` or the sidebar list), or
-   * null. Its change scrolls the diff to that comment's line and rings its card;
-   * the ring itself is driven through `buildCommentItems`. */
+   * null. Rings its card and positions the floating counter; the ring itself is driven
+   * through `buildCommentItems`. */
   activeCommentId: string | null;
+  /** The focused comment this surface still owes a scroll to, or null. Separate from
+   * `activeCommentId` because it survives the surface being unmounted — which is how
+   * opening a finding from the tour doc, the commit that mounts this view, scrolls at
+   * all. `useDiffScroll` consumes it through `onCommentScrolled`. */
+  pendingCommentScroll: string | null;
   /** Files rendered as a header band with the body folded away — the reader's own
    * disclosures, plus the fold that rides on marking a file read. */
   collapsedPaths: ReadonlySet<string>;
@@ -60,6 +65,8 @@ type DiffViewProps = {
    * floating navigator's prev/next and close. */
   onStepComment: (direction: 1 | -1) => void;
   onClearActiveComment: () => void;
+  /** Clears the pending scroll once this surface has served it. */
+  onCommentScrolled: (commentId: string) => void;
 };
 
 /** The Pierre diff surface, untouched: themes, gutters, and bands come from
@@ -85,6 +92,7 @@ export function DiffView({
   restoreScrollTop,
   activeLayerId,
   activeCommentId,
+  pendingCommentScroll,
   collapsedPaths,
   onSetFileCollapsed,
   loadDiffFiles,
@@ -94,6 +102,7 @@ export function DiffView({
   onDiscardComment,
   onStepComment,
   onClearActiveComment,
+  onCommentScrolled,
 }: DiffViewProps): ReactElement {
   const handleRef = useRef<CodeViewHandle<CommentSlot>>(null);
   const { editingId, draft, openDraft, renderAnnotation } = useCommentSlots({
@@ -154,10 +163,11 @@ export function DiffView({
   const { scrollToComment, onScroll } = useDiffScroll(handleRef, {
     restoreScrollTop,
     selectedFilePath,
-    activeCommentId,
+    pendingCommentScroll,
     activeLayerId,
     entries,
     onScrollTop,
+    onCommentScrolled,
   });
 
   // The diff is the largest thing on screen and, until this, the only region of the app a

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, type RefObjec
 import type { CodeViewHandle } from "@pierre/diffs/react";
 import type { CommentSlot } from "../../../../shared/diff/comment-annotations";
 import type { CommentNavEntry } from "./comment-navigation";
+import { assertNever } from "../../../../shared/assert";
 import { capturesScroll } from "../../../../shared/layers";
 import { createScrollCapture, planScrollRestore } from "@/lib/scroll";
 
@@ -10,13 +11,23 @@ import { createScrollCapture, planScrollRestore } from "@/lib/scroll";
 // want the viewport in the same commit — a focused comment also selects its file; an
 // activation carries both a persisted position and a focused file — and each scroll the
 // reader did not ask for is a lost place in a long diff. So exactly one wins, and the
-// ranking is: focus beats file-jump beats the activation restore.
+// ranking is: focus beats file-jump beats the activation restore. `planScrollRestore`
+// states that ranking for the mount, where all three can be true at once.
 //
 // Two mechanisms enforce it, and both are deliberate. Declaration order settles which
-// effect claims a commit first (React runs them in the order they are written). And every
-// guard is a value-compare against a mount-seeded ref rather than a fire-once flag: the
-// mount is then inert everywhere except the restore, and a StrictMode remount — which
-// replays with the same values — stays inert too, where a boolean would flip and scroll.
+// effect claims a commit first (React runs them in the order they are written). And each
+// guard is either a value-compare against a mount-seeded ref or a consumed request, never
+// a fire-once flag: the mount is then inert everywhere except the restore, and a
+// StrictMode remount — which replays the same values, and re-serves an already-consumed
+// request as the same idempotent scroll — stays inert too, where a boolean would flip and
+// scroll.
+//
+// The two guards are not interchangeable. A ref-compare answers "did this change while I
+// was mounted", which is unanswerable about the commit that mounts you — and focusing a
+// comment from the tour doc is exactly that commit, since the doc replaces the diff pane
+// (App.tsx). So the focus scroll is a request the store holds (`pendingCommentScroll`)
+// and this hook consumes, and only the two that are genuinely about *change while
+// mounted* — the file jump and the layer reset — compare against a ref.
 
 export type DiffScrollOptions = {
   /** The session's persisted scroll position, applied once on mount. Read
@@ -24,8 +35,9 @@ export type DiffScrollOptions = {
    * activation, and later updates to it are this hook's own captures. */
   restoreScrollTop: number;
   selectedFilePath: string | null;
-  /** The comment the reader is focused on (via `n`/`p` or the sidebar list), or null. */
-  activeCommentId: string | null;
+  /** The focused comment this surface still owes a scroll to (via `n`/`p` or the sidebar
+   * list), or null when there is none outstanding. Consumed, not watched — see above. */
+  pendingCommentScroll: string | null;
   /** The soloed layer, or null for the full diff. Its *change* resets the diff to the top. */
   activeLayerId: string | null;
   /** Every comment resolved against the loaded diff, in reading order. Passed in rather
@@ -35,6 +47,8 @@ export type DiffScrollOptions = {
   entries: readonly CommentNavEntry[];
   /** Reports a debounced scroll position back to the owning session's slice. */
   onScrollTop: (scrollTop: number) => void;
+  /** Reports that the pending comment's scroll has been served, clearing the request. */
+  onCommentScrolled: (commentId: string) => void;
 };
 
 export type DiffScroll = {
@@ -50,31 +64,49 @@ export function useDiffScroll(
   {
     restoreScrollTop,
     selectedFilePath,
-    activeCommentId,
+    pendingCommentScroll,
     activeLayerId,
     entries,
     onScrollTop,
+    onCommentScrolled,
   }: DiffScrollOptions,
 ): DiffScroll {
   // The one scroll owner on activation. The empty deps make this a mount-once
   // snapshot of the persisted position — a mount IS an activation (the view is
   // keyed per session), and later changes to those props are this view's own
-  // captures, not new activations. A recorded position wins over the file-jump, so
-  // only one scrollTo ever fires. Instant — a tab switch is a keyboard/click
-  // action, never animated. Position restore stays correct through virtualized
-  // measurement: CodeView re-anchors the settled scroll as item heights resolve,
-  // so no second call is needed.
+  // captures, not new activations. A recorded position wins over the file-jump, and an
+  // outstanding comment jump over both, so only one scrollTo ever fires. Instant — a tab
+  // switch is a keyboard/click action, never animated. Position restore stays correct
+  // through virtualized measurement: CodeView re-anchors the settled scroll as item
+  // heights resolve, so no second call is needed.
   // oxlint-disable react-hooks/exhaustive-deps -- the empty deps are the design stated above: a mount-once activation snapshot, not a subscription to the props it reads
   useLayoutEffect(() => {
     const handle = handleRef.current;
     if (handle === null) {
       return;
     }
-    const restore = planScrollRestore(restoreScrollTop, selectedFilePath);
-    if (restore.kind === "position") {
-      handle.scrollTo({ type: "position", position: restore.position, behavior: "instant" });
-    } else if (restore.kind === "item") {
-      handle.scrollTo({ type: "item", id: restore.filePath, align: "start", behavior: "instant" });
+    const restore = planScrollRestore(restoreScrollTop, selectedFilePath, pendingCommentScroll);
+    switch (restore.kind) {
+      case "comment":
+        // The focus effect below owns it — it runs in this same commit and clears the
+        // request. Naming the arm here is what keeps the restore from *also* firing and
+        // stranding the reader at the top of the comment's file.
+        return;
+      case "position":
+        handle.scrollTo({ type: "position", position: restore.position, behavior: "instant" });
+        return;
+      case "item":
+        handle.scrollTo({
+          type: "item",
+          id: restore.filePath,
+          align: "start",
+          behavior: "instant",
+        });
+        return;
+      case "none":
+        return;
+      default:
+        return assertNever(restore);
     }
   }, []);
   // oxlint-enable react-hooks/exhaustive-deps
@@ -121,25 +153,27 @@ export function useDiffScroll(
     [handleRef],
   );
 
-  // Scroll to the focused comment (a sidebar click or an `n`/`p` step). Declared
-  // BEFORE the file-jump effect below and seeding `lastJumpedPath`: `focusComment`
-  // sets `activeCommentId` and `selectedFilePath` in one store write, so both change
-  // in the same commit — running first and claiming the jump makes the file-jump
-  // effect a no-op, so exactly one precise scroll fires (line/centre, not
-  // file/start). Value-compare-seeded like the jumps, so a mount / StrictMode replay
-  // is inert (the persisted-scroll restore owns the mount; the ring still paints from
-  // `items`, so a tab bounce keeps the highlight without a competing scroll). An id
-  // with no host item here (soloed out, unplaceable, or discarded) is a no-op.
-  const lastFocusedCommentId = useRef(activeCommentId);
-  useEffect(() => {
-    if (activeCommentId === lastFocusedCommentId.current) {
+  // Serve the reader's outstanding jump to a comment (a sidebar click or an `n`/`p`
+  // step). Declared BEFORE the file-jump effect below and seeding `lastJumpedPath`:
+  // `focusComment` sets the request and `selectedFilePath` in one store write, so both
+  // land in the same commit — running first and claiming the jump makes the file-jump
+  // effect a no-op, so exactly one precise scroll fires (line/centre, not file/start).
+  //
+  // A layout effect, like the restore it outranks: after paint the reader would see the
+  // frame this is correcting. And a *request*, not a compare, which is the whole fix —
+  // this fires whether the focus changed under a mounted surface or the click is what
+  // mounted the surface (from the tour doc), and a plain remount with nothing outstanding
+  // scrolls nothing, so a tab bounce keeps the ring without losing the reader's place.
+  //
+  // Consumed even when nothing hosts the comment (soloed out, unplaceable, discarded):
+  // this only runs with the diff loaded, so an entry that is absent now is absent for
+  // good, and leaving the request standing would fire it at whatever mounts next.
+  useLayoutEffect(() => {
+    if (pendingCommentScroll === null) {
       return;
     }
-    lastFocusedCommentId.current = activeCommentId;
-    if (activeCommentId === null) {
-      return;
-    }
-    const entry = entries.find((candidate) => candidate.comment.id === activeCommentId);
+    onCommentScrolled(pendingCommentScroll);
+    const entry = entries.find((candidate) => candidate.comment.id === pendingCommentScroll);
     if (entry === undefined) {
       return;
     }
@@ -147,7 +181,7 @@ export function useDiffScroll(
     // The host path, matching what `focusComment` put in `selectedFilePath`.
     lastJumpedPath.current = entry.path;
     scrollToComment(entry);
-  }, [activeCommentId, entries, scrollToComment]);
+  }, [pendingCommentScroll, entries, scrollToComment, onCommentScrolled]);
 
   useEffect(() => {
     if (selectedFilePath === lastJumpedPath.current) {

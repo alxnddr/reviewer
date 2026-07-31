@@ -44,6 +44,7 @@ export function createSessionSlice(
     activeLayerId: null,
     lastChapterId: null,
     activeCommentId: null,
+    pendingCommentScroll: null,
     // A slice with no progress behind it has read nothing, and has no artifact to have read
     // it against.
     readFiles: NO_READ_FILES,

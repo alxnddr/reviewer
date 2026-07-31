@@ -130,6 +130,12 @@ export function DiffScreen(): ReactElement | null {
   const activeCommentId = useReviewStore(
     (state) => selectActiveSlice(state)?.activeCommentId ?? null,
   );
+  // The focus's outstanding scroll, read apart from the focus itself: the surface below
+  // mounts on the very commit a click in the tour doc focuses a comment, so "which comment
+  // is focused" cannot tell it whether to move (see `pendingCommentScroll`).
+  const pendingCommentScroll = useReviewStore(
+    (state) => selectActiveSlice(state)?.pendingCommentScroll ?? null,
+  );
   // Solo: the active layer restricts the diff to its files across both the code view and
   // the tree. One derivation for the whole app (`lib/soloed-diff.ts`), read here as a
   // subscription — the rail reads the same object, so there is no second definition of the
@@ -166,6 +172,7 @@ export function DiffScreen(): ReactElement | null {
   const discardComment = useReviewStore((state) => state.discardComment);
   const stepComment = useReviewStore((state) => state.stepComment);
   const clearActiveComment = useReviewStore((state) => state.clearActiveComment);
+  const commentScrolled = useReviewStore((state) => state.commentScrolled);
   const setActiveLayer = useReviewStore((state) => state.setActiveLayer);
   // The chapter band's own two verbs, resolved here rather than there: the band is a
   // presentational band like `DiffView` beside it, and this screen is what reads the store
@@ -186,6 +193,7 @@ export function DiffScreen(): ReactElement | null {
   const onDiscardComment = useSessionBound(discardComment, activeSessionId);
   const onStepComment = useSessionBound(stepComment, activeSessionId);
   const onClearActiveComment = useSessionBound(clearActiveComment, activeSessionId);
+  const onCommentScrolled = useSessionBound(commentScrolled, activeSessionId);
   const onSetFileCollapsed = useSessionBound(setFileCollapsed, activeSessionId);
   const onResetReviewSubrange = useSessionBound(resetReviewSubrange, activeSessionId);
 
@@ -308,6 +316,7 @@ export function DiffScreen(): ReactElement | null {
           restoreScrollTop={scrollTop}
           activeLayerId={activeLayerId}
           activeCommentId={activeCommentId}
+          pendingCommentScroll={pendingCommentScroll}
           collapsedPaths={collapsedPaths}
           onSetFileCollapsed={onSetFileCollapsed}
           loadDiffFiles={loadDiffFiles}
@@ -317,6 +326,7 @@ export function DiffScreen(): ReactElement | null {
           onDiscardComment={onDiscardComment}
           onStepComment={onStepComment}
           onClearActiveComment={onClearActiveComment}
+          onCommentScrolled={onCommentScrolled}
         />
       );
       // The active layer's chapter intro reads its description at width. In

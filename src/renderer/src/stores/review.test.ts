@@ -2394,6 +2394,49 @@ describe("useReviewStore comment navigation", () => {
     expect(active().selectedFilePath).toBe("greet.ts");
   });
 
+  it("asks the surface to scroll, and only the surface's own report clears the request", () => {
+    seedComments([C_ADDED, C_GREET, C_NOTES]);
+    store.getState().focusComment(ID_B);
+    // The request is the half that survives the diff pane not being mounted: clicking a
+    // finding in the tour doc focuses it in the very commit the pane mounts, where "did
+    // the focus change" has nothing to compare against (`lib/diff/use-diff-scroll.ts`).
+    expect(active().pendingCommentScroll).toBe(ID_B);
+
+    // A report naming an older request — the reader focused again while the surface was
+    // scrolling — leaves the newer one standing rather than dropping their jump.
+    store.getState().commentScrolled(ID_A);
+    expect(active().pendingCommentScroll).toBe(ID_B);
+
+    store.getState().commentScrolled(ID_B);
+    expect(active().pendingCommentScroll).toBeNull();
+    // Served, not dismissed: the ring and the counter still read the focus.
+    expect(active().activeCommentId).toBe(ID_B);
+
+    // Re-focusing what is already focused is a fresh request, so the panel's row
+    // re-centres a comment the reader has scrolled away from.
+    store.getState().focusComment(ID_B);
+    expect(active().pendingCommentScroll).toBe(ID_B);
+  });
+
+  it("never leaves a scroll owed to a comment nothing is focused on", () => {
+    seedComments([C_ADDED, C_GREET, C_NOTES]);
+    // Every way the focus can be dropped, since a request left standing past its focus
+    // would fire at whatever mounts next — the point of writing both through
+    // `commentFocus` rather than by hand.
+    const dismissals = [
+      () => store.getState().clearActiveComment(),
+      () => store.getState().selectFile("notes.txt"),
+      () => store.getState().selectAdjacentFile(1),
+      () => store.getState().discardComment(ID_B),
+    ];
+    for (const dismiss of dismissals) {
+      store.getState().focusComment(ID_B);
+      dismiss();
+      expect(active().activeCommentId).toBeNull();
+      expect(active().pendingCommentScroll).toBeNull();
+    }
+  });
+
   it("focuses a comment authored before a rename onto the file's current path", () => {
     // MULTI_STATUS_PATCH renames oldname.txt → newname.txt. The comment still names the
     // old path, but the file focus and the unfold are keyed on the path the loaded diff
@@ -2489,6 +2532,7 @@ describe("useReviewStore comment navigation", () => {
     store.getState().flushWriteBacks();
     const persisted = vi.mocked(bridge.updateSession).mock.calls.at(-1)?.[0];
     expect(persisted).not.toHaveProperty("activeCommentId");
+    expect(persisted).not.toHaveProperty("pendingCommentScroll");
     // The file focus half of focusComment does persist.
     expect(persisted?.selectedFilePath).toBe("added.txt");
   });

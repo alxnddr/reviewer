@@ -4,7 +4,7 @@ import type { PatchFile } from "../../../../shared/diff/patch";
 import { findLayer, soloFiles } from "../../../../shared/layers";
 import type { SessionId } from "../../../../shared/session";
 import { isFileRead, markFilesRead, withCollapsed } from "../../lib/read-progress";
-import { setSlice, sliceSolo, withSlice, type Getter, type Setter } from "./slice";
+import { commentFocus, setSlice, sliceSolo, withSlice, type Getter, type Setter } from "./slice";
 import type { ReviewState } from "./state";
 
 // Where the reader is in the diff, and how much of it they have been through: the focused
@@ -87,7 +87,7 @@ export const createProgressSlice: StateCreator<ReviewState, [], [], ProgressSlic
       // picked file is a request to see the diff (the doc's own file chips route here).
       setSlice(set, get, id, {
         selectedFilePath: path,
-        activeCommentId: null,
+        ...commentFocus(null),
         overviewOpen: false,
       });
       get().scheduleSessionWriteBack(id);
@@ -119,7 +119,7 @@ export const createProgressSlice: StateCreator<ReviewState, [], [], ProgressSlic
         // j/k is plain file navigation — it dismisses the comment step-through.
         setSlice(set, get, id, {
           selectedFilePath: next.path,
-          activeCommentId: null,
+          ...commentFocus(null),
           overviewOpen: false,
         });
         get().scheduleSessionWriteBack(id);

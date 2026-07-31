@@ -8,7 +8,7 @@ import {
   orderedComments,
 } from "../../lib/diff/comment-navigation";
 import { withCollapsed } from "../../lib/read-progress";
-import { setSlice, sliceSolo, withSlice } from "./slice";
+import { commentFocus, setSlice, sliceSolo, withSlice } from "./slice";
 import type { ReviewState } from "./state";
 
 // The reader's way through an authored review: the tour doc as stop zero, the layer order
@@ -37,9 +37,11 @@ export type WalkthroughSlice = {
    * the doc; stepping forward from it enters the first layer. Snappy and additive,
    * exactly like `setActiveLayer` (no write-back, no session mutation). */
   stepLayer: (direction: 1 | -1, sessionId?: SessionId) => void;
-  /** Focus a comment by id: mark it active (drives the scroll-to + card ring + the
-   * counter) and move the file focus onto its file so the tree and j/k stay in
-   * sync. Clears an active solo that would hide the target so its annotation is
+  /** Focus a comment by id: mark it active (the card ring + the counter), ask the diff
+   * surface to scroll to it, and move the file focus onto its file so the tree and j/k
+   * stay in sync. The scroll is a *request* the surface consumes rather than a change it
+   * watches, so it is honoured even when the click is what mounts the surface — the
+   * click-from-the-tour-doc case, which the watch could not see (`pendingCommentScroll`). Clears an active solo that would hide the target so its annotation is
    * actually mounted. The active id is ephemeral (no write-back); the file focus
    * persists like any other navigation. */
   focusComment: (commentId: string, sessionId?: SessionId) => void;
@@ -49,6 +51,10 @@ export type WalkthroughSlice = {
   stepComment: (direction: 1 | -1, sessionId?: SessionId) => void;
   /** Drop the focused comment back to none — dismisses the counter and the ring. */
   clearActiveComment: (sessionId?: SessionId) => void;
+  /** The diff surface reporting that it has put the focused comment under the reader's
+   * eye: clears the scroll request and leaves the focus (ring, counter) standing. The one
+   * writer of `pendingCommentScroll` on its own — see `commentFocus`. */
+  commentScrolled: (commentId: string, sessionId?: SessionId) => void;
 };
 
 export const createWalkthroughSlice: StateCreator<ReviewState, [], [], WalkthroughSlice> = (
@@ -157,7 +163,7 @@ export const createWalkthroughSlice: StateCreator<ReviewState, [], [], Walkthrou
       // The active id is ephemeral (no write-back); the file focus moves with it so
       // the tree and j/k stay on the comment's file — that half persists.
       setSlice(set, get, id, {
-        activeCommentId: commentId,
+        ...commentFocus(commentId),
         selectedFilePath: hostPath,
         ...(collapsedFiles === slice.collapsedFiles ? {} : { collapsedFiles }),
         // Stepping to a comment is diff navigation, so it leaves the doc — the card is
@@ -201,6 +207,18 @@ export const createWalkthroughSlice: StateCreator<ReviewState, [], [], Walkthrou
   },
 
   clearActiveComment: (sessionId) => {
-    withSlice(get, sessionId, (_slice, id) => setSlice(set, get, id, { activeCommentId: null }));
+    withSlice(get, sessionId, (_slice, id) => setSlice(set, get, id, commentFocus(null)));
+  },
+
+  commentScrolled: (commentId, sessionId) => {
+    withSlice(get, sessionId, (slice, id) => {
+      // Only the request it actually served: a focus that landed between the surface's
+      // scroll and this report is a newer request, and clearing it would drop that
+      // reader's jump on the floor.
+      if (slice.pendingCommentScroll !== commentId) {
+        return;
+      }
+      setSlice(set, get, id, { pendingCommentScroll: null });
+    });
   },
 });

@@ -7,7 +7,7 @@ import {
   promptCommentsFrom,
   type PromptComment,
 } from "../../lib/review-export";
-import { setSlice, withSlice, type SessionSlice } from "./slice";
+import { commentFocus, setSlice, withSlice, type SessionSlice } from "./slice";
 import type { ReviewState } from "./state";
 
 // The comment layer: the three edits a reviewer makes to it, and the three ways a comment
@@ -144,7 +144,7 @@ export const createCurationSlice: StateCreator<ReviewState, [], [], CurationSlic
         // counter would read a phantom position and the ring would target nothing.
         setSlice(set, get, id, {
           comments: remaining,
-          ...(slice.activeCommentId === commentId ? { activeCommentId: null } : {}),
+          ...(slice.activeCommentId === commentId ? commentFocus(null) : {}),
         });
         get().scheduleSessionWriteBack(id);
       });

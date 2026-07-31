@@ -8,8 +8,11 @@ import { useDiffScroll, type DiffScroll, type DiffScrollOptions } from "./use-di
 
 // What is worth testing about this hook is the one thing a pure function cannot hold: which
 // of five effects wins a commit that two of them want. That ranking is made of React itself
-// — declaration order and mount-seeded refs — so the test drives the real hook rather than a
-// re-derivation of its rules.
+// — declaration order, mount-seeded refs, and one request the hook consumes — so the test
+// drives the real hook rather than a re-derivation of its rules. The consumed request is
+// here because a ref-compare cannot see the commit that mounts it, which is the commit a
+// click in the tour doc makes; `commit()` below models the store clearing it by passing
+// `pendingCommentScroll: null` on the next commit, exactly as `commentScrolled` does.
 //
 // The renderer's suites run in a plain node environment (no DOM, so no `react-dom/client`
 // and no render harness to borrow), but a hook is only a sequence of dispatcher calls: give
@@ -118,12 +121,14 @@ const INSTANT = { behavior: "instant" } as const;
 
 let targets: CodeViewScrollTarget[] = [];
 let onScrollTop = vi.fn<(scrollTop: number) => void>();
+let onCommentScrolled = vi.fn<(commentId: string) => void>();
 let handleRef: { current: CodeViewHandle<CommentSlot> | null };
 
 beforeEach(() => {
   react.unmount();
   targets = [];
   onScrollTop = vi.fn<(scrollTop: number) => void>();
+  onCommentScrolled = vi.fn<(commentId: string) => void>();
   handleRef = {
     // Only the scroll half of the handle is reachable from this hook; the rest of
     // CodeView's imperative API belongs to the search and gutter paths.
@@ -157,10 +162,11 @@ function commit(overrides: Partial<DiffScrollOptions> = {}): DiffScroll {
     value = useDiffScroll(handleRef, {
       restoreScrollTop: 0,
       selectedFilePath: null,
-      activeCommentId: null,
+      pendingCommentScroll: null,
       activeLayerId: null,
       entries: ENTRIES,
       onScrollTop,
+      onCommentScrolled,
       ...overrides,
     });
   });
@@ -172,24 +178,50 @@ function commit(overrides: Partial<DiffScrollOptions> = {}): DiffScroll {
 
 describe("useDiffScroll", () => {
   it("restores the persisted position on mount, and nothing else scrolls", () => {
-    // A focused file and a focused comment are both live on this activation; the
-    // recorded position outranks both, and their guards are seeded with it.
-    commit({ restoreScrollTop: 320, selectedFilePath: "b.ts", activeCommentId: "c2" });
+    // A focused file is live on this activation too; the recorded position outranks it,
+    // and its guard is seeded with it.
+    commit({ restoreScrollTop: 320, selectedFilePath: "b.ts" });
 
     expect(targets).toEqual([{ type: "position", position: 320, ...INSTANT }]);
   });
 
+  it("serves a comment focused before this surface existed — the tour doc's click", () => {
+    // The regression this hook's request half exists for: the tour doc replaces the diff
+    // pane, so opening a finding from it focuses the comment in the very commit that
+    // mounts the surface. Nothing changed *while* mounted, so the compare-based guards
+    // see nothing — and the reader used to land on the recorded position with the card
+    // nowhere on screen. The outstanding request outranks that restore and is consumed.
+    commit({ restoreScrollTop: 320, selectedFilePath: "b.ts", pendingCommentScroll: "c2" });
+
+    expect(targets).toEqual([
+      { type: "line", id: "b.ts", lineNumber: 40, side: "additions", align: "center", ...INSTANT },
+    ]);
+    expect(onCommentScrolled.mock.calls).toEqual([["c2"]]);
+  });
+
+  it("keeps the reader's place on a remount with nothing outstanding — the tab bounce", () => {
+    commit({ selectedFilePath: "b.ts", pendingCommentScroll: "c2" });
+    react.unmount();
+    targets = [];
+    // Back from another tab: the focus is still on c2 (the ring and the counter still
+    // read it), but its scroll was served before the switch, so the surface restores
+    // where the reader actually left off rather than yanking them back to the card.
+    commit({ restoreScrollTop: 900, selectedFilePath: "b.ts", pendingCommentScroll: null });
+
+    expect(targets).toEqual([{ type: "position", position: 900, ...INSTANT }]);
+  });
+
   it("jumps to the focused file when no position was recorded", () => {
-    commit({ selectedFilePath: "b.ts", activeCommentId: "c2" });
+    commit({ selectedFilePath: "b.ts" });
 
     expect(targets).toEqual([{ type: "item", id: "b.ts", align: "start", ...INSTANT }]);
   });
 
   it("re-committing the mount's own values scrolls nothing", () => {
-    commit({ restoreScrollTop: 320, selectedFilePath: "b.ts", activeCommentId: "c2" });
+    commit({ restoreScrollTop: 320, selectedFilePath: "b.ts" });
     targets = [];
     // The value-compare, not a fire-once flag: a StrictMode replay looks exactly like this.
-    commit({ restoreScrollTop: 320, selectedFilePath: "b.ts", activeCommentId: "c2" });
+    commit({ restoreScrollTop: 320, selectedFilePath: "b.ts" });
 
     expect(targets).toEqual([]);
   });
@@ -197,20 +229,21 @@ describe("useDiffScroll", () => {
   it("focuses a comment's line rather than jumping to its file", () => {
     commit();
     targets = [];
-    // `focusComment` writes the id and the file in one store write, so both props
+    // `focusComment` writes the request and the file in one store write, so both props
     // change in the same commit. Exactly one scroll fires, and it is the precise one.
-    commit({ activeCommentId: "c2", selectedFilePath: "b.ts" });
+    commit({ pendingCommentScroll: "c2", selectedFilePath: "b.ts" });
 
     expect(targets).toEqual([
       { type: "line", id: "b.ts", lineNumber: 40, side: "additions", align: "center", ...INSTANT },
     ]);
+    expect(onCommentScrolled.mock.calls).toEqual([["c2"]]);
   });
 
   it("brings an outdated comment's file to the top — it has no line to centre", () => {
     commit();
     targets = [];
     commit({
-      activeCommentId: "c3",
+      pendingCommentScroll: "c3",
       selectedFilePath: "c.ts",
       entries: [...ENTRIES, outdated("c3", "c.ts")],
     });
@@ -234,9 +267,12 @@ describe("useDiffScroll", () => {
     targets = [];
     // Soloed out, unplaceable, or discarded between the write and this commit: the
     // focus effect finds nothing, so it claims nothing and the file jump still fires.
-    commit({ activeCommentId: "gone", selectedFilePath: "b.ts" });
+    // The request is consumed anyway — nothing will ever host it, and left standing it
+    // would fire at whatever mounts next.
+    commit({ pendingCommentScroll: "gone", selectedFilePath: "b.ts" });
 
     expect(targets).toEqual([{ type: "item", id: "b.ts", align: "start", ...INSTANT }]);
+    expect(onCommentScrolled.mock.calls).toEqual([["gone"]]);
   });
 
   it("resets to the top when the soloed layer changes", () => {
@@ -273,11 +309,11 @@ describe("useDiffScroll", () => {
     expect(onScrollTop).not.toHaveBeenCalled();
   });
 
-  it("re-centres on demand without disturbing the focus guard", () => {
-    const scroll = commit({ activeCommentId: "c1" });
+  it("re-centres on demand without a new request", () => {
+    const scroll = commit({ pendingCommentScroll: "c1" });
     targets = [];
     // The floating counter's re-centre: pure viewport, so re-running it after the
-    // reader has scrolled off must not need the focused id to change first.
+    // reader has scrolled off must not need a fresh focus first.
     scroll.scrollToComment(FIRST);
     scroll.scrollToComment(FIRST);
 

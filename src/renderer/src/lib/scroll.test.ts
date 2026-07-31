@@ -7,24 +7,31 @@ import {
 } from "./scroll";
 
 describe("planScrollRestore", () => {
+  it("serves an outstanding comment jump over everything below it", () => {
+    // The mount that IS the click: opening a finding from the tour doc mounts the diff
+    // pane, and the reader asked for that comment, not for wherever they last were.
+    const plan = planScrollRestore(1200, "src/app.ts", "c7");
+    expect(plan).toEqual<ScrollRestore>({ kind: "comment", commentId: "c7" });
+  });
+
   it("restores a recorded position, and it wins over a focused file (one owner)", () => {
-    const plan = planScrollRestore(1200, "src/app.ts");
+    const plan = planScrollRestore(1200, "src/app.ts", null);
     // Exactly one owner: position, never also the file jump.
     expect(plan).toEqual<ScrollRestore>({ kind: "position", position: 1200 });
   });
 
   it("jumps to the focused file when no position is recorded", () => {
-    const plan = planScrollRestore(0, "src/app.ts");
+    const plan = planScrollRestore(0, "src/app.ts", null);
     expect(plan).toEqual<ScrollRestore>({ kind: "item", filePath: "src/app.ts" });
   });
 
   it("issues nothing — starts at the top — with neither a position nor a file", () => {
-    expect(planScrollRestore(0, null)).toEqual<ScrollRestore>({ kind: "none" });
+    expect(planScrollRestore(0, null, null)).toEqual<ScrollRestore>({ kind: "none" });
   });
 
   it("never emits a position restore for a zero scrollTop (absence, not pixel 0)", () => {
-    expect(planScrollRestore(0, null).kind).not.toBe("position");
-    expect(planScrollRestore(0, "src/app.ts").kind).not.toBe("position");
+    expect(planScrollRestore(0, null, null).kind).not.toBe("position");
+    expect(planScrollRestore(0, "src/app.ts", null).kind).not.toBe("position");
   });
 });
 
