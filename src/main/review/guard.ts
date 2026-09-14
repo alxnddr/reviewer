@@ -1,6 +1,6 @@
 import { readFile, realpath, stat } from "node:fs/promises";
 import { resolve } from "node:path";
-import { REVIEW_EXTENSION } from "../../shared/node/reviews-dir";
+import { REVIEW_EXTENSION, REVIEW_REPO_SWITCH } from "../../shared/node/reviews-dir";
 import { importReview, type ImportedReview, type ReviewStamp } from "../../shared/review";
 import { errnoCode } from "../../shared/errors";
 import type { ReviewOpenFailure } from "../../shared/review-ipc";
@@ -73,21 +73,48 @@ export async function importReviewFromPath(
   return { ok: true, review: imported.review, path: real };
 }
 
-/** The CLI / `open-file` argv → path step, pure so the resolution rule is tested
- * without a process. Scans from the end (the artifact is the trailing arg on both
+/** What a launch asked the app to open: the artifact, and the local checkout to read it against
+ * when the launcher named one (`rvw open --repo`). Both absolute; `repo` is still only a
+ * candidate — the open path validates it exactly like the path an artifact names. */
+export type ReviewOpenRequest = { path: string; repo: string | null };
+
+/** The CLI / `open-file` argv → request step, pure so the resolution rule is tested
+ * without a process. Scans from the end for the artifact (the trailing arg on both
  * the packaged `Reviewer x.reviewer.json` and the dev `electron . x.reviewer.json`
  * forms) and resolves a relative arg against the launch cwd (`second-instance`
- * carries `workingDirectory`; a first launch passes `process.cwd()`). Returns
- * null when no arg names a review — the focus-only fallback. */
-export function reviewPathFromArgv(
+ * carries `workingDirectory`; a first launch passes `process.cwd()`).
+ *
+ * The checkout is read from `--repo=<path>` anywhere in argv — the one token `rvw open` writes,
+ * wherever Chromium left it (see `REVIEW_REPO_SWITCH`) — or from a `--repo <path>` pair a person
+ * typed, whose value is never taken to be a switch or the artifact itself. The last one wins,
+ * resolved against the same cwd. Returns null when no arg names a review — the focus-only
+ * fallback, where a `--repo` has nothing to apply to. */
+export function reviewOpenFromArgv(
   argv: readonly string[],
   workingDirectory: string,
-): string | null {
-  for (let index = argv.length - 1; index >= 0; index--) {
+): ReviewOpenRequest | null {
+  let artifact: string | undefined;
+  for (let index = argv.length - 1; index >= 0 && artifact === undefined; index--) {
     const arg = argv[index];
     if (arg !== undefined && arg.endsWith(REVIEW_EXTENSION)) {
-      return resolve(workingDirectory, arg);
+      artifact = arg;
     }
   }
-  return null;
+  if (artifact === undefined) {
+    return null;
+  }
+
+  const joined = `${REVIEW_REPO_SWITCH}=`;
+  let repo: string | null = null;
+  for (const [index, arg] of argv.entries()) {
+    if (arg.startsWith(joined) && arg.length > joined.length) {
+      repo = resolve(workingDirectory, arg.slice(joined.length));
+    } else if (arg === REVIEW_REPO_SWITCH) {
+      const next = argv[index + 1];
+      if (next !== undefined && !next.startsWith("-") && !next.endsWith(REVIEW_EXTENSION)) {
+        repo = resolve(workingDirectory, next);
+      }
+    }
+  }
+  return { path: resolve(workingDirectory, artifact), repo };
 }

@@ -1,7 +1,7 @@
 import type { StateCreator } from "zustand";
 import type { SessionId, SessionSnapshot } from "../../../../shared/session";
 import { deriveSession } from "./effects";
-import { restoredSlice } from "./slice-factory";
+import { reseatedSlice, restoredSlice } from "./slice-factory";
 import type { Getter, SessionSlice, Setter } from "./slice";
 import type { ReviewState } from "./state";
 import { claimStartTabSlot, reconcileTabs } from "./tab-strip";
@@ -141,11 +141,14 @@ export const createBootSlice: StateCreator<ReviewState, [], [], BootSlice> = (se
         return;
       }
       // Rebuild from main's order (new opens append), keeping every already-live
-      // slice by identity so a re-list never re-derives or wipes an open session.
+      // slice by identity so a re-list never re-derives or wipes an open session — unless main
+      // moved its pin, which only main can do (see `reseatedSlice`).
       const existing = get().sessions;
       const sessions: Record<SessionId, SessionSlice> = {};
       for (const session of snapshot.sessions) {
-        sessions[session.id] = existing[session.id] ?? restoredSlice(session);
+        const live = existing[session.id];
+        sessions[session.id] =
+          live === undefined ? restoredSlice(session) : reseatedSlice(live, session);
       }
       const current = get().activeSessionId;
       const nextActive =

@@ -1,4 +1,5 @@
 import type { Session } from "../../shared/session";
+import type { ReviewOpenRequest } from "./guard";
 
 // The delivery half of the three open entries: CLI/`open-file` have no pending
 // invoke, so a path is imported in main and the result *revealed* —
@@ -13,7 +14,7 @@ import type { Session } from "../../shared/session";
 
 export type ReviewOpenQueueDeps = {
   /** Guard + create the session (or null on a bad path); side effects on the store. */
-  importSession: (absolutePath: string) => Promise<Session | null>;
+  importSession: (request: ReviewOpenRequest) => Promise<Session | null>;
   hasWindow: () => boolean;
   createWindow: () => void;
   /** Bring the existing window forward (restore if minimized). */
@@ -27,19 +28,21 @@ export type ReviewOpenQueueDeps = {
 };
 
 export type ReviewOpenQueue = {
-  /** Queue a path; drains immediately once ready, else waits for `markReady`. */
-  enqueue: (absolutePath: string) => void;
+  /** Queue an open — the artifact, and the checkout a launch named for it, carried whole so
+   * the pairing cannot come apart in the queue; drains immediately once ready, else waits for
+   * `markReady`. */
+  enqueue: (request: ReviewOpenRequest) => void;
   /** The window + store now exist: drain whatever queued before ready. */
   markReady: () => void;
 };
 
 export function createReviewOpenQueue(deps: ReviewOpenQueueDeps): ReviewOpenQueue {
-  const pending: string[] = [];
+  const pending: ReviewOpenRequest[] = [];
   let ready = false;
   let draining = false;
 
-  async function reveal(absolutePath: string): Promise<void> {
-    const session = await deps.importSession(absolutePath);
+  async function reveal(request: ReviewOpenRequest): Promise<void> {
+    const session = await deps.importSession(request);
     if (!deps.hasWindow()) {
       // No window (macOS keeps the app alive with zero): create one; its hydrate
       // lists the session main just made active.
@@ -74,8 +77,8 @@ export function createReviewOpenQueue(deps: ReviewOpenQueueDeps): ReviewOpenQueu
   }
 
   return {
-    enqueue: (absolutePath) => {
-      pending.push(absolutePath);
+    enqueue: (request) => {
+      pending.push(request);
       if (ready) {
         void drain();
       }

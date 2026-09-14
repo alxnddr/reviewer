@@ -21,6 +21,19 @@ describe("launchCommandFor", () => {
     });
   });
 
+  it("carries a local checkout as one `--repo=` token after the artifact", () => {
+    // One token, never a `--repo <path>` pair: the app's command line is Chromium's to reorder,
+    // and a pair only means something while its halves stay adjacent.
+    expect(launchCommandFor("darwin", "/abs/x.reviewer.json", "/src/app")?.args).toEqual([
+      "-n",
+      "-b",
+      APP_BUNDLE_ID,
+      "--args",
+      "/abs/x.reviewer.json",
+      "--repo=/src/app",
+    ]);
+  });
+
   it("resolves the launcher absolutely so a PATH shim cannot intercept the open", () => {
     const command = launchCommandFor("darwin", "/abs/x.reviewer.json");
     expect(command?.file).toBe("/usr/bin/open");

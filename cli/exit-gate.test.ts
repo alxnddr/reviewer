@@ -2,14 +2,14 @@ import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
-  reviewDiffFor,
+  pinReview,
   ReviewArtifact,
   type ReviewAnchor,
   type ReviewComment,
   type ReviewLayerDraft,
   type ReviewStamp,
 } from "../src/shared/review";
-import { importReviewFromPath, reviewPathFromArgv } from "../src/main/review/guard";
+import { importReviewFromPath, reviewOpenFromArgv } from "../src/main/review/guard";
 import { parsePatch } from "../src/shared/diff/patch";
 import { buildCommentItems, type CommentUiState } from "../src/shared/diff/comment-annotations";
 import type { FileUniverse } from "../src/tools/review-coverage";
@@ -468,14 +468,15 @@ describe("exit gate: the agent's toolchain, end to end in a foreign repo", () =>
   it("opens in Reviewer with zero manual fixing: every comment on its authored line", async () => {
     emitComplete(ARTIFACT);
 
-    // The app's *own* open path, driven on the file the CLI just wrote. `reviewPathFromArgv` is
-    // the argv → path step (`Reviewer walkthrough.reviewer.json`), and `importReviewFromPath` is
+    // The app's *own* open path, driven on the file the CLI just wrote. `reviewOpenFromArgv` is
+    // the argv → request step (`Reviewer walkthrough.reviewer.json`), and `importReviewFromPath` is
     // the one seam every open funnels through — argv, File→Open, drag-drop alike.
     // Both are Electron-free, so the gate exercises the real thing rather than a stand-in: what
     // is left unproven here is the window's pixels, not the app's acceptance of the artifact.
-    const path = reviewPathFromArgv(["electron", ".", ARTIFACT], repo.path);
-    expect(path).toBe(join(repo.path, ARTIFACT));
-    if (path === null) return;
+    const request = reviewOpenFromArgv(["electron", ".", ARTIFACT], repo.path);
+    expect(request).toEqual({ path: join(repo.path, ARTIFACT), repo: null });
+    if (request === null) return;
+    const path = request.path;
 
     const opened = await importReviewFromPath(path, stamp());
     expect(opened.ok).toBe(true);
@@ -485,8 +486,9 @@ describe("exit gate: the agent's toolchain, end to end in a foreign repo", () =>
     // The artifact is refs-only: it carries no patch, so the app re-derives base...head
     // from git on open and anchors resolve positionally against that live diff. Resolve the same
     // diff through the CLI's own `artifactDiff` (the foreign repo is present) to render against.
-    const diff = reviewDiffFor(review);
-    expect(diff.kind).toBe("refs");
+    // The foreign repo and both refs are right here, so the app's source check answers live.
+    const pin = pinReview(review, { kind: "live", repo: review.repo });
+    expect(pin.ok && pin.reviewDiff.kind).toBe("refs");
     expect(review.patch).toBeNull();
 
     const captured = artifactDiff(process.env, readArtifact(ARTIFACT));

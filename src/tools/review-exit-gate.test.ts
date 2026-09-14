@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   importReview,
-  reviewDiffFor,
+  pinReview,
   type ReviewArtifact,
   type ReviewLayerDraft,
   type ReviewStamp,
@@ -11,7 +11,7 @@ import { parsePatch } from "../shared/diff/patch";
 import { buildCommentItems, type CommentUiState } from "../shared/diff/comment-annotations";
 
 // The one claim about a **frozen** artifact nothing else composes: bytes that carry their own
-// diff, read through the app's whole open path (importReview → reviewDiffFor →
+// diff, read through the app's whole open path (importReview → pinReview →
 // buildCommentItems), render with every anchor on its authored line. The CLI never emits one —
 // `rvw emit` writes refs-only unless asked — so the frozen pin is the path with no gate of its
 // own in front of it, and an artifact imported from elsewhere is exactly the case that would
@@ -93,7 +93,12 @@ describe("an imported frozen artifact", () => {
     const imported = importReview(bytes, stamp());
     expect(imported.ok).toBe(true);
     if (!imported.ok) return;
-    expect(reviewDiffFor(imported.review).kind).toBe("frozenPatch");
+    // Imported from elsewhere: the repo it names is not on this machine, so the pin is its patch.
+    const pin = pinReview(imported.review, {
+      kind: "repoMissing",
+      failure: { code: "notARepo", path: imported.review.repo.path },
+    });
+    expect(pin.ok && pin.reviewDiff.kind).toBe("frozenPatch");
 
     const files = parsePatch(imported.review.patch ?? "", "exit-gate");
     const frozen = buildCommentItems(files, imported.review.comments, UI, true);

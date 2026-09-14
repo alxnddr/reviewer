@@ -48,6 +48,11 @@ from your branch every time you open it — which also means a review opens only
 send one to a machine without the checkout, `rvw emit --embed-patch` packs the diff into the file
 itself. `rvw --help` has the rest.
 
+**Settings** (⌘,, or the gear in the title bar) hold the theme and the diff's typography — code
+font, size, line height, tab size, ligatures, line wrapping. Each row resets to its default on its
+own, and the file behind it is `settings.json` in the app's data directory if you would rather
+edit it by hand.
+
 ## Install
 
 macOS. Download the `.dmg` from the [latest release](../../releases/latest), or build it:
@@ -76,8 +81,8 @@ update to Reviewer updates the command with no reinstall. In development that bu
 and re-run `bun run build:cli` to catch the shim up.
 
 `bun run reset` does that reset on its own: it clears the first-run guide's flag, empties the tab
-strip (backup at `sessions.json.bak`), and removes the installed `rvw` launcher. Your theme is left
-alone. `--keep-tabs` / `--keep-cli` skip a part; quit the app first, or pass `--force`.
+strip (backup at `sessions.json.bak`), and removes the installed `rvw` launcher. Your settings
+(⌘, — theme, code font, and the rest) are left alone. `--keep-tabs` / `--keep-cli` skip a part; quit the app first, or pass `--force`.
 
 ## License
 

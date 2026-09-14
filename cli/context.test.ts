@@ -152,6 +152,18 @@ describe("the platform the launcher branches on", () => {
     });
     expect(result.stderr).toBe("");
   });
+
+  it("proves a --repo is a work tree before launching, even where there is nothing to launch", async () => {
+    const root = tempRoot("rvw-context-open-repo-");
+    const artifact = join(root, "change.reviewer.json");
+    writeFileSync(artifact, "{}");
+
+    const result = await runCli(["open", artifact, "--repo", root, "--json"], {
+      platform: "linux",
+    });
+    expect(result.code).toBe(2);
+    expect(JSON.parse(result.stdout)).toMatchObject({ ok: false, error: { code: "gitFailed" } });
+  });
 });
 
 describe("the draft on stdin", () => {

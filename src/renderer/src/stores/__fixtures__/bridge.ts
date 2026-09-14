@@ -51,8 +51,8 @@ export const BRANCH_LIST: BranchList = {
 /** A whole bridge, with `overrides` winning over the canned answers. */
 export function makeBridge(overrides: Partial<ReviewerBridge> = {}): ReviewerBridge {
   return {
-    getThemeSelection: vi.fn(),
-    setThemeSelection: vi.fn(),
+    getSettings: vi.fn().mockResolvedValue({}),
+    setSettings: vi.fn().mockResolvedValue(undefined),
     getCliStatus: vi.fn().mockResolvedValue({
       supported: true,
       installed: true,
@@ -76,6 +76,7 @@ export function makeBridge(overrides: Partial<ReviewerBridge> = {}): ReviewerBri
     }),
     openReview: vi.fn().mockResolvedValue({ ok: true, value: { kind: "canceled" } }),
     openReviewByPath: vi.fn().mockResolvedValue({ ok: true, value: { kind: "canceled" } }),
+    locateReviewRepo: vi.fn().mockResolvedValue({ ok: true, value: { kind: "canceled" } }),
     listRecentReviews: vi.fn().mockResolvedValue({
       dir: "/home/dev/.rvw/reviews",
       reviews: [],
@@ -116,6 +117,7 @@ export function makeBridge(overrides: Partial<ReviewerBridge> = {}): ReviewerBri
     onOpenRepoCommand: vi.fn().mockReturnValue(() => {}),
     onOpenReviewCommand: vi.fn().mockReturnValue(() => {}),
     onOpenRecentReviewsCommand: vi.fn().mockReturnValue(() => {}),
+    onOpenSettingsCommand: vi.fn().mockReturnValue(() => {}),
     onExportReviewJsonCommand: vi.fn().mockReturnValue(() => {}),
     onExportReviewMarkdownCommand: vi.fn().mockReturnValue(() => {}),
     onCopyCommentPromptCommand: vi.fn().mockReturnValue(() => {}),

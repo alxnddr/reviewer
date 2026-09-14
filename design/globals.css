@@ -249,7 +249,13 @@ html[data-theme="nord"] {
   --color-warning: var(--warning);
 
   --font-sans: "Geist Variable", "Geist", sans-serif;
-  --font-mono: "Geist Mono Variable", "Geist Mono", monospace;
+  /* `--code-font` is the reader's code font from Settings → Diff, set as an inline property on
+   * <html> by src/renderer/src/lib/apply-settings.ts and absent otherwise. It goes *ahead of*
+   * the bundled stack, never instead of it, so a name that is not installed falls through to
+   * Geist Mono. It has to be hooked here, in the token: this block is `@theme inline`, so the
+   * `font-mono` utility carries the value itself rather than `var(--font-mono)`, and
+   * overriding the token at runtime would move nothing. */
+  --font-mono: var(--code-font, "Geist Mono Variable"), "Geist Mono", monospace;
 
   --text-xs: 12px;
   --text-xs--line-height: 16px;

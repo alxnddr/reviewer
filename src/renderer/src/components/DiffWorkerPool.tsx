@@ -8,7 +8,7 @@ import {
   HIGHLIGHT_ENGINE,
   warmHighlighter,
 } from "@/lib/diff/highlight-warmup";
-import { useThemeStore } from "@/stores/theme";
+import { useSettingsStore } from "@/stores/settings";
 
 // Assumed core count when navigator.hardwareConcurrency is unavailable (0/NaN).
 const FALLBACK_CORE_COUNT = 4;
@@ -34,7 +34,7 @@ export function resolvePoolSize(hardwareConcurrency: number): number {
  * (`use-diff-options.ts`). */
 function DiffThemeSync(): null {
   const pool = useWorkerPool();
-  const selection = useThemeStore((state) => state.selection);
+  const selection = useSettingsStore((state) => state.resolved.theme);
   const applied = useRef<string | null>(null);
   useEffect(() => {
     if (pool === undefined) {

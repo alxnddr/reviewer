@@ -153,6 +153,23 @@ whose header is the map. The rules that keep it a tree rather than a mesh:
 
 Other renderer-wide rules:
 
+- **Settings are one contract, `src/shared/settings.ts`, and one store, `stores/settings.ts`.** The
+  schema is what main persists, what the `settings:get`/`settings:set` rows validate, and what the
+  renderer's store holds, so a new setting is one key there plus one row in
+  `lib/settings-catalog.ts` (which `settings-catalog.test.ts` insists on). Stored values are only
+  the reader's *choices* — `resolveSettings` fills the rest — so a reset is a key removed, not a
+  default written down, and the dialog can tell which rows to offer a reset on. Every key salvages
+  on its own (`.catch(undefined)`): a hand-edited font size costs that setting, never the file.
+  The dialog (`components/SettingsDialog.tsx`) is tabs, one section at a time, with a search
+  that cuts across them; the code-font row lists the monospace families installed on the
+  machine (`lib/local-fonts.ts`: Chromium's `queryLocalFonts`, each family measured on a canvas
+  because the API has no monospace flag) behind the bundled Geist Mono.
+  `lib/apply-settings.ts` is the only module that turns the resolved record into DOM state (the
+  theme on `<html>`, the `--diffs-*` typography variables, the `--code-font` hook that
+  `design/globals.css` leaves in the `--font-mono` token); the store takes it as an injected
+  function so its tests run without a document. The one app-wide preference *not* in there is the
+  split ⇄ unified diff layout (`stores/ui-prefs.ts`, localStorage): it is a working mode flipped
+  from the title bar, deliberately kept where it was.
 - `@/` resolves to `src/renderer/src` and nothing else (identically in `electron.vite.config.ts`,
   `vite.preview.config.mts`, `vitest.config.ts` and `tsconfig.web.json`). `src/shared/` is therefore
   always a relative path — which is how you can tell at a glance that an import crosses the
@@ -184,7 +201,8 @@ Other renderer-wide rules:
 
 ## Main
 
-- One `electron-store` for everything main persists *at app level* (`main/store.ts`): settings, the
+- One `electron-store` for everything main persists *at app level* (`main/store.ts`): the reader's
+  settings (`shared/settings.ts`, through `main/settings.ts` and `main/user-settings.ts`), the
   onboarding flag, window geometry. One atomic write path (temp file + rename), one file to reason
   about, one place a test can redirect. Each owner validates its own keys on read and carries the
   other owners' keys through a whole-file write untouched. Two things are deliberately outside it:

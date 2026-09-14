@@ -66,9 +66,9 @@ export type SessionSlice = {
   /** The review's pinned diff, or null for a plain repo session. When set,
    * it drives the rendered diff so the anchors place on their exact authored lines. A
    * `frozenPatch` pin renders its embedded diff verbatim (anchors resolve frozen); a
-   * `refs` pin re-derives `base..head` from git. A review session keeps this pin for
-   * its whole life — the selector only narrows within it via `reviewSubrange` — so a
-   * reopened review always lands back on the authored diff. Persisted. */
+   * `refs` pin re-derives `base..head` from git. The selector only narrows within it via
+   * `reviewSubrange`; only main moves it, when this machine gains or loses the repo and refs
+   * (`pinReview`), so a reopened review lands back on the authored diff either way. Persisted. */
   reviewDiff: ReviewDiff | null;
   /** The subset of the review's `base..head` commits the reviewer narrowed to, or
    * null for the whole review. Layered over `reviewDiff`: null renders the pin (every

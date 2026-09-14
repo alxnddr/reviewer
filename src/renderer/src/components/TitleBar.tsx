@@ -1,7 +1,7 @@
 import type { ReactElement } from "react";
 import { TabBar } from "@/components/TabBar";
 import { DiffStyleToggle } from "@/components/DiffStyleToggle";
-import { ThemeMenu } from "@/components/ThemeMenu";
+import { SettingsButton } from "@/components/SettingsButton";
 import { useReviewStore } from "@/stores/review";
 
 // pl-24 clears the macOS traffic lights (hiddenInset, tuned in src/main/window.ts)
@@ -22,7 +22,7 @@ export function TitleBar(): ReactElement {
           already carry their own padding, so they group tighter than that. */}
       <div className="flex items-center gap-0.5">
         <DiffStyleToggle />
-        <ThemeMenu />
+        <SettingsButton />
       </div>
     </header>
   );

@@ -14,12 +14,14 @@ type FailureBannerProps = {
   /** What the bar reads as — the message itself, or a marked-up rendering of it. */
   body: ReactNode;
   onDismiss: () => void;
+  /** What the reader can do about the failure, beside the dismiss — when there is anything. */
+  action?: ReactNode;
 };
 
 /** The bar the app-level failures share: one line under the title bar, the message
  * clipped to a single line, a dismiss at the end. Which failure it is lives in the
  * three wrappers below — all this knows is a string, a body and a way to close. */
-function FailureBanner({ message, body, onDismiss }: FailureBannerProps): ReactElement {
+function FailureBanner({ message, body, onDismiss, action }: FailureBannerProps): ReactElement {
   return (
     <div
       role="alert"
@@ -29,17 +31,14 @@ function FailureBanner({ message, body, onDismiss }: FailureBannerProps): ReactE
       <TooltipHint content={message} whenTruncated side="bottom" align="start">
         <p className="min-w-0 truncate text-sm">{body}</p>
       </TooltipHint>
-      <TooltipHint content="Dismiss" side="bottom" align="end">
-        <Button
-          variant="chrome"
-          size="icon-sm"
-          aria-label="Dismiss"
-          onClick={onDismiss}
-          className="ml-auto shrink-0"
-        >
-          <XIcon className="size-3.5" />
-        </Button>
-      </TooltipHint>
+      <div className="ml-auto flex shrink-0 items-center gap-1">
+        {action}
+        <TooltipHint content="Dismiss" side="bottom" align="end">
+          <Button variant="chrome" size="icon-sm" aria-label="Dismiss" onClick={onDismiss}>
+            <XIcon className="size-3.5" />
+          </Button>
+        </TooltipHint>
+      </div>
     </div>
   );
 }
@@ -72,13 +71,30 @@ export function OpenFailureBanner(): ReactElement | null {
  * an open review alike. */
 export function ReviewOpenFailureBanner(): ReactElement | null {
   const failure = useReviewStore((state) => state.reviewOpenFailure);
+  const locate = useReviewStore((state) => state.reviewOpenLocate);
   const clearReviewOpenFailure = useReviewStore((state) => state.clearReviewOpenFailure);
+  const locateReviewRepository = useReviewStore((state) => state.locateReviewRepository);
 
   if (failure === null) {
     return null;
   }
   const message = reviewOpenFailureMessage(failure);
-  return <FailureBanner message={message} body={message} onDismiss={clearReviewOpenFailure} />;
+  return (
+    <FailureBanner
+      message={message}
+      body={message}
+      onDismiss={clearReviewOpenFailure}
+      // The review was fine and only its repository was not where it said, so the reader can
+      // answer that from here rather than going back for the file.
+      action={
+        locate === null ? null : (
+          <Button variant="chrome" size="sm" onClick={() => void locateReviewRepository(locate)}>
+            Locate repository…
+          </Button>
+        )
+      }
+    />
+  );
 }
 
 /** A failed review export: app-level, like the open-failure bars — the write

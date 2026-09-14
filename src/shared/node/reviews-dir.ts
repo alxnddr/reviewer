@@ -27,6 +27,17 @@ import { basename, join } from "node:path";
  * place, and every program that reads the constant is one of the two that read this file. */
 export const REVIEW_EXTENSION = ".reviewer.json";
 
+/** The switch that carries a local checkout for the artifact beside it on the app's argv — `rvw
+ * open --repo`. Here for the reason the extension is: the CLI writes it and main's
+ * `reviewOpenFromArgv` reads it, and a spelling kept on each side is a flag the app quietly
+ * stops hearing.
+ *
+ * The launcher always writes it as one `--repo=<absolute path>` token, never a `--repo <path>`
+ * pair: the app's command line is parsed by Chromium, which keeps switches and positional
+ * arguments apart and is free to hand them back reordered — to `second-instance` included —
+ * and a two-token pair only means something while its halves stay adjacent. */
+export const REVIEW_REPO_SWITCH = "--repo";
+
 /** The reviews directory: `$RVW_HOME/reviews` when RVW_HOME is set — one override, for a user
  * who wants it elsewhere and for a test that must not touch the real home — else the default
  * `~/.rvw/reviews`. The caller creates it (mkdir -p) before writing; this only names it. */

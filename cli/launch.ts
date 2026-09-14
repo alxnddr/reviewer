@@ -1,5 +1,6 @@
 import { spawnSync } from "node:child_process";
 import { errorMessage } from "../src/shared/errors";
+import { REVIEW_REPO_SWITCH } from "../src/shared/node/reviews-dir";
 
 // The one seam `rvw open` launches the installed app through (the mirror of `cli/git.ts`:
 // a pure decision plus a thin spawn). The app already owns every arrival path — a cold
@@ -47,13 +48,23 @@ export type LaunchCommand = { readonly file: string; readonly args: readonly str
  * so this needs no `.reviewer.json` document-type declaration in the app's Info.plist, only
  * the argv handling that already exists. The path must be absolute: a `second-instance`
  * resolves a relative arg against the *new* instance's working directory, which an `open`
- * launch does not control. */
+ * launch does not control.
+ *
+ * `repo`, when given, is one more app argument after the artifact — `--repo=<toplevel>`, a single
+ * token for the reason `REVIEW_REPO_SWITCH` gives — naming where the artifact's repository is
+ * checked out on this machine. The launcher only carries it; the app validates it exactly like the
+ * path the artifact names. */
 export function launchCommandFor(
   platform: NodeJS.Platform,
   absolutePath: string,
+  repo: string | null = null,
 ): LaunchCommand | null {
   if (platform === "darwin") {
-    return { file: MACOS_OPEN, args: ["-n", "-b", APP_BUNDLE_ID, "--args", absolutePath] };
+    const repoArgs = repo === null ? [] : [`${REVIEW_REPO_SWITCH}=${repo}`];
+    return {
+      file: MACOS_OPEN,
+      args: ["-n", "-b", APP_BUNDLE_ID, "--args", absolutePath, ...repoArgs],
+    };
   }
   return null;
 }
@@ -64,8 +75,12 @@ export function launchCommandFor(
  * handed to LaunchServices, so a `0` exit means "the app was asked to open it", not "the app
  * finished opening it"; a non-zero exit is the app not being installed (unknown bundle id)
  * or a launch refusal, surfaced as a message the command maps to exit 2. */
-export function launchReviewer(platform: NodeJS.Platform, absolutePath: string): LaunchResult {
-  const command = launchCommandFor(platform, absolutePath);
+export function launchReviewer(
+  platform: NodeJS.Platform,
+  absolutePath: string,
+  repo: string | null = null,
+): LaunchResult {
+  const command = launchCommandFor(platform, absolutePath, repo);
   if (command === null) {
     return {
       ok: false,

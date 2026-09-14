@@ -11,6 +11,7 @@ import {
 import { ReviewDropZone } from "@/components/ReviewDropZone";
 import { OverviewScreen } from "@/components/OverviewScreen";
 import { RecentReviews } from "@/components/RecentReviews";
+import { SettingsDialog } from "@/components/SettingsDialog";
 import { ShortcutsDialog } from "@/components/ShortcutsDialog";
 import { Sidebar } from "@/components/Sidebar";
 import { SidebarNav } from "@/components/SidebarNav";
@@ -19,6 +20,7 @@ import { nextRegion, visibleRegions } from "@/lib/focus-regions";
 import { shortcutBlocked } from "@/lib/shortcut-guard";
 import { useOnboardingStore } from "@/stores/onboarding";
 import { useRecentReviewsStore } from "@/stores/recent-reviews";
+import { useSettingsStore } from "@/stores/settings";
 import { selectActiveSlice, useReviewStore } from "@/stores/review";
 
 /** `o` toggles the tour doc from anywhere in a review — into it from the diff, and back
@@ -190,6 +192,13 @@ function useRecentReviewsCommand(): void {
   }, [open, openPanel, close]);
 }
 
+/** The settings dialog, on the app menu's ⌘, command. Toggling, for the recents picker's
+ * reason: the chord that put it up is the one a reader presses to take it down. */
+function useSettingsCommand(): void {
+  const toggleDialog = useSettingsStore((state) => state.toggleDialog);
+  useEffect(() => window.reviewer?.onOpenSettingsCommand(toggleDialog), [toggleDialog]);
+}
+
 export function App(): ReactElement {
   const activeSessionId = useReviewStore((state) => state.activeSessionId);
   // The start screen is the shell's content either because there is no review to show, or
@@ -227,6 +236,7 @@ export function App(): ReactElement {
   useRegionShortcut();
   useOnboardingLifecycle();
   useRecentReviewsCommand();
+  useSettingsCommand();
 
   useEffect(() => {
     const bridge = window.reviewer;
@@ -274,6 +284,9 @@ export function App(): ReactElement {
       {/* Outside the shell, not in it: `?` has to answer from the start screen too, before
           there is any session for the shell to be about. */}
       <ShortcutsDialog />
+      {/* App-level for the same reason: settings are about the app, and ⌘, has to answer on
+          the start screen as much as over a diff. */}
+      <SettingsDialog />
       {/* Same placement, same reason: the searchable list of past reviews has to be reachable
           from inside a review, where there is no page listing them — the start screen lists
           the recent ones itself and opens this for the rest. */}

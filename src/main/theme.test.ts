@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -11,12 +11,8 @@ const electron = vi.hoisted(() => ({
 vi.mock("electron", () => ({ nativeTheme: electron.nativeTheme, default: {} }));
 
 import { configureAppStore } from "./store";
-import {
-  applyPersistedTheme,
-  getThemeSelection,
-  getWindowBackground,
-  setThemeSelection,
-} from "./theme";
+import { applyPersistedTheme, getThemeSelection, getWindowBackground } from "./theme";
+import { getUserSettings, setUserSettings } from "./user-settings";
 
 let tempDirs: string[] = [];
 
@@ -57,11 +53,38 @@ describe("theme selection", () => {
   it("persists the choice for the next launch", () => {
     const dir = makeStoreDir();
 
-    setThemeSelection("dracula");
+    setUserSettings({ theme: "dracula" });
     expect(electron.nativeTheme.themeSource).toBe("dark");
 
     configureAppStore({ directory: dir });
     expect(getThemeSelection()).toBe("dracula");
+  });
+
+  it("goes back to following the OS when the theme is reset", () => {
+    makeStoreDir();
+    electron.nativeTheme.shouldUseDarkColors = true;
+    setUserSettings({ theme: "github-light" });
+    expect(electron.nativeTheme.themeSource).toBe("light");
+
+    setUserSettings({});
+    expect(electron.nativeTheme.themeSource).toBe("dark");
+    expect(getThemeSelection()).toBe("pierre-dark");
+  });
+
+  it("hands the renderer only the reader's settings, never the install's flags", () => {
+    const dir = makeStoreDir();
+    writeSettingsFile(dir, { theme: "nord", diffFontSize: 15, onboarded: true });
+
+    expect(getUserSettings()).toEqual({ theme: "nord", diffFontSize: 15 });
+
+    // And a write of the reader's settings leaves the flag standing.
+    setUserSettings({ diffWrap: true });
+    configureAppStore({ directory: dir });
+    expect(getUserSettings()).toEqual({ diffWrap: true });
+    expect(JSON.parse(readFileSync(join(dir, "settings.json"), "utf8"))).toEqual({
+      diffWrap: true,
+      onboarded: true,
+    });
   });
 
   it("reads the settings file once across the whole startup path", () => {

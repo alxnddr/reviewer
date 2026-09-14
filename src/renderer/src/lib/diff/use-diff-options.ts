@@ -4,8 +4,10 @@ import type { CommentSlot } from "../../../../shared/diff/comment-annotations";
 import { expansionOptions } from "./expand-context";
 import { activeDiffThemePair } from "./highlight-warmup";
 import { DIFF_LAYOUT, DIFF_UNSAFE_CSS } from "./surface-style";
+import { diffLineHeightPx } from "../../../../shared/settings";
+import { useEffectiveDark } from "../apply-settings";
 import type { DiffStyle } from "@/stores/ui-prefs";
-import { useEffectiveDark, useThemeStore } from "@/stores/theme";
+import { useSettingsStore } from "@/stores/settings";
 
 /** Everything the diff surface is configured with, in one object. Assembled here rather
  * than in the view because it is where the appearance stores meet the surface: the view
@@ -26,7 +28,17 @@ export function useDiffOptions(
   loadDiffFiles: FileDiffContentsLoader | null,
 ): CodeViewOptions<CommentSlot> {
   const dark = useEffectiveDark();
-  const themeSelection = useThemeStore((state) => state.selection);
+  const themeSelection = useSettingsStore((state) => state.resolved.theme);
+  const wrap = useSettingsStore((state) => state.resolved.diffWrap);
+  // The row height the settings put on `--diffs-line-height` (lib/apply-settings). Pierre's
+  // virtualizer estimates a row at 20px until it has measured one; handing it the real
+  // height keeps the scroll math honest at other sizes instead of drifting until measured.
+  const lineHeight = useSettingsStore((state) =>
+    diffLineHeightPx({
+      diffFontSize: state.resolved.diffFontSize,
+      diffLineHeight: state.resolved.diffLineHeight,
+    }),
+  );
 
   return useMemo(
     (): CodeViewOptions<CommentSlot> => ({
@@ -40,6 +52,8 @@ export function useDiffOptions(
       themeType: dark ? "dark" : "light",
       theme: activeDiffThemePair(themeSelection),
       diffStyle,
+      overflow: wrap ? "wrap" : "scroll",
+      itemMetrics: { lineHeight },
       stickyHeaders: true,
       layout: DIFF_LAYOUT,
       hunkSeparators: "line-info",
@@ -50,6 +64,6 @@ export function useDiffOptions(
       // so a frozen artifact gets no expander and never fires a git read.
       ...expansionOptions(loadDiffFiles),
     }),
-    [dark, themeSelection, diffStyle, loadDiffFiles],
+    [dark, themeSelection, diffStyle, wrap, lineHeight, loadDiffFiles],
   );
 }

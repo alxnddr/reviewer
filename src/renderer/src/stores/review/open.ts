@@ -1,7 +1,12 @@
 import type { StateCreator } from "zustand";
 import type { GitFailure } from "../../../../shared/git";
-import type { ReviewOpenFailure, ReviewOpenResponse } from "../../../../shared/review-ipc";
+import type {
+  ReviewLocateRepoRequest,
+  ReviewOpenFailure,
+  ReviewOpenResponse,
+} from "../../../../shared/review-ipc";
 import type { SessionId } from "../../../../shared/session";
+import { failureInvitesLocate } from "../../lib/review-open-failure-message";
 import { runDiffLoad } from "./effects";
 import { createSessionSlice } from "./slice-factory";
 import { setSlice, type Getter, type Setter } from "./slice";
@@ -22,6 +27,12 @@ export type OpenSlice = {
    * (opens land as sessions, so a *failed* open has no session to report in),
    * surfaced by the ReviewOpenFailureBanner and cleared on the next open. */
   reviewOpenFailure: ReviewOpenFailure | null;
+  /** What Locate Repository… would retry the failed open against: set only when the failure is one
+   * it can answer (`failureInvitesLocate`) and the renderer knows which review it was — the
+   * artifact a drop or a recents click named, or the session a frozen note's locate came from.
+   * Null otherwise, File → Open Review… included: main picked that path and the renderer never
+   * learns it. Set and cleared with the failure, never apart from it. */
+  reviewOpenLocate: ReviewLocateRepoRequest | null;
   /** The tab an open request landed on when it turned out to already be open, and a nonce so
    * asking twice flashes twice. One tab per artifact means a reader who clicks a review they
    * already have up gets no new tab — and a click that produces no visible change is a click
@@ -38,6 +49,10 @@ export type OpenSlice = {
    * with no backing path (getPathForFile → null) becomes a typed failure and is
    * never sent as an empty-path invoke. */
   openDroppedFile: (file: File) => Promise<void>;
+  /** Locate Repository…: main shows the directory picker and re-seats the review on the pick. A
+   * session's pending write-back is sent first, so the last write main receives before the re-seat
+   * is the renderer's newest; a failure lands on the same banner a failed open does. */
+  locateReviewRepository: (target: ReviewLocateRepoRequest) => Promise<void>;
   clearOpenFailure: () => void;
   clearReviewOpenFailure: () => void;
 };
@@ -50,15 +65,21 @@ async function applyReviewOpen(
   get: Getter,
   response: ReviewOpenResponse,
   nextRevealNonce: () => number,
+  /** Which review this was, for the banner's Locate Repository… — null when the renderer does
+   * not know (a dialog pick). */
+  locate: ReviewLocateRepoRequest | null,
 ): Promise<void> {
   if (!response.ok) {
-    set({ reviewOpenFailure: response.failure });
+    set({
+      reviewOpenFailure: response.failure,
+      reviewOpenLocate: locate !== null && failureInvitesLocate(response.failure) ? locate : null,
+    });
     return;
   }
   if (response.value.kind === "canceled") {
     return;
   }
-  set({ reviewOpenFailure: null });
+  set({ reviewOpenFailure: null, reviewOpenLocate: null });
   const { sessionId, created } = response.value;
   // Captured before the await, for the same reason `openRepository` captures it: the reader
   // may have switched tabs while the picker was up, and this is a fact about where the errand
@@ -91,6 +112,7 @@ export const createOpenSlice: StateCreator<ReviewState, [], [], OpenSlice> = (se
   return {
     openFailure: null,
     reviewOpenFailure: null,
+    reviewOpenLocate: null,
     revealedSession: null,
 
     openRepository: async () => {
@@ -198,7 +220,7 @@ export const createOpenSlice: StateCreator<ReviewState, [], [], OpenSlice> = (se
       if (!bridge) {
         return;
       }
-      await applyReviewOpen(set, get, await bridge.openReview(), nextRevealNonce);
+      await applyReviewOpen(set, get, await bridge.openReview(), nextRevealNonce, null);
     },
 
     openReviewByPath: async (path) => {
@@ -206,7 +228,10 @@ export const createOpenSlice: StateCreator<ReviewState, [], [], OpenSlice> = (se
       if (!bridge) {
         return;
       }
-      await applyReviewOpen(set, get, await bridge.openReviewByPath({ path }), nextRevealNonce);
+      await applyReviewOpen(set, get, await bridge.openReviewByPath({ path }), nextRevealNonce, {
+        kind: "artifact",
+        path,
+      });
     },
 
     openDroppedFile: async (file) => {
@@ -218,10 +243,34 @@ export const createOpenSlice: StateCreator<ReviewState, [], [], OpenSlice> = (se
       if (path === null) {
         // A File built in JS / not backed by disk: nothing to open. Surface it as a
         // typed failure rather than invoking main with an empty path.
-        set({ reviewOpenFailure: { code: "unreadable" } });
+        set({ reviewOpenFailure: { code: "unreadable" }, reviewOpenLocate: null });
         return;
       }
       await get().openReviewByPath(path);
+    },
+
+    locateReviewRepository: async (target) => {
+      const bridge = window.reviewer;
+      if (!bridge) {
+        return;
+      }
+      if (target.kind === "session") {
+        get().flushSessionWriteBack(target.sessionId);
+      }
+      const response = await bridge.locateReviewRepo(target);
+      if (target.kind === "artifact" || !response.ok) {
+        // An artifact target is an open, retried with a checkout — it lands exactly like one; and
+        // a session's failure lands on the same banner, remembering which session to retry.
+        await applyReviewOpen(set, get, response, nextRevealNonce, target);
+        return;
+      }
+      if (response.value.kind === "canceled") {
+        return;
+      }
+      set({ reviewOpenFailure: null, reviewOpenLocate: null });
+      // Main re-seated a session this renderer already holds; the re-list sees the moved pin and
+      // rebuilds that slice (`reseatedSlice`), which derives against the checkout.
+      await get().syncSessions();
     },
 
     clearOpenFailure: () => {
@@ -229,7 +278,7 @@ export const createOpenSlice: StateCreator<ReviewState, [], [], OpenSlice> = (se
     },
 
     clearReviewOpenFailure: () => {
-      set({ reviewOpenFailure: null });
+      set({ reviewOpenFailure: null, reviewOpenLocate: null });
     },
   };
 };

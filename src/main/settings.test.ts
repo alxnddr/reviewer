@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
-import { parseSettings, readSettings, writeSettings, type Settings } from "./settings";
+import { parseSettings, readSettings, writeSettings, type SettingsFile } from "./settings";
 import { configureAppStore } from "./store";
 
 const MODULE_DIR = dirname(fileURLToPath(import.meta.url));
@@ -75,6 +75,13 @@ describe("parseSettings", () => {
 
   it("ignores keys another owner put in the same file", () => {
     expect(parseSettings({ theme: "nord", window: { width: 1280 } })).toEqual({ theme: "nord" });
+  });
+
+  it("loses one hand-edited value, not the file", () => {
+    // Every key salvages on its own: a font size typed as a word costs that setting alone.
+    expect(parseSettings({ theme: "nord", diffFontSize: "big", onboarded: "yes" })).toEqual({
+      theme: "nord",
+    });
   });
 });
 
@@ -273,7 +280,7 @@ function expectIntact(dir: string): void {
   expect(() => {
     parsed = JSON.parse(raw);
   }, `settings.json was left unparseable (${raw.length} bytes)`).not.toThrow();
-  const settings: Settings = parseSettings(parsed);
+  const settings: SettingsFile = parseSettings(parsed);
   expect(settings.onboarded).toBe(true);
   expect(settings.theme === "dracula" || settings.theme === "nord").toBe(true);
   expect((parsed as Record<string, unknown>).padding).toBe(PADDING);

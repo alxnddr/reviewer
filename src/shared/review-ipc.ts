@@ -21,7 +21,8 @@ import { SessionId } from "./session";
 
 /** Why a path could not become an open review. Ordered as the open path checks
  * them: extension → existence/kind → size → readability → content → the repo the
- * artifact names. Each is a distinct visible state, never a crash. */
+ * artifact names → its refs → (Locate Repository… only) its diff. Each is a distinct
+ * visible state, never a crash. */
 export const ReviewOpenFailure = z.discriminatedUnion("code", [
   z.object({ code: z.literal("wrongExtension") }),
   z.object({ code: z.literal("fileNotFound") }),
@@ -35,9 +36,19 @@ export const ReviewOpenFailure = z.discriminatedUnion("code", [
    * reader's own file, checked against the app's own schema. */
   z.object({ code: z.literal("invalidContent"), reason: z.string() }),
   /** The artifact parsed, but the repo *it* chose is not a git work tree this
-   * machine can open. Carries the git layer's own reason so the banner can say
-   * which path was refused instead of a generic "could not open". */
+   * machine can open, and it carries no patch to open frozen from instead. Carries the
+   * git layer's own reason so the banner can say which path was refused instead of a
+   * generic "could not open". */
   z.object({ code: z.literal("repoUnavailable"), reason: GitFailure }),
+  /** The repo is here but the commits are not — a checkout that has not fetched the branch
+   * yet. `missing` names which of `base`/`head` git could not resolve, so the banner can say
+   * what to fetch. Like `repoUnavailable`, only a review with no embedded patch fails this way;
+   * one that carries a patch opens frozen instead. */
+  z.object({ code: z.literal("refsUnavailable"), missing: z.array(ReviewRef).min(1) }),
+  /** A picked repository where the review's refs resolve but spell a different diff than the
+   * patch it carries — a branch that moved since, or the app's own export of a commit range.
+   * Only Locate Repository… reports it: an open simply stays frozen, which still renders. */
+  z.object({ code: z.literal("patchMismatch") }),
 ]);
 export type ReviewOpenFailure = z.infer<typeof ReviewOpenFailure>;
 
@@ -69,6 +80,17 @@ export type ReviewOpenResponse = z.infer<typeof ReviewOpenResponse>;
  * normalizes and re-checks it before a single byte is read. */
 export const ReviewOpenPathRequest = z.object({ path: z.string().min(1) });
 export type ReviewOpenPathRequest = z.infer<typeof ReviewOpenPathRequest>;
+
+/** Locate Repository…'s request: which review the picked directory is for. `session` re-seats a
+ * review that is already open (the frozen note's button); `artifact` opens one that could not
+ * open because of its repo (the failure banner's), by the same path a drop sends. Main shows the
+ * picker either way, and nothing here is trusted — the id is only a lookup, the path crosses the
+ * same guard a drop does, and the picked directory is validated like an authored one. */
+export const ReviewLocateRepoRequest = z.discriminatedUnion("kind", [
+  z.object({ kind: z.literal("session"), sessionId: SessionId }),
+  z.object({ kind: z.literal("artifact"), path: z.string().min(1) }),
+]);
+export type ReviewLocateRepoRequest = z.infer<typeof ReviewLocateRepoRequest>;
 
 // Save — the renderer serializes the curated review to a string (pure generators) and hands it
 // here; main owns the native save sheet and the disk write, so no fs API and no file path is

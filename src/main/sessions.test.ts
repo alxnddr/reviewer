@@ -110,16 +110,22 @@ describe("createSessionStore", () => {
       layers: [{ id: "l1", label: "Layer", summary: "s", ranges: [] }],
     };
 
-    const created = store.createFromReview(review, { path: REVIEW_PATH, progress: NO_PROGRESS });
+    const created = store.createFromReview(review, {
+      path: REVIEW_PATH,
+      progress: NO_PROGRESS,
+      repo: { path: "/work/app", name: "app" },
+      reviewDiff: { kind: "refs", base: "main", head: "a".repeat(40) },
+    });
     store.flush();
 
-    // The review's repo becomes the session source; comments and layers ride along.
-    expect(created.source).toEqual({ kind: "local", repo: { path: "/repos/app", name: "app" } });
+    // The repo the open path seated it on becomes the session source, while the origin keeps
+    // the path the artifact named; comments and layers ride along.
+    expect(created.source).toEqual({ kind: "local", repo: { path: "/work/app", name: "app" } });
+    expect(created.reviewOrigin?.repo).toEqual({ path: "/repos/app", name: "app" });
     expect(created.comments).toEqual(review.comments);
     expect(created.layers).toEqual(review.layers);
-    // No embedded patch → the authored `base..head` is pinned as a refs diff
-    // so the opened session reproduces the diff the anchors were written against,
-    // without touching the branch/commit pickers (they stay at their null defaults).
+    // The pin the open path decided is stored as given, without touching the branch/commit
+    // pickers (they stay at their null defaults).
     expect(created.reviewDiff).toEqual({ kind: "refs", base: "main", head: "a".repeat(40) });
     expect(created.base).toBeNull();
     expect(created.commitSelection).toBeNull();
@@ -127,7 +133,7 @@ describe("createSessionStore", () => {
     expect(readStoreFile(dir).sessions).toEqual([created]);
   });
 
-  it("pins an embedded-patch review as a frozen diff, not its base..head refs", () => {
+  it("stores a frozen pin as given, keeping the authored refs on the origin", () => {
     const dir = makeStoreDir();
     const store = createSessionStore({ directory: dir });
     const review: ImportedReview = {
@@ -140,15 +146,21 @@ describe("createSessionStore", () => {
       layers: [],
     };
 
-    const created = store.createFromReview(review, { path: REVIEW_PATH, progress: NO_PROGRESS });
+    const created = store.createFromReview(review, {
+      path: REVIEW_PATH,
+      progress: NO_PROGRESS,
+      repo: review.repo,
+      reviewDiff: { kind: "frozenPatch", patch: "diff --git a/src/a.ts b/src/a.ts\n" },
+    });
     store.flush();
 
-    // The embedded patch freezes the diff: it is pinned verbatim so every
-    // anchor places, taking precedence over the re-derivable refs.
+    // Which pin a review gets is the open path's decision (`pinReview`); the store keeps it
+    // verbatim, and keeps the refs a frozen pin drops on the origin, so export still has them.
     expect(created.reviewDiff).toEqual({
       kind: "frozenPatch",
       patch: "diff --git a/src/a.ts b/src/a.ts\n",
     });
+    expect(created.reviewOrigin).toMatchObject({ base: "main", head: "a".repeat(40) });
     expect(readStoreFile(dir).sessions).toEqual([created]);
   });
 

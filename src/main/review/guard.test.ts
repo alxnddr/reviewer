@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import type { ReviewStamp } from "../../shared/review";
-import { importReviewFromPath, REVIEW_MAX_BYTES, reviewPathFromArgv } from "./guard";
+import { importReviewFromPath, REVIEW_MAX_BYTES, reviewOpenFromArgv } from "./guard";
 
 // The guard is the one seam every open path funnels through: a path — dropped,
 // picked, or from argv — is untrusted until each check here has passed, and no byte
@@ -142,26 +142,59 @@ describe("importReviewFromPath", () => {
   });
 });
 
-describe("reviewPathFromArgv", () => {
+describe("reviewOpenFromArgv", () => {
   it("resolves a relative arg against the working directory", () => {
-    expect(reviewPathFromArgv(["reviewer", "sub/x.reviewer.json"], "/work")).toBe(
-      resolve("/work", "sub/x.reviewer.json"),
-    );
+    expect(reviewOpenFromArgv(["reviewer", "sub/x.reviewer.json"], "/work")).toEqual({
+      path: resolve("/work", "sub/x.reviewer.json"),
+      repo: null,
+    });
   });
 
   it("keeps an absolute arg as-is", () => {
-    expect(reviewPathFromArgv(["reviewer", "/abs/x.reviewer.json"], "/work")).toBe(
-      "/abs/x.reviewer.json",
-    );
+    expect(reviewOpenFromArgv(["reviewer", "/abs/x.reviewer.json"], "/work")).toEqual({
+      path: "/abs/x.reviewer.json",
+      repo: null,
+    });
   });
 
   it("picks the trailing review arg past the launcher/cwd args", () => {
-    expect(reviewPathFromArgv(["electron", ".", "/abs/x.reviewer.json"], "/work")).toBe(
-      "/abs/x.reviewer.json",
-    );
+    expect(reviewOpenFromArgv(["electron", ".", "/abs/x.reviewer.json"], "/work")).toEqual({
+      path: "/abs/x.reviewer.json",
+      repo: null,
+    });
   });
 
   it("returns null when no arg names a review (focus-only fallback)", () => {
-    expect(reviewPathFromArgv(["reviewer", "--flag"], "/work")).toBeNull();
+    expect(reviewOpenFromArgv(["reviewer", "--flag"], "/work")).toBeNull();
+  });
+
+  it("reads the checkout `rvw open --repo` hands over, as the one token the launcher writes", () => {
+    expect(
+      reviewOpenFromArgv(["reviewer", "/abs/x.reviewer.json", "--repo=/src/app"], "/work"),
+    ).toEqual({ path: "/abs/x.reviewer.json", repo: "/src/app" });
+  });
+
+  it("finds the switch wherever the command line put it, resolving a relative one against the cwd", () => {
+    // Chromium may hand switches back ahead of the positional args, with its own mixed in.
+    expect(
+      reviewOpenFromArgv(
+        ["reviewer", "--repo=app", "--allow-file-access-from-files", "/abs/x.reviewer.json"],
+        "/work",
+      ),
+    ).toEqual({ path: "/abs/x.reviewer.json", repo: resolve("/work", "app") });
+  });
+
+  it("accepts a hand-typed `--repo <path>` pair, but never takes the artifact as its value", () => {
+    expect(
+      reviewOpenFromArgv(["reviewer", "/abs/x.reviewer.json", "--repo", "/src/app"], "/work"),
+    ).toEqual({ path: "/abs/x.reviewer.json", repo: "/src/app" });
+    expect(reviewOpenFromArgv(["reviewer", "--repo", "/abs/x.reviewer.json"], "/work")).toEqual({
+      path: "/abs/x.reviewer.json",
+      repo: null,
+    });
+  });
+
+  it("ignores a --repo with no artifact beside it", () => {
+    expect(reviewOpenFromArgv(["reviewer", "--repo=/src/app"], "/work")).toBeNull();
   });
 });

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { ReviewOpenFailure } from "../../../shared/review-ipc";
-import { reviewOpenFailureMessage } from "./review-open-failure-message";
+import { failureInvitesLocate, reviewOpenFailureMessage } from "./review-open-failure-message";
 
 describe("reviewOpenFailureMessage", () => {
   it("has a sentence for every failure code", () => {
@@ -11,6 +11,8 @@ describe("reviewOpenFailureMessage", () => {
       { code: "unreadable" },
       { code: "invalidContent", reason: "comments[0].side — Invalid option" },
       { code: "repoUnavailable", reason: { code: "gitMissing" } },
+      { code: "refsUnavailable", missing: ["main"] },
+      { code: "patchMismatch" },
     ];
     for (const failure of failures) {
       expect(reviewOpenFailureMessage(failure).length).toBeGreaterThan(0);
@@ -39,9 +41,29 @@ describe("reviewOpenFailureMessage", () => {
     expect(message).toContain("/Users/victim/.ssh");
   });
 
+  it("names the commits a checkout is missing, a sha abbreviated and a branch as written", () => {
+    const message = reviewOpenFailureMessage({
+      code: "refsUnavailable",
+      missing: ["feature/x", "a".repeat(40)],
+    });
+    expect(message).toContain("feature/x, aaaaaaa)");
+  });
+
   it("throws on an unknown code", () => {
     expect(() =>
       reviewOpenFailureMessage({ code: "nonsense" } as unknown as ReviewOpenFailure),
     ).toThrow(/Unhandled variant/u);
+  });
+});
+
+describe("failureInvitesLocate", () => {
+  it("offers Locate Repository… when the repository is the problem, never when the file is", () => {
+    expect(
+      failureInvitesLocate({ code: "repoUnavailable", reason: { code: "notARepo", path: "/x" } }),
+    ).toBe(true);
+    expect(failureInvitesLocate({ code: "refsUnavailable", missing: ["main"] })).toBe(true);
+    expect(failureInvitesLocate({ code: "patchMismatch" })).toBe(true);
+    expect(failureInvitesLocate({ code: "invalidContent", reason: "comments — bad" })).toBe(false);
+    expect(failureInvitesLocate({ code: "fileNotFound" })).toBe(false);
   });
 });

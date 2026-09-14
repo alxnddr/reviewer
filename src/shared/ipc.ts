@@ -5,8 +5,11 @@ import type { IpcContract } from "./ipc-schemas";
 // here as a type and is therefore erased. Main pairs each channel with the same
 // table's schemas via registerIpcHandler.
 export const IpcChannel = {
-  themeGet: "theme:get",
-  themeSet: "theme:set",
+  // The reader's settings, whole: main persists them and owns the one that reaches past the
+  // renderer (the theme drives nativeTheme and the window background). One pair of channels
+  // for all of them — a setting added to `shared/settings.ts` needs no new row here.
+  settingsGet: "settings:get",
+  settingsSet: "settings:set",
   // The `rvw` launcher, as the first-run guide needs it: where it stands, and the one
   // button that changes that. The install runs in main because it writes outside the app
   // and asks the OS for admin rights to do it.
@@ -20,6 +23,9 @@ export const IpcChannel = {
   // path variant guards a renderer-supplied (dropped) path. Both hit one guard.
   reviewOpen: "review:open",
   reviewOpenPath: "review:open-path",
+  // Locate Repository…: main shows a directory picker and re-seats a review on the pick — an
+  // open one by session id, or one that could not open by its artifact path.
+  reviewLocateRepo: "review:locate-repo",
   // What `rvw emit` has left in its managed directory, for the recents picker. A read of
   // one folder in main; the renderer never sees a filesystem.
   reviewsRecent: "reviews:recent",
@@ -53,6 +59,9 @@ export const IpcEvent = {
   // Toggles the in-app recents picker. A command like the rest of these — the list it shows
   // is read by the renderer over `reviews:recent`, not carried on the event.
   menuOpenRecentReviews: "menu:open-recent-reviews",
+  // ⌘, — the app menu's Settings… item. A menu command like the rest so the chord fires from
+  // inside a text field and under a modal, where the window handlers stand down.
+  menuOpenSettings: "menu:open-settings",
   // Export commands: like the open commands they carry no data — the
   // renderer owns the serialize→save flow the same way it owns the open flow.
   menuExportReviewJson: "menu:export-review-json",
@@ -116,8 +125,11 @@ export type IpcRequest<Channel extends IpcChannelName> = IpcContract[Channel]["r
 export type IpcResponse<Channel extends IpcChannelName> = IpcContract[Channel]["response"];
 
 export type ReviewerBridge = {
-  getThemeSelection: () => Promise<IpcResponse<"theme:get">>;
-  setThemeSelection: (selection: IpcRequest<"theme:set">) => Promise<void>;
+  /** The stored settings — only the choices made, never the defaults (`shared/settings.ts`). */
+  getSettings: () => Promise<IpcResponse<"settings:get">>;
+  /** Replaces the stored settings whole: the renderer holds the authoritative copy and sends
+   * it back after every change, the way `updateSession` does. */
+  setSettings: (settings: IpcRequest<"settings:set">) => Promise<void>;
   /** Whether `rvw` is on the box, and where it goes — re-read on every call. */
   getCliStatus: () => Promise<IpcResponse<"cli:status">>;
   /** Installs the `rvw` launcher (one admin prompt); resolves with where that left it. */
@@ -133,6 +145,10 @@ export type ReviewerBridge = {
   openReviewByPath: (
     request: IpcRequest<"review:open-path">,
   ) => Promise<IpcResponse<"review:open-path">>;
+  /** Locate Repository…: main shows the directory picker, then re-seats the review on the pick. */
+  locateReviewRepo: (
+    request: IpcRequest<"review:locate-repo">,
+  ) => Promise<IpcResponse<"review:locate-repo">>;
   /** The reviews `rvw emit` has written, newest first, for the recents picker. Re-read on
    * every call: the CLI writes into that directory while the app is running, which is the
    * whole point of it, so a cached list would be stale by the time it is looked at. */
@@ -180,6 +196,8 @@ export type ReviewerBridge = {
   onOpenReviewCommand: (listener: () => void) => () => void;
   /** Subscribes to the File → Recent Reviews command (⇧⌘R); returns unsubscribe. */
   onOpenRecentReviewsCommand: (listener: () => void) => () => void;
+  /** Subscribes to the Settings… command (⌘,); returns unsubscribe. */
+  onOpenSettingsCommand: (listener: () => void) => () => void;
   /** Subscribes to the File → Export Review (.reviewer.json) command; unsubscribe. */
   onExportReviewJsonCommand: (listener: () => void) => () => void;
   /** Subscribes to the File → Export Review as Markdown command; unsubscribe. */

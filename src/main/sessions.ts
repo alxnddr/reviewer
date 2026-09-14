@@ -3,14 +3,13 @@ import { renameSync } from "node:fs";
 import Store from "electron-store";
 import * as z from "zod";
 import { createDebouncer } from "../shared/debounce";
-import { BranchName, CommitSelection } from "../shared/git";
+import { BranchName, CommitSelection, type RepoInfo } from "../shared/git";
 import {
   Comment,
   ReviewDiff,
   ReviewLayer,
   ReviewOrigin,
   ReviewOverview,
-  reviewDiffFor,
   reviewOriginFor,
   type ImportedReview,
 } from "../shared/review";
@@ -38,17 +37,17 @@ export type SessionStoreOptions = {
 export type SessionStore = {
   list: () => SessionSnapshot;
   create: (source: SessionSource) => Session;
-  /** An opened `.reviewer.json` as a new active session: the review's repo becomes
-   * the source; its comments/layers ride along; and its authored diff is pinned so
-   * the opened session reproduces the diff the anchors were written against — the
-   * embedded patch when present, else the `base..head` refs.
+  /** An opened `.reviewer.json` as a new active session: its comments/layers ride along, and
+   * its authored repo, refs and patch become the origin an export re-emits.
    *
    * `opened` carries what the artifact could not: the path it was read from, which is this
-   * session's identity for both tab dedupe and progress, and whatever progress was already
-   * recorded against that path — so a review whose tab was closed reopens where it stopped. */
+   * session's identity for both tab dedupe and progress; whatever progress was already
+   * recorded against that path, so a review whose tab was closed reopens where it stopped; and
+   * where the review sits on this machine — the repo the session reads and the diff it pins,
+   * which the open path decided from what is here (`pinReview`), not from the artifact's shape. */
   createFromReview: (
     review: ImportedReview,
-    opened: { path: string; progress: ReadProgress },
+    opened: { path: string; progress: ReadProgress; repo: RepoInfo; reviewDiff: ReviewDiff },
   ) => Session;
   /** The live session opened from `path`, if there is one. The dedupe lookup: one tab per
    * artifact, so two tabs can never fight over one review's progress record. */
@@ -284,12 +283,12 @@ export function createSessionStore(options: SessionStoreOptions = {}): SessionSt
     createFromReview: (review, opened) =>
       addSession(
         buildSession(
-          { kind: "local", repo: review.repo },
+          { kind: "local", repo: opened.repo },
           {
             comments: review.comments,
             layers: review.layers,
             overview: review.overview,
-            reviewDiff: reviewDiffFor(review),
+            reviewDiff: opened.reviewDiff,
             reviewOrigin: reviewOriginFor(review),
             reviewPath: opened.path,
             progress: opened.progress,

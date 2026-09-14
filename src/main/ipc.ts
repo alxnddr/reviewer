@@ -1,26 +1,25 @@
 import { IpcChannel } from "../shared/ipc";
+import { withStoredPin } from "../shared/session";
 import { cliStatus, installCli } from "./cli-install";
 import { registerGitIpcHandlers } from "./git/handlers";
-import type { GitRunner } from "./git/runner";
 import { registerIpcHandler } from "./ipc-registry";
 import { hasOnboarded, markOnboarded } from "./onboarding";
-import { registerReviewIpcHandlers } from "./review/handlers";
-import type { ProgressStore } from "./review/progress";
+import { registerReviewIpcHandlers, type ReviewOpenDeps } from "./review/handlers";
 import { registerReviewSaveHandlers } from "./review/save";
-import type { SessionStore } from "./sessions";
-import { getThemeSelection, setThemeSelection } from "./theme";
+import { getUserSettings, setUserSettings } from "./user-settings";
 
 export function registerIpcHandlers(
-  gitRunner: GitRunner,
-  sessionStore: SessionStore,
-  progressStore: ProgressStore,
+  reviewDeps: ReviewOpenDeps,
+  /** Settles once restored reviews are re-pinned (`review/source.ts`). `sessions:list` answers
+   * after it, so the renderer never hydrates a pin that is about to change underneath it. */
+  sessionsRepinned: Promise<void>,
 ): void {
-  registerIpcHandler(IpcChannel.themeGet, () => {
-    return getThemeSelection();
-  });
+  const { runner: gitRunner, store: sessionStore, progress: progressStore } = reviewDeps;
 
-  registerIpcHandler(IpcChannel.themeSet, (selection) => {
-    setThemeSelection(selection);
+  registerIpcHandler(IpcChannel.settingsGet, () => getUserSettings());
+
+  registerIpcHandler(IpcChannel.settingsSet, (settings) => {
+    setUserSettings(settings);
   });
 
   registerIpcHandler(IpcChannel.cliStatus, () => cliStatus());
@@ -34,14 +33,21 @@ export function registerIpcHandlers(
   });
 
   registerGitIpcHandlers(gitRunner);
-  registerReviewIpcHandlers(gitRunner, sessionStore, progressStore);
+  registerReviewIpcHandlers(reviewDeps);
   registerReviewSaveHandlers();
 
-  registerIpcHandler(IpcChannel.sessionsList, () => sessionStore.list());
+  registerIpcHandler(IpcChannel.sessionsList, async () => {
+    await sessionsRepinned;
+    return sessionStore.list();
+  });
 
   registerIpcHandler(IpcChannel.sessionsCreate, (request) => sessionStore.create(request.source));
 
-  registerIpcHandler(IpcChannel.sessionsUpdate, (session) => {
+  registerIpcHandler(IpcChannel.sessionsUpdate, (incoming) => {
+    const session = withStoredPin(
+      incoming,
+      sessionStore.list().sessions.find((stored) => stored.id === incoming.id),
+    );
     sessionStore.update(session);
     // The session is authoritative while its tab is open; the artifact's record is a mirror
     // of it, so it is refreshed from the same debounced write-back rather than on a channel

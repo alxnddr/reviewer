@@ -17,7 +17,10 @@
    * host — without them the diff falls back to SF Mono and the tree/headers to
    * system-ui. Only CODE is mono; the tree, file headers, and stats are
    * navigational chrome and read in the shell sans.
-   * Sizes stay on Pierre's 13px register. */
+   * The size, line height, tab size and ligatures (`--diffs-font-size`, `--diffs-line-height`,
+   * `--diffs-tab-size`, `--diffs-font-features`) are NOT declared here: they are the reader's
+   * settings, written as inline properties on <html> by lib/apply-settings.ts, and the font
+   * family follows them through the `--code-font` hook in design/globals.css. */
   --diffs-font-family: var(--font-mono);
   --diffs-header-font-family: var(--font-sans);
   /* The ONE selection fill, used by every selected/active element (tabs, file tree,
@@ -600,7 +603,7 @@ html[data-input-modality="pointer"] {
   color: light-dark(#594c5b, #79697b);
 }
 
-/* Theme flips are instant by design: the store adds this class around the .dark swap. */
+/* Theme flips are instant by design: lib/apply-settings.ts adds this class around the .dark swap. */
 .no-transitions,
 .no-transitions * {
   transition: none !important;

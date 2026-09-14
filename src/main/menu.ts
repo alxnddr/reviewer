@@ -1,4 +1,4 @@
-import { BrowserWindow, Menu, type MenuItemConstructorOptions } from "electron";
+import { app, BrowserWindow, Menu, type MenuItemConstructorOptions } from "electron";
 import { IpcEvent, TAB_ORDINAL_EVENTS, type IpcEventName } from "../shared/ipc";
 import { installCliCommand, uninstallCliCommand } from "./cli-install";
 import { createMainWindow } from "./window";
@@ -37,10 +37,41 @@ function tabOrdinalItems(): MenuItemConstructorOptions[] {
   }));
 }
 
+/** ⌘, — where a macOS reader looks for an app's settings, and the reason the app menu below
+ * is spelled out rather than `role: "appMenu"`: the stock role carries no Settings… item and
+ * offers no way to add one. Through `requestMenuCommand` so that with no window open the chord
+ * still gets one, the way ⌘T does. */
+const SETTINGS_ITEM: MenuItemConstructorOptions = {
+  label: "Settings…",
+  accelerator: "CmdOrCtrl+,",
+  click: () => requestMenuCommand(IpcEvent.menuOpenSettings),
+};
+
+/** The stock `appMenu` role, item for item, with Settings… in the slot macOS puts it in —
+ * between About and Services, where every native app keeps it. */
+function appMenu(): MenuItemConstructorOptions {
+  return {
+    label: app.name,
+    submenu: [
+      { role: "about" },
+      { type: "separator" },
+      SETTINGS_ITEM,
+      { type: "separator" },
+      { role: "services" },
+      { type: "separator" },
+      { role: "hide" },
+      { role: "hideOthers" },
+      { role: "unhide" },
+      { type: "separator" },
+      { role: "quit" },
+    ],
+  };
+}
+
 /** Explicit application menu: native roles plus the custom commands. */
 export function installApplicationMenu(): void {
   const template: MenuItemConstructorOptions[] = [
-    ...(process.platform === "darwin" ? [{ role: "appMenu" } as const] : []),
+    ...(process.platform === "darwin" ? [appMenu()] : []),
     {
       label: "File",
       submenu: [
@@ -121,7 +152,9 @@ export function installApplicationMenu(): void {
                 click: () => void uninstallCliCommand(),
               },
             ]
-          : []),
+          : // Off macOS there is no app menu to hold it, and File is where those platforms
+            // keep it.
+            [{ type: "separator" } as const, SETTINGS_ITEM]),
         { type: "separator" },
         {
           label: "Close Tab",

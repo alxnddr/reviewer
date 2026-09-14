@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { NO_PROGRESS } from "../../shared/review-progress";
 import type { Session } from "../../shared/session";
+import type { ReviewOpenRequest } from "./guard";
 import { createReviewOpenQueue, type ReviewOpenQueueDeps } from "./open-queue";
 
 // The delivery-side ordering: a path arriving before ready is drained exactly once
@@ -28,6 +29,11 @@ function fakeSession(id: string): Session {
     reviewPath: null,
     ...NO_PROGRESS,
   };
+}
+
+/** A launch that named no checkout — the queue carries the request whole either way. */
+function open(path: string): ReviewOpenRequest {
+  return { path, repo: null };
 }
 
 function makeDeps() {
@@ -65,7 +71,7 @@ describe("createReviewOpenQueue", () => {
     const deps = makeDeps();
     const queue = createReviewOpenQueue(deps);
 
-    queue.enqueue("/abs/x.reviewer.json");
+    queue.enqueue(open("/abs/x.reviewer.json"));
     await flush();
     // Nothing imported while not ready.
     expect(deps.importSession).not.toHaveBeenCalled();
@@ -74,7 +80,7 @@ describe("createReviewOpenQueue", () => {
     await flush();
 
     expect(deps.importSession).toHaveBeenCalledTimes(1);
-    expect(deps.importSession).toHaveBeenCalledWith("/abs/x.reviewer.json");
+    expect(deps.importSession).toHaveBeenCalledWith(open("/abs/x.reviewer.json"));
     expect(deps.notifySessionsChanged).toHaveBeenCalledTimes(1);
   });
 
@@ -83,11 +89,11 @@ describe("createReviewOpenQueue", () => {
     const queue = createReviewOpenQueue(deps);
     queue.markReady();
 
-    queue.enqueue("/abs/a.reviewer.json");
-    queue.enqueue("/abs/b.reviewer.json");
+    queue.enqueue(open("/abs/a.reviewer.json"));
+    queue.enqueue(open("/abs/b.reviewer.json"));
     await flush();
 
-    expect(deps.importSession.mock.calls.map((call) => call[0])).toEqual([
+    expect(deps.importSession.mock.calls.map((call) => call[0].path)).toEqual([
       "/abs/a.reviewer.json",
       "/abs/b.reviewer.json",
     ]);
@@ -99,7 +105,7 @@ describe("createReviewOpenQueue", () => {
     const queue = createReviewOpenQueue(deps);
     queue.markReady();
 
-    queue.enqueue("/abs/x.reviewer.json");
+    queue.enqueue(open("/abs/x.reviewer.json"));
     await flush();
 
     expect(deps.createWindow).toHaveBeenCalledTimes(1);
@@ -116,7 +122,7 @@ describe("createReviewOpenQueue", () => {
     // The launch order in index.ts: the window object exists, so `hasWindow()` is true, but
     // its page has not loaded yet.
     queue.markReady();
-    queue.enqueue("/abs/x.reviewer.json");
+    queue.enqueue(open("/abs/x.reviewer.json"));
     await flush();
 
     expect(deps.importSession).toHaveBeenCalledTimes(1);
@@ -137,7 +143,7 @@ describe("createReviewOpenQueue", () => {
     const queue = createReviewOpenQueue(deps);
 
     queue.markReady();
-    queue.enqueue("/abs/x.reviewer.json");
+    queue.enqueue(open("/abs/x.reviewer.json"));
     await flush();
 
     expect(deps.notifySessionsChanged).not.toHaveBeenCalled();
@@ -155,7 +161,7 @@ describe("createReviewOpenQueue", () => {
     const queue = createReviewOpenQueue(deps);
     queue.markReady();
 
-    queue.enqueue("/abs/x.txt");
+    queue.enqueue(open("/abs/x.txt"));
     await flush();
 
     expect(deps.whenWindowReady).not.toHaveBeenCalled();
@@ -167,10 +173,24 @@ describe("createReviewOpenQueue", () => {
     const queue = createReviewOpenQueue(deps);
     queue.markReady();
 
-    queue.enqueue("/abs/x.txt");
+    queue.enqueue(open("/abs/x.txt"));
     await flush();
 
     expect(deps.focusWindow).toHaveBeenCalledTimes(1);
     expect(deps.notifySessionsChanged).not.toHaveBeenCalled();
+  });
+
+  it("hands the import the checkout the launch named, not just the artifact", async () => {
+    const deps = makeDeps();
+    const queue = createReviewOpenQueue(deps);
+    queue.markReady();
+
+    queue.enqueue({ path: "/abs/x.reviewer.json", repo: "/src/app" });
+    await flush();
+
+    expect(deps.importSession).toHaveBeenCalledWith({
+      path: "/abs/x.reviewer.json",
+      repo: "/src/app",
+    });
   });
 });

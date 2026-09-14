@@ -112,6 +112,7 @@ const SHORTCUTS = {
   "repo.open": { group: "windows", keys: ["⌘O"], label: "Open a repository" },
   "review.open": { group: "windows", keys: ["⇧⌘O"], label: "Open a review" },
   "recents.open": { group: "windows", keys: ["⇧⌘R"], label: "Recent reviews" },
+  "settings.open": { group: "windows", keys: ["⌘,"], label: "Settings" },
   "tab.new": { group: "windows", keys: ["⌘T"], label: "New tab" },
   "tab.ordinal": {
     group: "windows",

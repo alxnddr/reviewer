@@ -1,6 +1,6 @@
 import * as z from "zod";
 import { errorMessage } from "./errors";
-import { ReviewRef, RepoInfo, RepoPath } from "./git";
+import { type GitFailure, ReviewRef, RepoInfo, RepoPath } from "./git";
 
 // The review domain contract: `.reviewer.json` is the single integration
 // point, defined here as zod schemas — the schema *is* the format, so every read
@@ -190,9 +190,10 @@ export type ReviewOverview = z.infer<typeof ReviewOverview>;
  *
  * The `rvw` CLI emits **refs-only** artifacts — no `patch` — which the app re-derives
  * `base...head` from git on open; the anchors then resolve positionally against that diff.
- * A `patch` rides along only on an artifact exported from a diff its refs cannot reproduce
- * (a commit range, or the working tree, where `base === head`), and the app renders it
- * verbatim so those anchors always place.
+ * A `patch` rides along on an artifact exported from a diff its refs cannot reproduce (a commit
+ * range, or the working tree, where `base === head`), and on one emitted with `--embed-patch` to
+ * be read where the repo is not. The app renders it verbatim whenever this machine cannot
+ * reproduce it from the refs — see `pinReview` — so those anchors always place.
  *
  * `comments` and `layers` both default to empty: a review that only annotates lines and a
  * review that is only a walkthrough are both whole artifacts, and neither should have to
@@ -228,21 +229,76 @@ export type ReviewArtifactDraft = z.input<typeof ReviewArtifact>;
  * authored lines, kept distinct from the user's mode pickers — a
  * review sha never lands in the branch fields. `frozenPatch` renders the artifact's
  * embedded diff verbatim: the diff can't have drifted, so `AnchorDiff.frozen`
- * places every anchor. `refs` re-derives `base..head` from git when no patch was
- * embedded; the anchors then resolve positionally against that diff. */
+ * places every anchor. `refs` re-derives `base..head` from git whenever this machine has
+ * the repo and the refs (see `pinReview`); the anchors then resolve positionally against that
+ * diff. */
 export const ReviewDiff = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("frozenPatch"), patch: z.string().min(1) }),
   z.object({ kind: z.literal("refs"), base: ReviewRef, head: ReviewRef }),
 ]);
 export type ReviewDiff = z.infer<typeof ReviewDiff>;
 
-/** The pin a review binds to its session: the embedded patch when present, else the
- * authored refs. An empty embedded patch is not a usable frozen diff, so it falls
- * through to the refs form rather than freezing an empty diff. */
-export function reviewDiffFor(review: ImportedReview): ReviewDiff {
-  return review.patch !== null && review.patch.length > 0
-    ? { kind: "frozenPatch", patch: review.patch }
-    : { kind: "refs", base: review.base, head: review.head };
+/** What main found on this machine when it went looking for a review's diff — the one input
+ * the pin below cannot compute, because answering it spawns git (`main/review/source.ts`). Main
+ * asks; this decides. Split that way so the decision is a table a test reads (`review.test.ts`),
+ * not a branch inside an IPC handler.
+ *
+ * - `repoMissing` — no path this review could live at is a git work tree here; `failure` is
+ *   git's own answer, so a refusal can still name the path it refused.
+ * - `refsMissing` — a work tree, but `missing` (in `[base, head]` order) are not commits in it:
+ *   a checkout that has not fetched the branch yet.
+ * - `patchDiffers` — both refs resolve, but the diff they spell is not the embedded patch.
+ * - `live` — both refs resolve and, when a patch rides along, reproduce it byte for byte. */
+export type ReviewSourceCheck =
+  | { kind: "repoMissing"; failure: GitFailure }
+  | { kind: "refsMissing"; repo: RepoInfo; missing: ReviewRef[] }
+  | { kind: "patchDiffers"; repo: RepoInfo }
+  | { kind: "live"; repo: RepoInfo };
+
+/** Why a review has no diff to show on this machine at all — only ever a review with no patch to
+ * fall back to. The codes are `ReviewOpenFailure`'s, which carries them across IPC. */
+export type ReviewPinFailure =
+  | { code: "repoUnavailable"; reason: GitFailure }
+  | { code: "refsUnavailable"; missing: ReviewRef[] };
+
+/** A review seated on this machine: the repo its session reads, and the diff it pins. `repo` is
+ * the checked work tree whenever there is one. Only a frozen review with no repo here keeps the
+ * authored path, and nothing git-backed reads it — `deriveSession` skips git for a frozen pin and
+ * context expansion refuses one — until a later check validates a path and thaws the review. */
+export type ReviewPin =
+  | { ok: true; repo: RepoInfo; reviewDiff: ReviewDiff }
+  | { ok: false; failure: ReviewPinFailure };
+
+/** The pin a review binds to its session, chosen by what this machine has rather than by what the
+ * artifact carries: live refs whenever the repo and refs are here (and reproduce any embedded
+ * patch), the embedded patch when they are not, and a failure only when there is neither.
+ *
+ * Presence used to decide it — a patch meant frozen, always — which is how an artifact emitted
+ * with `--embed-patch` lost context expansion and the commit brush even beside its own checkout.
+ * An empty embedded patch is not a usable frozen diff, so it counts as no patch at all. `review`
+ * is the authored origin because a session re-pinned on launch has no `ImportedReview` left. */
+export function pinReview(review: ReviewOrigin, check: ReviewSourceCheck): ReviewPin {
+  const refs: ReviewDiff = { kind: "refs", base: review.base, head: review.head };
+  const frozen: ReviewDiff | null =
+    review.patch !== null && review.patch.length > 0
+      ? { kind: "frozenPatch", patch: review.patch }
+      : null;
+  switch (check.kind) {
+    case "live":
+      return { ok: true, repo: check.repo, reviewDiff: refs };
+    case "patchDiffers":
+      // Only a review carrying a patch is ever compared, so `frozen` is set here; a patchless one
+      // would have nothing but its refs to show anyway.
+      return { ok: true, repo: check.repo, reviewDiff: frozen ?? refs };
+    case "refsMissing":
+      return frozen === null
+        ? { ok: false, failure: { code: "refsUnavailable", missing: check.missing } }
+        : { ok: true, repo: check.repo, reviewDiff: frozen };
+    case "repoMissing":
+      return frozen === null
+        ? { ok: false, failure: { code: "repoUnavailable", reason: check.failure } }
+        : { ok: true, repo: review.repo, reviewDiff: frozen };
+  }
 }
 
 /** A validated review ready to bind to a session. `repo` is a full `RepoInfo`: the
@@ -267,8 +323,11 @@ export type ImportedReview = {
  * optional embedded `patch`, exactly as imported. Kept apart from the session's
  * `reviewDiff` render pin, which is *cleared* the moment the reviewer navigates to
  * their own diff — the origin is stable, so export always reproduces the
- * authored repo, refs, and patch verbatim, whatever diff is on screen. `patch` models
- * absence as null (no optional key) so the serializer branches on a real value.
+ * authored repo, refs, and patch verbatim, whatever diff is on screen. `repo` is the
+ * path the artifact named even when the session reads a relocated checkout (`rvw open
+ * --repo`, Locate Repository…), so an export still names the machine the review was written
+ * on. `patch` models absence as null (no optional key) so the serializer branches on a real
+ * value.
  * Null for a plain repo session: there is no authored review to export. */
 export const ReviewOrigin = z.object({
   repo: RepoInfo,

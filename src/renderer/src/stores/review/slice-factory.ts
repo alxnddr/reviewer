@@ -89,6 +89,37 @@ export function restoredSlice(session: Session): SessionSlice {
   );
 }
 
+/** A live slice checked against main's copy of its session on a re-list. Main is the only side
+ * that moves a review's pin — Locate Repository…, or `rvw open --repo` on a tab already up — and
+ * once it has, the slice's log, brush and diff all describe the old one, so the slice is rebuilt
+ * from main's session and derives afresh. An unmoved slice is kept by identity, as every re-list
+ * keeps it.
+ *
+ * A rebuilt slice still keeps what the reader did, which the renderer holds newer than main can:
+ * a write-back is a debounce behind, so main's comments, marks and place in the tour may trail the
+ * slice's. Only what belongs to the pin is taken from main. */
+export function reseatedSlice(live: SessionSlice, session: Session): SessionSlice {
+  if (
+    live.reviewDiff?.kind === session.reviewDiff?.kind &&
+    live.repo.path === session.source.repo.path
+  ) {
+    return live;
+  }
+  return {
+    ...restoredSlice(session),
+    comments: live.comments,
+    layers: live.layers,
+    overview: live.overview,
+    overviewOpen: live.overviewOpen,
+    activeLayerId: live.activeLayerId,
+    lastChapterId: live.lastChapterId,
+    selectedFilePath: live.selectedFilePath,
+    readFiles: live.readFiles,
+    collapsedFiles: live.collapsedFiles,
+    readTotal: live.readTotal,
+  };
+}
+
 /** The persisted wire shape back into what the app reads it as. The mirror of
  * `persistedSession`'s conversion (`lib/session-projection.ts`), and kept next to the one
  * place that builds a slice so neither can drift from the other. */

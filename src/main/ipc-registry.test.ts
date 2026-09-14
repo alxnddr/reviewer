@@ -118,28 +118,28 @@ describe("registerIpcHandler payload validation", () => {
 
   it("parses the request with the channel's own schema before the handler runs", async () => {
     const handle = vi.fn(() => {});
-    registerIpcHandler(IpcChannel.themeSet, handle);
-    const listener = electron.handlers.get(IpcChannel.themeSet);
-    await expect(listener?.(fakeEvent(BUNDLE_URL), "not-a-theme")).rejects.toThrow();
+    registerIpcHandler(IpcChannel.settingsSet, handle);
+    const listener = electron.handlers.get(IpcChannel.settingsSet);
+    await expect(listener?.(fakeEvent(BUNDLE_URL), "not-a-settings-object")).rejects.toThrow();
     expect(handle).not.toHaveBeenCalled();
-    await expect(listener?.(fakeEvent(BUNDLE_URL), "nord")).resolves.toBeUndefined();
-    expect(handle).toHaveBeenCalledWith("nord");
+    await expect(listener?.(fakeEvent(BUNDLE_URL), { theme: "nord" })).resolves.toBeUndefined();
+    expect(handle).toHaveBeenCalledWith({ theme: "nord" });
   });
 
   it("parses the response too, so a handler cannot answer off-contract", async () => {
-    // `theme:get` answers a ThemeId; this one hands back a string that is not one, which the
-    // renderer would otherwise receive as a valid selection it cannot resolve.
-    registerIpcHandler(IpcChannel.themeGet, () => "nonesuch" as never);
-    const listener = electron.handlers.get(IpcChannel.themeGet);
+    // `settings:get` answers a Settings object; this one hands back a bare string, which the
+    // renderer would otherwise receive as a settings record it cannot read a key off.
+    registerIpcHandler(IpcChannel.settingsGet, () => "nonesuch" as never);
+    const listener = electron.handlers.get(IpcChannel.settingsGet);
     await expect(listener?.(fakeEvent(BUNDLE_URL))).rejects.toThrow();
   });
 
-  it("lets a valid response through, pinning the row to theme:get and not merely to some row", async () => {
+  it("lets a valid response through, pinning the row to settings:get and not merely to some row", async () => {
     // Rejecting "nonesuch" alone proves less than it looks: every one of the 22 response
     // schemas refuses that string, so the test above would still pass if the lookup returned
-    // the wrong row entirely. A real ThemeId getting through is what rules that out.
-    registerIpcHandler(IpcChannel.themeGet, () => "nord");
-    const listener = electron.handlers.get(IpcChannel.themeGet);
-    await expect(listener?.(fakeEvent(BUNDLE_URL))).resolves.toBe("nord");
+    // the wrong row entirely. A real settings record getting through is what rules that out.
+    registerIpcHandler(IpcChannel.settingsGet, () => ({ theme: "nord" }));
+    const listener = electron.handlers.get(IpcChannel.settingsGet);
+    await expect(listener?.(fakeEvent(BUNDLE_URL))).resolves.toEqual({ theme: "nord" });
   });
 });

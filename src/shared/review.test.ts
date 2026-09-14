@@ -4,6 +4,7 @@ import {
   Comment,
   importReview,
   parseArtifactBytes,
+  pinReview,
   repoDisplayName,
   ReviewAnchor,
   ReviewArtifact,
@@ -405,6 +406,65 @@ describe("parseArtifactBytes", () => {
     expect(parsed.artifact.repo).toBe("/repos/app");
     expect(parsed.artifact.comments).toEqual([]);
     expect(parsed.artifact.layers).toEqual([]);
+  });
+});
+
+describe("pinReview", () => {
+  // The whole availability rule as a table: what this machine has (the check main ran) against
+  // whether the artifact carries a patch.
+  const AUTHORED = { path: "/home/box/app", name: "app" };
+  const LOCAL = { path: "/work/app", name: "app" };
+  const PATCH = "diff --git a/src/a.ts b/src/a.ts\n";
+  const withPatch = { repo: AUTHORED, base: "main", head: SHA_40, patch: PATCH };
+  const refsOnly = { ...withPatch, patch: null };
+  const REFS = { kind: "refs", base: "main", head: SHA_40 };
+  const FROZEN = { kind: "frozenPatch", patch: PATCH };
+  const NOT_A_REPO = { code: "notARepo", path: AUTHORED.path } as const;
+
+  it("goes live whenever the repo and refs are here, whether or not a patch rides along", () => {
+    for (const origin of [withPatch, refsOnly]) {
+      expect(pinReview(origin, { kind: "live", repo: LOCAL })).toEqual({
+        ok: true,
+        repo: LOCAL,
+        reviewDiff: REFS,
+      });
+    }
+  });
+
+  it("opens off the patch when the repo is not here, keeping the authored path as its label", () => {
+    expect(pinReview(withPatch, { kind: "repoMissing", failure: NOT_A_REPO })).toEqual({
+      ok: true,
+      repo: AUTHORED,
+      reviewDiff: FROZEN,
+    });
+  });
+
+  it("opens off the patch on a checkout that lacks the refs, or whose refs spell another diff", () => {
+    const expected = { ok: true, repo: LOCAL, reviewDiff: FROZEN };
+    expect(pinReview(withPatch, { kind: "refsMissing", repo: LOCAL, missing: [SHA_40] })).toEqual(
+      expected,
+    );
+    expect(pinReview(withPatch, { kind: "patchDiffers", repo: LOCAL })).toEqual(expected);
+  });
+
+  it("fails a refs-only review with no repo here, carrying git's own reason", () => {
+    expect(pinReview(refsOnly, { kind: "repoMissing", failure: NOT_A_REPO })).toEqual({
+      ok: false,
+      failure: { code: "repoUnavailable", reason: NOT_A_REPO },
+    });
+  });
+
+  it("fails a refs-only review whose refs are missing, naming them", () => {
+    expect(pinReview(refsOnly, { kind: "refsMissing", repo: LOCAL, missing: [SHA_40] })).toEqual({
+      ok: false,
+      failure: { code: "refsUnavailable", missing: [SHA_40] },
+    });
+  });
+
+  it("counts an empty embedded patch as no patch at all", () => {
+    expect(
+      pinReview({ ...withPatch, patch: "" }, { kind: "repoMissing", failure: NOT_A_REPO }).ok,
+    ).toBe(false);
   });
 });
 

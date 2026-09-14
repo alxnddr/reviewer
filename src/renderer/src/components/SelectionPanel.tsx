@@ -345,22 +345,37 @@ function ReviewCommitsSection(): ReactElement {
  * own commits. Deliberately offers no branch/other-diff escape — a review session stays
  * on its review; the repo is opened separately to explore freely. */
 function ReviewSelectionPanel(): ReactElement | null {
+  const sessionId = useReviewStore((state) => selectActiveSlice(state)?.id ?? null);
   const origin = useReviewStore((state) => selectActiveSlice(state)?.reviewOrigin ?? null);
   const frozen = useReviewStore(
     (state) => selectActiveSlice(state)?.reviewDiff?.kind === "frozenPatch",
   );
+  const locateReviewRepository = useReviewStore((state) => state.locateReviewRepository);
 
-  if (origin === null) {
+  if (origin === null || sessionId === null) {
     return null;
   }
   return (
     <section aria-label="Review diff" className="flex min-h-0 flex-1 flex-col">
       {frozen ? (
-        // A frozen review renders its embedded patch off git: there are no commits to
-        // brush, so its range is read-only.
-        <RailNote>
-          This review carries a frozen patch, so its diff can’t be narrowed to individual commits.
-        </RailNote>
+        // A frozen review renders its embedded patch off git: no commits to brush, no file to
+        // expand context from. That is a fact about this machine rather than the review — the
+        // same artifact is live beside its checkout — so the note offers the way there.
+        <>
+          <RailNote>
+            This review carries a frozen patch; locate the repository to expand context and narrow
+            to commits.
+          </RailNote>
+          <div className="px-2">
+            <Button
+              variant="chrome"
+              size="sm"
+              onClick={() => void locateReviewRepository({ kind: "session", sessionId })}
+            >
+              Locate repository…
+            </Button>
+          </div>
+        </>
       ) : (
         <ReviewCommitsSection />
       )}

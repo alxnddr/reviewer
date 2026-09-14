@@ -65,7 +65,7 @@ export function emitReviewArtifact(input: EmitInput): EmitResult {
     head: input.head,
     // Absent unless asked for, and absent rather than null when the capture came back empty:
     // the schema's `patch` is a non-empty string, and an empty one is not a diff the app
-    // could freeze anyway — it would fall through to the refs form on open (`reviewDiffFor`),
+    // could freeze anyway — it would fall through to the refs form on open (`pinReview`),
     // so writing it would only promise portability the file cannot keep.
     patch: input.embedPatch === true && input.patch.length > 0 ? input.patch : undefined,
     // `JSON.stringify` drops an undefined value, so a draft with no overview emits no

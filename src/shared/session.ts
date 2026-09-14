@@ -55,9 +55,10 @@ export const Session = z.object({
   // session written before the field parse strictly rather than fall to salvage.
   overview: ReviewOverview.nullable().default(null),
   // The review's pinned diff: drives the rendered diff to the one the
-  // anchors were authored against, so comments place without a manual re-pick. A
-  // review session keeps this pin for its whole life (the selector only narrows
-  // within it via `reviewSubrange`); null for a plain repo session. `.default(null)`
+  // anchors were authored against, so comments place without a manual re-pick. The
+  // selector only narrows within it (`reviewSubrange`); what moves it is this machine —
+  // a frozen pin thaws to refs once the repo and refs are here (`repinSession`). Null for
+  // a plain repo session. `.default(null)`
   // lets an older v2 session (no key) parse strictly rather than fall to the
   // salvage tier — absence is a schema addition, not corruption.
   reviewDiff: ReviewDiff.nullable().default(null),
@@ -65,7 +66,8 @@ export const Session = z.object({
   // SHA-anchored so history growth cannot shift it. Null is the whole
   // review — its diff renders via `reviewDiff` (the pin), placing every anchor;
   // non-null re-derives the diff of just those commits. Only ever set on a review
-  // session (a frozen review, whose diff can't be narrowed, never carries one).
+  // session (a frozen review, whose diff can't be narrowed, never carries one, and a
+  // review that thaws starts without one — see `repinSession`).
   // `.default(null)` keeps a pre-scope session parsing strictly, like the pins above.
   reviewSubrange: CommitSelection.nullable().default(null),
   // The authored repo, refs, and embedded patch this session was opened from (for
@@ -84,6 +86,49 @@ export const Session = z.object({
   ...ReadProgress.shape,
 });
 export type Session = z.infer<typeof Session>;
+
+/** A review session re-seated on a new pin — the one way `source.repo`, `reviewDiff` and
+ * `reviewSubrange` change after open, shared by the launch re-pin and Locate Repository… so the
+ * two cannot disagree about what a thaw resets. Answers `session` itself when nothing moved, so a
+ * caller can skip the write.
+ *
+ * A subrange survives only a move that keeps the pin's kind: its SHAs are commits of the same
+ * authored refs, so a relocated live review can still stand on them — but a frozen review never
+ * carries one, and a review that thaws starts on its whole diff. */
+export function repinSession(
+  session: Session,
+  pin: { repo: RepoInfo; reviewDiff: ReviewDiff },
+): Session {
+  const sameKind = session.reviewDiff?.kind === pin.reviewDiff.kind;
+  if (sameKind && session.source.repo.path === pin.repo.path) {
+    return session;
+  }
+  return {
+    ...session,
+    source: { kind: "local", repo: pin.repo },
+    reviewDiff: pin.reviewDiff,
+    reviewSubrange: sameKind ? session.reviewSubrange : null,
+  };
+}
+
+/** A renderer write-back laid over the stored session, keeping the pin as main has it. Only main
+ * moves a review's pin (`repinSession`, from the launch re-pin and Locate Repository…); the
+ * renderer's copy only ever carries back what it was handed. But a write-back is a debounce behind
+ * at best, so one that left before a re-seat can land after it — and would put the old pin back,
+ * stranding the review frozen until the next launch. So the pin is main's and main keeps it, while
+ * everything else in the write-back is the reader's and wins. A plain repo session has no pin. */
+export function withStoredPin(incoming: Session, stored: Session | undefined): Session {
+  if (stored === undefined || stored.reviewOrigin === null) {
+    return incoming;
+  }
+  return {
+    ...incoming,
+    source: stored.source,
+    reviewDiff: stored.reviewDiff,
+    // The subrange is the reader's, but a frozen pin can never carry one.
+    reviewSubrange: stored.reviewDiff?.kind === "frozenPatch" ? null : incoming.reviewSubrange,
+  };
+}
 
 /** What `sessions:list` answers with: the store's live state minus the on-disk
  * versioning concern. Reads always succeed — salvage happens at load, not here. */

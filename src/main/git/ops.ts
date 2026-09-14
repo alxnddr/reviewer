@@ -19,6 +19,7 @@ import {
   type LogRange,
   type Patch,
   type RepoPath,
+  type ReviewRef,
 } from "../../shared/git";
 import type { GitRunFailure, GitRunner } from "./runner";
 import { parseBranchList, parseCommitLog } from "./parse";
@@ -83,6 +84,32 @@ export async function validateRepo(runner: GitRunner, path: string): Promise<Git
     console.error("git rev-parse --show-toplevel output is not a usable repo path:", error);
     return failure({ code: "unexpected" });
   }
+}
+
+/** Which of `refs` are not commits in this repo — empty when every one resolves. One `rev-parse
+ * --verify` per distinct ref rather than one call for all: git stops at the first bad revision,
+ * and the answer wanted is *which* are missing, so a checkout lacking only `head` can say so.
+ * `--quiet` makes "not a commit" exit 1 with nothing on stdout — git's defined answer, not a
+ * failure — while anything else (no repo, a timeout) still is one. Every ref has passed the
+ * `ReviewRef` schema, so `<ref>^{commit}` can be neither a flag nor a second argument. */
+export async function resolveRefs(
+  runner: GitRunner,
+  repoPath: RepoPath,
+  refs: readonly ReviewRef[],
+): Promise<GitResult<ReviewRef[]>> {
+  const missing: ReviewRef[] = [];
+  for (const ref of new Set(refs)) {
+    const result = await runner.run({
+      cwd: repoPath,
+      args: ["rev-parse", "--quiet", "--verify", `${ref}^{commit}`],
+      okExitCodes: [0, 1],
+    });
+    if (!result.ok) return failure(mapRunFailure(result.failure, repoPath));
+    if (result.stdout.trim().length === 0) {
+      missing.push(ref);
+    }
+  }
+  return { ok: true, value: missing };
 }
 
 export async function listBranches(

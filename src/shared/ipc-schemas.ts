@@ -1,6 +1,5 @@
 import * as z from "zod";
 import { CliInstallResult, CliStatus } from "./cli";
-import { ThemeId } from "./contracts";
 import {
   BranchesResponse,
   DiffRequest,
@@ -15,6 +14,7 @@ import {
 import type { IpcChannelName } from "./ipc";
 import {
   RecentReviewsResponse,
+  ReviewLocateRepoRequest,
   ReviewOpenPathRequest,
   ReviewOpenResponse,
   ReviewSaveRequest,
@@ -27,6 +27,7 @@ import {
   SessionOrderRequest,
   SessionSnapshot,
 } from "./session";
+import { Settings } from "./settings";
 
 // One row per channel, and the only place a channel's payload shapes are written down: main
 // validates with these schemas (`ipc-registry.ts` looks them up by channel) and `IpcContract`
@@ -48,8 +49,8 @@ const NoPayload = z.void();
  * there. The value type is deliberately loose (`z.ZodType`); it is `IpcContract` that pins each
  * entry's meaning, by deriving from it. */
 export const IPC_SCHEMAS = {
-  "theme:get": { request: NoPayload, response: ThemeId },
-  "theme:set": { request: ThemeId, response: NoPayload },
+  "settings:get": { request: NoPayload, response: Settings },
+  "settings:set": { request: Settings, response: NoPayload },
   "cli:status": { request: NoPayload, response: CliStatus },
   // Answers with the state *after* the attempt rather than a bare success flag: the guide
   // shows where the launcher landed, and "installed" is a fact on disk either way.
@@ -61,6 +62,8 @@ export const IPC_SCHEMAS = {
   // supplies the dropped path, guarded in main before use.
   "review:open": { request: NoPayload, response: ReviewOpenResponse },
   "review:open-path": { request: ReviewOpenPathRequest, response: ReviewOpenResponse },
+  // Locate: main owns the directory picker, so the request only names which review it is for.
+  "review:locate-repo": { request: ReviewLocateRepoRequest, response: ReviewOpenResponse },
   // Answers plainly rather than in a result envelope: "the directory would not open" is a
   // field on the answer (see RecentReviewsResponse), not a failed call.
   "reviews:recent": { request: NoPayload, response: RecentReviewsResponse },

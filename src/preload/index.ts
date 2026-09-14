@@ -31,8 +31,8 @@ function subscribeCommand(event: IpcEventName, listener: () => void): () => void
 }
 
 const bridge: ReviewerBridge = {
-  getThemeSelection: () => invoke(IpcChannel.themeGet, undefined),
-  setThemeSelection: (selection) => invoke(IpcChannel.themeSet, selection),
+  getSettings: () => invoke(IpcChannel.settingsGet, undefined),
+  setSettings: (settings) => invoke(IpcChannel.settingsSet, settings),
   getCliStatus: () => invoke(IpcChannel.cliStatus, undefined),
   installCli: () => invoke(IpcChannel.cliInstall, undefined),
   getOnboarded: () => invoke(IpcChannel.onboardingGet, undefined),
@@ -40,6 +40,7 @@ const bridge: ReviewerBridge = {
   openRepo: () => invoke(IpcChannel.repoOpen, undefined),
   openReview: () => invoke(IpcChannel.reviewOpen, undefined),
   openReviewByPath: (request) => invoke(IpcChannel.reviewOpenPath, request),
+  locateReviewRepo: (request) => invoke(IpcChannel.reviewLocateRepo, request),
   listRecentReviews: () => invoke(IpcChannel.reviewsRecent, undefined),
   saveReviewJson: (request) => invoke(IpcChannel.reviewSaveJson, request),
   saveReviewMarkdown: (request) => invoke(IpcChannel.reviewSaveMarkdown, request),
@@ -64,6 +65,7 @@ const bridge: ReviewerBridge = {
   onOpenReviewCommand: (listener) => subscribeCommand(IpcEvent.menuOpenReview, listener),
   onOpenRecentReviewsCommand: (listener) =>
     subscribeCommand(IpcEvent.menuOpenRecentReviews, listener),
+  onOpenSettingsCommand: (listener) => subscribeCommand(IpcEvent.menuOpenSettings, listener),
   onExportReviewJsonCommand: (listener) =>
     subscribeCommand(IpcEvent.menuExportReviewJson, listener),
   onExportReviewMarkdownCommand: (listener) =>

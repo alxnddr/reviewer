@@ -7,10 +7,12 @@ import { crashLogPath, installCrashHandlers } from "./crash";
 import { createGitRunner } from "./git/runner";
 import { registerIpcHandlers } from "./ipc";
 import { installApplicationMenu } from "./menu";
-import { reviewPathFromArgv } from "./review/guard";
-import { importReviewSessionFromArg } from "./review/handlers";
+import { reviewOpenFromArgv } from "./review/guard";
+import { importReviewSessionFromArg, type ReviewOpenDeps } from "./review/handlers";
 import { createReviewOpenQueue } from "./review/open-queue";
 import { createProgressStore } from "./review/progress";
+import { storeRelocations } from "./review/relocations";
+import { repinReviewSessions } from "./review/source";
 import { createSessionStore } from "./sessions";
 import { flushSessionsThenTerminateGit } from "./shutdown";
 import { applyPersistedTheme } from "./theme";
@@ -38,13 +40,31 @@ if (app.requestSingleInstanceLock()) {
   // `app.getPath` is only legal after `setName` above, which is why it is read here and not
   // at module scope.
   const progressStore = createProgressStore(join(app.getPath("userData"), "progress"));
+  const reviewDeps: ReviewOpenDeps = {
+    runner: gitRunner,
+    store: sessionStore,
+    progress: progressStore,
+    relocations: storeRelocations(),
+  };
+
+  // Restored reviews are re-decided against what this machine has now — frozen last night, live
+  // this morning if the worktree was pulled in between (see `review/source.ts`). Started here,
+  // before `ready`, because it needs nothing but git and the stores; and awaited by the renderer's
+  // `sessions:list` and by every launch import, so neither sees a pin that is about to change.
+  const sessionsRepinned = repinReviewSessions(reviewDeps).catch((error: unknown) => {
+    console.error("Restored reviews could not be re-pinned:", error);
+  });
 
   // macOS delivers a launch-by-file through `open-file` (dock drop / Finder
   // double-click), which can fire before `ready` on a cold start; the queue owns
   // the import → reveal ordering and the pre-ready buffering.
   const openQueue = createReviewOpenQueue({
-    importSession: (absolutePath) =>
-      importReviewSessionFromArg(gitRunner, sessionStore, progressStore, absolutePath),
+    importSession: async (request) => {
+      // An import can dedupe onto a restored session, or relocate one, so it must not race the
+      // re-pin rewriting that same session.
+      await sessionsRepinned;
+      return importReviewSessionFromArg(reviewDeps, request);
+    },
     hasWindow: () => BrowserWindow.getAllWindows().length > 0,
     createWindow: () => {
       createMainWindow();
@@ -76,15 +96,15 @@ if (app.requestSingleInstanceLock()) {
     // Denying the default keeps Electron from routing the path anywhere else; we
     // own delivery from here.
     event.preventDefault();
-    openQueue.enqueue(filePath);
+    openQueue.enqueue({ path: filePath, repo: null });
   });
 
   app.on("second-instance", (_event, argv, workingDirectory) => {
     // `reviewer path/to/x.reviewer.json` against a running app: resolve the arg
     // against the caller's cwd (guaranteed after `ready`), import, and re-list.
-    const reviewPath = reviewPathFromArgv(argv, workingDirectory);
-    if (reviewPath !== null) {
-      openQueue.enqueue(reviewPath);
+    const request = reviewOpenFromArgv(argv, workingDirectory);
+    if (request !== null) {
+      openQueue.enqueue(request);
       return;
     }
     // No file arg — a plain relaunch is a focus request (macOS keeps the app
@@ -126,13 +146,13 @@ if (app.requestSingleInstanceLock()) {
 
     applyPersistedTheme();
     installApplicationMenu();
-    registerIpcHandlers(gitRunner, sessionStore, progressStore);
+    registerIpcHandlers(reviewDeps, sessionsRepinned);
 
     // A first-instance launch-by-file (`reviewer x.reviewer.json` cold start)
     // arrives on argv; queue it behind any `open-file` paths that landed early.
-    const firstInstancePath = reviewPathFromArgv(process.argv, process.cwd());
-    if (firstInstancePath !== null) {
-      openQueue.enqueue(firstInstancePath);
+    const firstInstance = reviewOpenFromArgv(process.argv, process.cwd());
+    if (firstInstance !== null) {
+      openQueue.enqueue(firstInstance);
     }
 
     createMainWindow();

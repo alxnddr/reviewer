@@ -3281,3 +3281,113 @@ describe("copying comments as a prompt", () => {
     expect(store.getState().promptCopy).toBeNull();
   });
 });
+
+describe("locating a review's repository", () => {
+  const ORIGIN: ReviewOrigin = {
+    repo: { path: "/home/box/app", name: "app" },
+    base: SHA_A,
+    head: SHA_B,
+    patch: MULTI_STATUS_PATCH,
+  };
+
+  /** A review opened frozen, where the box's path does not exist. */
+  function frozenSession(): Session {
+    return storedSession(ID_A, "/home/box/app", {
+      reviewDiff: { kind: "frozenPatch", patch: MULTI_STATUS_PATCH },
+      reviewOrigin: ORIGIN,
+      reviewPath: "/reviews/box.reviewer.json",
+    });
+  }
+
+  /** The same session after main re-seated it on a local checkout. */
+  function liveSession(): Session {
+    return storedSession(ID_A, "/work/app", {
+      reviewDiff: { kind: "refs", base: SHA_A, head: SHA_B },
+      reviewOrigin: ORIGIN,
+      reviewPath: "/reviews/box.reviewer.json",
+    });
+  }
+
+  it("rebuilds a slice main re-seated, keeping what the reader had done in it", async () => {
+    const bridge = makeBridge({});
+    await hydrateWith(bridge, { sessions: [frozenSession()], activeSessionId: ID_A });
+    store.setState({
+      sessions: {
+        ...store.getState().sessions,
+        [ID_A]: { ...slice(ID_A), readFiles: new Map([["src/a.ts", "modified::a..b"]]) },
+      },
+    });
+    vi.mocked(bridge.listSessions).mockResolvedValue({
+      sessions: [liveSession()],
+      activeSessionId: ID_A,
+    });
+
+    await store.getState().syncSessions();
+
+    expect(slice(ID_A).reviewDiff).toEqual({ kind: "refs", base: SHA_A, head: SHA_B });
+    expect(slice(ID_A).repo.path).toBe("/work/app");
+    expect(slice(ID_A).readFiles.get("src/a.ts")).toBe("modified::a..b");
+    // Live now, so it derived against git: the commits the frozen pin never asked for.
+    expect(slice(ID_A).log?.phase).toBe("loaded");
+  });
+
+  it("sends the session's pending write-back before asking main to re-seat it", async () => {
+    const bridge = makeBridge({
+      locateReviewRepo: vi.fn().mockResolvedValue({
+        ok: true,
+        value: { kind: "opened", sessionId: ID_A, created: false },
+      }),
+    });
+    await hydrateWith(bridge, { sessions: [frozenSession()], activeSessionId: ID_A });
+    store.getState().scheduleSessionWriteBack(ID_A);
+    vi.mocked(bridge.listSessions).mockResolvedValue({
+      sessions: [liveSession()],
+      activeSessionId: ID_A,
+    });
+
+    await store.getState().locateReviewRepository({ kind: "session", sessionId: ID_A });
+
+    const update = vi.mocked(bridge.updateSession).mock.invocationCallOrder[0] ?? Infinity;
+    const locate = vi.mocked(bridge.locateReviewRepo).mock.invocationCallOrder[0] ?? -Infinity;
+    expect(update).toBeLessThan(locate);
+    expect(slice(ID_A).reviewDiff?.kind).toBe("refs");
+  });
+
+  it("lands a failed locate on the banner, remembering which session to retry", async () => {
+    const failure = { code: "refsUnavailable", missing: [SHA_B] } as const;
+    const bridge = makeBridge({
+      locateReviewRepo: vi.fn().mockResolvedValue({ ok: false, failure }),
+    });
+    await hydrateWith(bridge, { sessions: [frozenSession()], activeSessionId: ID_A });
+
+    await store.getState().locateReviewRepository({ kind: "session", sessionId: ID_A });
+
+    expect(store.getState().reviewOpenFailure).toEqual(failure);
+    expect(store.getState().reviewOpenLocate).toEqual({ kind: "session", sessionId: ID_A });
+    expect(slice(ID_A).reviewDiff?.kind).toBe("frozenPatch");
+  });
+
+  it("offers a drop that failed on its repository a locate, and a malformed one none", async () => {
+    const openReviewByPath = vi.fn().mockResolvedValue({
+      ok: false,
+      failure: { code: "repoUnavailable", reason: { code: "notARepo", path: "/home/box/app" } },
+    });
+    vi.stubGlobal("window", { reviewer: makeBridge({ openReviewByPath }) });
+
+    await store.getState().openReviewByPath("/abs/x.reviewer.json");
+    expect(store.getState().reviewOpenLocate).toEqual({
+      kind: "artifact",
+      path: "/abs/x.reviewer.json",
+    });
+
+    openReviewByPath.mockResolvedValue({
+      ok: false,
+      failure: { code: "invalidContent", reason: "repo — Repo path must be absolute" },
+    });
+    await store.getState().openReviewByPath("/abs/x.reviewer.json");
+    expect(store.getState().reviewOpenLocate).toBeNull();
+
+    store.getState().clearReviewOpenFailure();
+    expect(store.getState().reviewOpenFailure).toBeNull();
+  });
+});

@@ -3,6 +3,7 @@ import { resolve } from "node:path";
 import { buildCommand } from "@stricli/core";
 import { REVIEW_EXTENSION } from "../../src/shared/node/reviews-dir";
 import { errorMessage } from "../../src/shared/errors";
+import { git } from "../git";
 import { launchReviewer } from "../launch";
 import { EXIT_READY, type LocalContext } from "../context";
 import { writeCannotRun, writeJson } from "../errors";
@@ -19,9 +20,18 @@ import { writeCannotRun, writeJson } from "../errors";
 // existence and kind, the same order the app's guard checks in) before launching. Its exit
 // codes are therefore only 0 and 2: it either launches (0) or could not (2 — wrong path, app
 // not installed, unsupported platform), never "runs and finds review problems".
+//
+// `--repo` says where the artifact's repository is checked out on *this* machine, for an artifact
+// written somewhere its `repo` path means nothing — a box, a CI runner. It is proven to be a git
+// work tree before the launch (the one thing `open` can check without reading the artifact, and a
+// typo is better refused in the terminal that typed it than as a review that quietly stayed
+// frozen) and handed over as its toplevel. The app still owns the rest: it re-validates the path,
+// checks the refs, and remembers the pairing once the review goes live, so later reviews of the
+// same checkout need no flag.
 
 type OpenFlags = {
   readonly json?: boolean;
+  readonly repo?: string;
 };
 
 /** What `--json` reports on a successful launch: the absolute path handed to the app. Named
@@ -32,6 +42,8 @@ type OpenFlags = {
 type OpenReport = {
   readonly ok: true;
   readonly path: string;
+  /** The checkout handed over with it, as its work-tree toplevel — null without `--repo`. */
+  readonly repo: string | null;
 };
 
 export const openCommand = buildCommand<OpenFlags, [string], LocalContext>({
@@ -46,14 +58,28 @@ export const openCommand = buildCommand<OpenFlags, [string], LocalContext>({
       "reused if one is open. Exit 0 once the app has been asked to open it; exit 2 when the path",
       "is not a readable .reviewer.json, the app is not installed, or this platform has no Reviewer",
       "build. macOS today.",
+      "",
+      "--repo names where the artifact's repository is checked out on this machine, when that is",
+      "not the path the artifact records (a review written on another machine). It must be a git",
+      "work tree (exit 2 otherwise); Reviewer remembers it once the review opens live.",
     ].join("\n"),
-    customUsage: ["change.reviewer.json", "change.reviewer.json --json"],
+    customUsage: [
+      "change.reviewer.json",
+      "change.reviewer.json --json",
+      "change.reviewer.json --repo ~/src/app",
+    ],
   },
   parameters: {
     flags: {
       json: {
         kind: "boolean",
         brief: "On success, emit the launched artifact path as JSON on stdout",
+        optional: true,
+      },
+      repo: {
+        kind: "parsed",
+        parse: String,
+        brief: "Where the artifact's repository is checked out here, if not at the path it records",
         optional: true,
       },
     },
@@ -95,17 +121,34 @@ export const openCommand = buildCommand<OpenFlags, [string], LocalContext>({
       return;
     }
 
-    const launched = launchReviewer(this.platform, path);
+    let repo: string | null = null;
+    if (flags.repo !== undefined) {
+      const toplevel = git(this.env, resolve(this.cwd, flags.repo), [
+        "rev-parse",
+        "--show-toplevel",
+      ]);
+      if (!toplevel.ok) {
+        writeCannotRun(this, flags.json, {
+          code: "gitFailed",
+          message: `--repo ${flags.repo} is not a git work tree: ${toplevel.message}`,
+        });
+        return;
+      }
+      repo = toplevel.stdout.trim();
+    }
+
+    const launched = launchReviewer(this.platform, path, repo);
     if (!launched.ok) {
       writeCannotRun(this, flags.json, { code: "notInstalled", message: launched.message });
       return;
     }
 
     if (flags.json === true) {
-      const report: OpenReport = { ok: true, path };
+      const report: OpenReport = { ok: true, path, repo };
       writeJson(this, report);
     } else {
-      this.process.stdout.write(`opening ${path} in Reviewer\n`);
+      const against = repo === null ? "" : ` against ${repo}`;
+      this.process.stdout.write(`opening ${path} in Reviewer${against}\n`);
     }
     this.process.exitCode = EXIT_READY;
   },
