@@ -66,6 +66,17 @@ bun run build:cli    # → rvw CLI at dist/rvw.js
 Builds are unsigned, so on first launch right-click → **Open**, or run:
 `xattr -dr com.apple.quarantine /Applications/Reviewer.app`
 
+**On Linux** there is no app, but `rvw` runs anywhere node ≥ 20 does, so you can write and check reviews on a Linux box and open them on a Mac. Each release attaches `rvw-<version>-any.tar.gz`, and `scripts/install-cli.sh` installs it for the current user:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/alxnddr/reviewer/main/scripts/install-cli.sh | sh
+sh install-cli.sh --version 0.4.0          # one release rather than the latest
+sh install-cli.sh rvw-0.4.0-any.tar.gz     # a tarball you already have (bun run pack:cli)
+sh install-cli.sh --uninstall
+```
+
+It unpacks the release to `~/.local/share/rvw/<version>` and writes `~/.local/bin/rvw`, a launcher that runs it with the `node` on your PATH. Every verb works except `rvw open`, which launches the macOS app and exits 2 anywhere else. `rvw emit` still writes the artifact there but says it could not open it, so pass `--no-open`.
+
 ## Develop
 
 ```bash

@@ -12,6 +12,7 @@
     "dev:fresh": "node scripts/reset-state.mjs && bun run dev",
     "cli": "bun cli/index.ts",
     "build:cli": "bun build cli/index.ts --target=node --outfile dist/rvw.js && printf '{\"type\":\"module\"}\\n' > dist/package.json",
+    "pack:cli": "bun run build:cli && node scripts/pack-cli.mjs",
     "start": "NODE_OPTIONS=--enable-source-maps electron-vite preview",
     "build": "electron-vite build",
     "build:mac": "bun run build:cli && electron-vite build && electron-builder --mac --publish never",

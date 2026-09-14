@@ -2,7 +2,8 @@ name: Release
 
 # Tag a commit to cut a release, e.g.:
 #   git tag v0.1.0 && git push origin v0.1.0
-# Keep the tag in sync with the `version` in package.json — the .dmg is named from it.
+# Keep the tag in sync with the `version` in package.json — the .dmg is named from it, `rvw
+# --version` reports it, and pack-cli refuses to start when the two disagree.
 on:
   push:
     tags: ["v*"]
@@ -11,9 +12,58 @@ permissions:
   contents: write
 
 jobs:
+  pack-cli:
+    # `rvw` for machines without the app (a Linux dev box): the files extraResources puts inside
+    # Reviewer.app, as the tarball scripts/install-cli.sh installs. Nothing in it is native, so it
+    # is built on the cheap runner. It does not publish: the release is a draft, GitHub's
+    # release-by-tag lookup does not return drafts, so two jobs publishing to one tag would each
+    # create their own. release-mac attaches this job's artifact instead.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Tag matches package.json
+        run: |
+          version=$(node -p 'require("./package.json").version')
+          if [ "$GITHUB_REF_NAME" != "v$version" ]; then
+            echo "::error::tag $GITHUB_REF_NAME is not v$version (package.json); rvw --version would report the wrong release"
+            exit 1
+          fi
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install
+        run: bun install --frozen-lockfile
+
+      - name: Pack rvw tarball
+        run: bun run pack:cli
+
+      # The oldest node install-cli.sh accepts, set up only now so the build above runs on the
+      # runner's own: the smoke install is the step that claims ">= 20" works.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Smoke-install the tarball
+        run: |
+          export HOME="$(mktemp -d)"
+          sh scripts/install-cli.sh dist/rvw-*-any.tar.gz
+          "$HOME/.local/bin/rvw" --version
+          "$HOME/.local/bin/rvw" skills
+          "$HOME/.local/bin/rvw" schema --json > /dev/null
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: rvw-cli
+          path: dist/rvw-*-any.tar.gz
+          if-no-files-found: error
+
   release-mac:
     # macos-latest is Apple Silicon; the artifacts are arm64. For a universal
     # build, run electron-builder with `--universal`.
+    needs: pack-cli
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
@@ -32,6 +82,12 @@ jobs:
           CSC_IDENTITY_AUTO_DISCOVERY: "false"
         run: bun run build:mac
 
+      - name: Fetch rvw tarball
+        uses: actions/download-artifact@v4
+        with:
+          name: rvw-cli
+          path: dist
+
       - name: Publish to GitHub Release
         uses: softprops/action-gh-release@v2
         with:
@@ -41,3 +97,4 @@ jobs:
           files: |
             dist/*.dmg
             dist/*-mac.zip
+            dist/rvw-*-any.tar.gz

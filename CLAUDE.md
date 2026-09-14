@@ -45,7 +45,7 @@ oxfmt reads by default along with `.gitignore`) because the formatter is non-ide
 | `cli/` | `rvw`: the Stricli app, its six verbs, and the effectful shell around them. |
 | `design/` | The palette. `globals.css` is consumed; the rest is provenance — see `design/README.md`. |
 | `skills/` | The agent-facing review skill `rvw skills` points at. Shipped as `extraResources`. |
-| `scripts/` | `reset-state.mjs` (back to a first launch), `gen-icon.mjs`, `check-package.mjs` (asserts on the packaged artifact). |
+| `scripts/` | `reset-state.mjs` (back to a first launch), `gen-icon.mjs`, `check-package.mjs` (asserts on the packaged artifact), `pack-cli.mjs` + `install-cli.sh` (`rvw` without the app, for Linux). |
 
 The edges that actually exist, and are the ones to keep:
 

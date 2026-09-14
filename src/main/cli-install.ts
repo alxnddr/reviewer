@@ -32,7 +32,11 @@ function shimMarker(cliPath: string): string {
 }
 
 /** A launcher that runs the app-bundled CLI and deletes itself the first time it is
- * invoked after the app is gone — so trashing Reviewer.app leaves no stray command. */
+ * invoked after the app is gone — so trashing Reviewer.app leaves no stray command.
+ *
+ * `shim_script` in scripts/install-cli.sh is a copy of this for machines without the app (a shell
+ * script cannot import TypeScript), differing only in the stale-launcher message. Change the two
+ * together. */
 function shimScript(cliPath: string): string {
   return [
     "#!/bin/sh",
