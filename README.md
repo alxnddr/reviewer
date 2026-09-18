@@ -49,10 +49,11 @@ send one to a machine without the checkout, `rvw emit --embed-patch` packs the d
 itself; the app still reads from the checkout wherever it finds one, and shows the packed diff only
 where it does not. `rvw --help` has the rest.
 
-**Settings** (⌘,, or the gear in the title bar) hold the theme and the diff's typography — code
-font, size, line height, tab size, ligatures, line wrapping. Each row resets to its default on its
-own, and the file behind it is `settings.json` in the app's data directory if you would rather
-edit it by hand.
+**Settings** (⌘,, or the gear in the title bar) hold the theme, whether the changed-files list
+collapses a chain of otherwise-empty folders into one row, the diff's typography — code font,
+size, line height, tab size, ligatures, line wrapping — and which editor a file opens in. Each row
+resets to its default on its own, and the file behind it is `settings.json` in the app's data
+directory if you would rather edit it by hand.
 
 ## Install
 

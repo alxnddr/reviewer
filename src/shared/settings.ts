@@ -56,6 +56,11 @@ function choice<T extends z.ZodType>(schema: T) {
 export const Settings = z.object({
   /** One curated theme. Absent until first picked; the OS preference seeds the default. */
   theme: choice(ThemeId),
+  /** Whether the changed-files tree draws a run of single-child folders as one row
+   * (`src/renderer/src/lib`) instead of one row per folder. On is the tree library's own
+   * default and costs vertical space nowhere; off costs rows but keeps every name legible in
+   * a narrow rail, where a long chain is ellipsified into something no reader can parse. */
+  fileTreeFlattenFolders: choice(z.boolean()),
   /** The code font: the diff, and every other surface that quotes code (snippets in the
    * comments rail, inline code in a comment). One font, so a quoted line looks like the line
    * it quotes. */
@@ -122,6 +127,9 @@ export const SETTINGS_DEFAULTS: Omit<ResolvedSettings, "theme"> = {
   diffLigatures: true,
   diffWrap: false,
   editor: "none",
+  // What the tree did before it was a setting, and what `@pierre/trees` does when told
+  // nothing: a chain of empty folders is one row.
+  fileTreeFlattenFolders: true,
 };
 
 /** Fills every unchosen key. `systemDark` is an input rather than read here so this stays a
@@ -139,6 +147,8 @@ export function resolveSettings(
     diffLigatures: settings.diffLigatures ?? SETTINGS_DEFAULTS.diffLigatures,
     diffWrap: settings.diffWrap ?? SETTINGS_DEFAULTS.diffWrap,
     editor: settings.editor ?? SETTINGS_DEFAULTS.editor,
+    fileTreeFlattenFolders:
+      settings.fileTreeFlattenFolders ?? SETTINGS_DEFAULTS.fileTreeFlattenFolders,
   };
 }
 

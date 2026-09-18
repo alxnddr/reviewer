@@ -106,6 +106,14 @@ export const SETTING_ENTRIES: readonly SettingEntry[] = [
     options: THEME_OPTIONS,
   },
   {
+    kind: "boolean",
+    key: "fileTreeFlattenFolders",
+    group: "appearance",
+    label: "Collapse folder chains",
+    description:
+      "In the changed-files list, draw a run of folders that hold nothing else as a single row. Off gives every folder a row of its own, which stays readable when the sidebar is too narrow to show a long chain whole.",
+  },
+  {
     kind: "font",
     key: "diffFontFamily",
     group: "diff",

@@ -15,6 +15,7 @@ import type { FileChangeStatus, PatchFile } from "../../../shared/diff/patch";
 import { NO_READ_FILES, readPaths, tallyRead } from "@/lib/read-progress";
 import { fuzzyMatches } from "@/lib/fuzzy";
 import { selectActiveSlice, selectSoloedDiff, useReviewStore } from "@/stores/review";
+import { useSettingsStore } from "@/stores/settings";
 
 function toTreeGitStatus(status: FileChangeStatus): GitStatus {
   switch (status) {
@@ -69,6 +70,7 @@ export function FileTreePanel(): ReactElement {
   // Over the panel's own listing, not the filtered view: a filter is a way of looking at
   // the set, not a change to it, so typing in the box must not move the progress readout.
   const tally = useMemo(() => tallyRead(files, readFiles), [files, readFiles]);
+  const flattenFolders = useSettingsStore((state) => state.resolved.fileTreeFlattenFolders);
 
   return (
     <div data-file-tree className="flex min-h-0 flex-1 flex-col">
@@ -97,12 +99,16 @@ export function FileTreePanel(): ReactElement {
       ) : (
         // The tree model is immutable after creation, so a filter change means a
         // remount. Keyed by the matched subset rather than the query, so refining
-        // a filter without changing its matches keeps expansion state.
+        // a filter without changing its matches keeps expansion state. The flatten
+        // choice rides the key for the same reason: Pierre reads it when the store is
+        // built and exposes no way to re-shape an existing tree, so toggling the
+        // setting has to build a new one.
         <ChangedFileTree
-          key={visibleFiles.map((file) => file.path).join("\n")}
+          key={`${flattenFolders ? "flat" : "nested"}\n${visibleFiles.map((file) => file.path).join("\n")}`}
           files={visibleFiles}
           commentCounts={commentCounts}
           readPaths={readPaths(visibleFiles, readFiles)}
+          flattenFolders={flattenFolders}
         />
       )}
       {files.length > 0 && <ReadStatusLine files={files} onClear={clearFilesRead} tally={tally} />}
@@ -159,12 +165,16 @@ type ChangedFileTreeProps = {
   /** Which of these files the reader has been through, resolved against the loaded diff's
    * content upstream so a row never has to re-derive a signature per render. */
   readPaths: ReadonlySet<string>;
+  /** The reader's `fileTreeFlattenFolders` choice. Read at construction by the tree, so the
+   * panel above remounts this component when it changes. */
+  flattenFolders: boolean;
 };
 
 function ChangedFileTree({
   files,
   commentCounts,
   readPaths: read,
+  flattenFolders,
 }: ChangedFileTreeProps): ReactElement {
   const selectedFilePath = useReviewStore(
     (state) => selectActiveSlice(state)?.selectedFilePath ?? null,
@@ -194,6 +204,12 @@ function ChangedFileTree({
       path: file.path,
       status: toTreeGitStatus(file.status),
     })),
+    // A chain of folders that holds nothing else is one row (`src/shared/diff`) or three,
+    // the reader's choice: one row spends no vertical space on folders nobody navigates,
+    // but a rail narrow enough to truncate the chain turns it into an ellipsis with a
+    // fragment of a path on either side. Pierre flattens unless told otherwise, so the
+    // fresh-install listing is the one this app has always drawn.
+    flattenEmptyDirectories: flattenFolders,
     // 24px rows (Pierre's own compact preset): the dense-tool register — a
     // changed-files list is scanned, not read.
     density: "compact",
