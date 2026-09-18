@@ -1,8 +1,20 @@
 import * as z from "zod";
+import { EDITOR_CHOICES, EDITOR_IDS } from "./editors";
 import { DEFAULT_DARK, DEFAULT_LIGHT, THEME_IDS, THEMES } from "./themes";
 import type { ThemeAppearance } from "./themes";
 
 export type { ThemeAppearance } from "./themes";
+
+/** An editor Open in Editor can hand a file to, validated against the curated set in
+ * `editors.ts` the way `ThemeId` is against `themes.ts`. Its inferred type is the same literal
+ * union as editors.ts's EditorId. */
+export const EditorId = z.enum(EDITOR_IDS);
+export type EditorId = z.infer<typeof EditorId>;
+
+/** The persisted editor choice: one of the editors, or `none` — which is a choice a reader can
+ * make and the state a fresh install resolves to (`shared/settings.ts`). */
+export const EditorChoice = z.enum(EDITOR_CHOICES);
+export type EditorChoice = z.infer<typeof EditorChoice>;
 
 /** The persisted theme choice: one curated theme, validated against the curated set. The whole app
  * is themed by picking one of these — there is no separate light/dark/system mode. Its

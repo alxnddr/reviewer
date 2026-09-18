@@ -70,6 +70,7 @@ export function makeBridge(overrides: Partial<ReviewerBridge> = {}): ReviewerBri
     }),
     getOnboarded: vi.fn().mockResolvedValue(true),
     completeOnboarding: vi.fn(),
+    openInEditor: vi.fn().mockResolvedValue({ ok: true }),
     openRepo: vi.fn().mockResolvedValue({
       ok: true,
       value: { kind: "opened", repo: { path: "/repo", name: "repo" } },

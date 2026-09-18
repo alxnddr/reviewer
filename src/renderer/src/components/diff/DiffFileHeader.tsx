@@ -4,6 +4,7 @@ import { Check, ChevronDown, ChevronRight, Copy } from "lucide-react";
 import type { CommentSlot } from "../../../../shared/diff/comment-annotations";
 import { Button } from "@/components/ui/button";
 import { FileReadToggle } from "@/components/FileReadToggle";
+import { OpenInEditorButton } from "@/components/OpenInEditorButton";
 import { TooltipHint } from "@/components/ui/tooltip";
 import { useCopyFeedback } from "@/lib/copy-feedback";
 import { selectActiveSlice, useReviewStore } from "@/stores/review";
@@ -82,9 +83,10 @@ const FileFoldToggle = memo(function FileFoldToggle({ path }: FileFoldToggleProp
 
 type FileNameSuffixProps = { path: string; binary: boolean };
 
-/** What follows the file's name on the band: the copy affordance, and — on a binary
- * change — the word that says which of the two header-only shapes this is (a binary
- * change and a pure rename both render zero hunks). */
+/** What follows the file's name on the band: the copy affordance, the jump into the file on
+ * disk (which reads its own state — see `OpenInEditorButton`), and — on a binary change — the
+ * word that says which of the two header-only shapes this is (a binary change and a pure
+ * rename both render zero hunks). */
 const FileNameSuffix = memo(function FileNameSuffix({
   path,
   binary,
@@ -92,6 +94,7 @@ const FileNameSuffix = memo(function FileNameSuffix({
   return (
     <span className="flex items-center gap-1">
       <CopyPathButton path={path} />
+      <OpenInEditorButton path={path} hintSide="bottom" hintAlign="start" />
       {binary ? <span className="text-xs text-text-muted">binary</span> : null}
     </span>
   );

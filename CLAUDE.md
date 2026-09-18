@@ -218,6 +218,10 @@ Other renderer-wide rules:
   `git/ops.ts` is the domain layer above it, `git/parse.ts` the NUL-record parsing.
 - `shared/node/git-diff.ts` holds `DIFF_CONFIG`/`DIFF_ARGS`/`hardenedGitEnv` so the app and the CLI
   produce byte-identical patches. Drift there breaks anchor placement against an embedded patch.
+- Two seams reach the OS through `shell.openExternal`, deliberately separate: `external-links.ts`
+  admits https only (a link in a comment must never reach `file:` or a custom scheme), and
+  `open-in-editor.ts` admits exactly the editor schemes in `shared/editors.ts`, on a path proven
+  inside the session's checkout by realpath. Don't widen either to serve the other.
 
 ## The CLI
 

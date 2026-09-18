@@ -1,5 +1,6 @@
 import * as z from "zod";
 import { CliInstallResult, CliStatus } from "./cli";
+import { EditorOpenRequest, EditorOpenResponse } from "./editor-ipc";
 import {
   BranchesResponse,
   DiffRequest,
@@ -57,6 +58,9 @@ export const IPC_SCHEMAS = {
   "cli:install": { request: NoPayload, response: CliInstallResult },
   "onboarding:get": { request: NoPayload, response: z.boolean() },
   "onboarding:complete": { request: NoPayload, response: NoPayload },
+  // A file of a live session, handed to the chosen editor. Answers a typed refusal rather than
+  // throwing: which of the four reasons it was is what the reader is shown.
+  "editor:open": { request: EditorOpenRequest, response: EditorOpenResponse },
   "repo:open": { request: NoPayload, response: OpenRepoResponse },
   // Dialog: main owns the picker, so the request is void. Path: the renderer
   // supplies the dropped path, guarded in main before use.

@@ -3,9 +3,11 @@ import { XIcon } from "lucide-react";
 import { GitFailureText } from "@/components/GitFailureText";
 import { Button } from "@/components/ui/button";
 import { TooltipHint } from "@/components/ui/tooltip";
+import { editorOpenFailureMessage } from "@/lib/editor-open-failure-message";
 import { gitFailureMessage } from "@/lib/git-failure-message";
 import { reviewExportFailureMessage } from "@/lib/review-export-failure-message";
 import { reviewOpenFailureMessage } from "@/lib/review-open-failure-message";
+import { useEditorStore } from "@/stores/editor";
 import { useReviewStore } from "@/stores/review";
 
 type FailureBannerProps = {
@@ -110,4 +112,18 @@ export function ReviewExportFailureBanner(): ReactElement | null {
   }
   const message = reviewExportFailureMessage(failure);
   return <FailureBanner message={message} body={message} onDismiss={clearReviewExportFailure} />;
+}
+
+/** A refused Open in Editor: app-level like the rest, because the three controls that ask
+ * (a file header, a comment toolbar, the E key) have no surface of their own to answer on,
+ * and a press that was quietly ignored would read as the editor not being there. */
+export function EditorOpenFailureBanner(): ReactElement | null {
+  const failure = useEditorStore((state) => state.failure);
+  const clearFailure = useEditorStore((state) => state.clearFailure);
+
+  if (failure === null) {
+    return null;
+  }
+  const message = editorOpenFailureMessage(failure);
+  return <FailureBanner message={message} body={message} onDismiss={clearFailure} />;
 }

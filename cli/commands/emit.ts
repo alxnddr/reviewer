@@ -29,6 +29,10 @@ import { writeCannotRun, writeJson, type CliError } from "../errors";
 // pass the artifact is refs-only (no embedded patch) and lands in rvw's managed reviews dir
 // unless `--out` says otherwise — never in the repo being reviewed. `--embed-patch` is the one
 // exception, for the one case refs cannot serve: a review emitted somewhere the reader is not.
+// It costs the reader nothing — the app prefers the checkout whenever it has one and reads the
+// embedded diff only where it does not (`shared/review.ts`, `pinReview`) — so the help text must
+// not warn that an embedded review is frozen; that was true once and is the sentence task 09
+// removed.
 //
 // Exit 2 = the shell could not run (bad flags, unresolvable ref, git failure, unreadable or
 // empty draft, unwritable out); exit 1 = it ran and the gate refused (nothing written, each
@@ -86,8 +90,8 @@ export const emitCommand = buildCommand<EmitFlags, [], LocalContext>({
       "— before writing any bytes. On a clean pass it writes a refs-only artifact (no embedded",
       "patch, so the branch must remain available) and hands it to the installed Reviewer;",
       "--no-open writes it and stops. --embed-patch carries the diff inside the artifact so it",
-      "opens on a machine without the repo (CI); the diff is then frozen, so the app cannot",
-      "expand context around a hunk or narrow to a subrange of commits.",
+      "opens on a machine without the repo (CI, a remote box); the app still reads from the",
+      "checkout wherever it has one and falls back to the embedded diff only where it does not.",
       "Name branches on --base/--head: a local branch is recorded as written and the review",
       "follows it, while a tag, HEAD, a rev expression or a sha is pinned to the commit it named.",
       "The draft is read from stdin unless --draft names a file, and its only keys are overview,",

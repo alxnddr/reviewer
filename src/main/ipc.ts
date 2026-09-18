@@ -4,9 +4,11 @@ import { cliStatus, installCli } from "./cli-install";
 import { registerGitIpcHandlers } from "./git/handlers";
 import { registerIpcHandler } from "./ipc-registry";
 import { hasOnboarded, markOnboarded } from "./onboarding";
+import { openInEditor } from "./open-in-editor";
 import { registerReviewIpcHandlers, type ReviewOpenDeps } from "./review/handlers";
 import { registerReviewSaveHandlers } from "./review/save";
 import { getUserSettings, setUserSettings } from "./user-settings";
+import { SETTINGS_DEFAULTS } from "../shared/settings";
 
 export function registerIpcHandlers(
   reviewDeps: ReviewOpenDeps,
@@ -31,6 +33,18 @@ export function registerIpcHandlers(
   registerIpcHandler(IpcChannel.onboardingComplete, () => {
     markOnboarded();
   });
+
+  registerIpcHandler(IpcChannel.editorOpen, (request) =>
+    openInEditor(
+      {
+        findSession: (id) => sessionStore.list().sessions.find((session) => session.id === id),
+        // Resolved the way the renderer resolves it, so main and the dialog agree on what "no
+        // editor" is: the absent key, not only an explicit `none`.
+        editor: () => getUserSettings().editor ?? SETTINGS_DEFAULTS.editor,
+      },
+      request,
+    ),
+  );
 
   registerGitIpcHandlers(gitRunner);
   registerReviewIpcHandlers(reviewDeps);

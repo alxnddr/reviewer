@@ -37,6 +37,7 @@ const bridge: ReviewerBridge = {
   installCli: () => invoke(IpcChannel.cliInstall, undefined),
   getOnboarded: () => invoke(IpcChannel.onboardingGet, undefined),
   completeOnboarding: () => invoke(IpcChannel.onboardingComplete, undefined),
+  openInEditor: (request) => invoke(IpcChannel.editorOpen, request),
   openRepo: () => invoke(IpcChannel.repoOpen, undefined),
   openReview: () => invoke(IpcChannel.reviewOpen, undefined),
   openReviewByPath: (request) => invoke(IpcChannel.reviewOpenPath, request),

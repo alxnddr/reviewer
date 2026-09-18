@@ -18,6 +18,10 @@ export const IpcChannel = {
   // The first-run guide's one bit of memory, kept beside the theme in app settings.
   onboardingGet: "onboarding:get",
   onboardingComplete: "onboarding:complete",
+  // Open in Editor: the renderer names a session and a repo-relative path; main resolves it
+  // against that session's checkout, refuses anything outside it, and hands the chosen
+  // editor's URL to the OS. The one channel through which the app reaches an editor.
+  editorOpen: "editor:open",
   repoOpen: "repo:open",
   // The dialog path shows the picker in main and answers through the invoke; the
   // path variant guards a renderer-supplied (dropped) path. Both hit one guard.
@@ -138,6 +142,9 @@ export type ReviewerBridge = {
   getOnboarded: () => Promise<IpcResponse<"onboarding:get">>;
   /** Records that it has — finished or skipped, which are the same thing to the reader. */
   completeOnboarding: () => Promise<IpcResponse<"onboarding:complete">>;
+  /** Opens a file of a live session in the chosen editor, at a new-file line when given one.
+   * Refusals are typed (`shared/editor-ipc.ts`), never thrown. */
+  openInEditor: (request: IpcRequest<"editor:open">) => Promise<IpcResponse<"editor:open">>;
   openRepo: () => Promise<IpcResponse<"repo:open">>;
   /** File → Open Review…: main shows the native picker and guards the pick. */
   openReview: () => Promise<IpcResponse<"review:open">>;

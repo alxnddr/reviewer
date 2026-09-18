@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { SETTING_KEYS } from "../../../shared/settings";
+import { EDITOR_CHOICES } from "../../../shared/editors";
 import { THEME_IDS } from "../../../shared/themes";
 import {
   filterSettings,
@@ -34,6 +35,14 @@ describe("SETTING_ENTRIES", () => {
     expect(theme?.kind).toBe("select");
     if (theme?.kind === "select") {
       expect(theme.options.map((option) => option.value)).toEqual([...THEME_IDS]);
+    }
+  });
+
+  it("offers none and every editor, and only those", () => {
+    const editor = SETTING_ENTRIES.find((entry) => entry.key === "editor");
+    expect(editor?.kind).toBe("select");
+    if (editor?.kind === "select") {
+      expect(editor.options.map((option) => option.value)).toEqual([...EDITOR_CHOICES]);
     }
   });
 

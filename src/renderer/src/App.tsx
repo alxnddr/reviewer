@@ -4,6 +4,7 @@ import { CliBanner } from "@/components/CliBanner";
 import { DiffScreen } from "@/components/DiffScreen";
 import { DiffWorkerPool } from "@/components/DiffWorkerPool";
 import {
+  EditorOpenFailureBanner,
   OpenFailureBanner,
   ReviewExportFailureBanner,
   ReviewOpenFailureBanner,
@@ -16,8 +17,10 @@ import { ShortcutsDialog } from "@/components/ShortcutsDialog";
 import { Sidebar } from "@/components/Sidebar";
 import { SidebarNav } from "@/components/SidebarNav";
 import { StartScreen } from "@/components/StartScreen";
+import { editorRequestFor } from "@/lib/editor-target";
 import { nextRegion, visibleRegions } from "@/lib/focus-regions";
 import { shortcutBlocked } from "@/lib/shortcut-guard";
+import { useEditorStore } from "@/stores/editor";
 import { useOnboardingStore } from "@/stores/onboarding";
 import { useRecentReviewsStore } from "@/stores/recent-reviews";
 import { useSettingsStore } from "@/stores/settings";
@@ -55,8 +58,9 @@ function useOverviewShortcut(): void {
 }
 
 /** j/k step the focused file, n/p walk the comments, Escape ends the walk, r marks the focused
- * file read — the review's whole letter vocabulary, all of it acting on the session rather than
- * on whatever is painted.
+ * file read, e opens the focused file (or the focused comment's line) in the chosen editor —
+ * the review's whole letter vocabulary, all of it acting on the session rather than on
+ * whatever is painted.
  *
  * They live here, beside `o` and F6, rather than in DiffScreen, which is where they used to be
  * and where they were only half true: DiffScreen is unmounted the whole time the tour doc is up,
@@ -69,6 +73,7 @@ function useReviewShortcuts(): void {
   const stepComment = useReviewStore((state) => state.stepComment);
   const clearActiveComment = useReviewStore((state) => state.clearActiveComment);
   const toggleFileRead = useReviewStore((state) => state.toggleFileRead);
+  const openInEditor = useEditorStore((state) => state.open);
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent): void => {
@@ -76,6 +81,26 @@ function useReviewShortcuts(): void {
         return;
       }
       switch (event.key) {
+        // Read at the press rather than subscribed: the target depends on four fields of the
+        // active slice, and a subscription to each would re-bind this listener on every file
+        // step for a key that is pressed far less often than j.
+        case "e": {
+          event.preventDefault();
+          const slice = selectActiveSlice(useReviewStore.getState());
+          if (slice === null) {
+            break;
+          }
+          const target = editorRequestFor({
+            files: slice.diff.phase === "loaded" ? slice.diff.files : null,
+            selectedFilePath: slice.selectedFilePath,
+            activeCommentId: slice.activeCommentId,
+            comments: slice.comments,
+          });
+          if (target !== null) {
+            void openInEditor({ sessionId: slice.id, ...target });
+          }
+          break;
+        }
         case "j":
         case "k":
           event.preventDefault();
@@ -104,7 +129,7 @@ function useReviewShortcuts(): void {
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [selectAdjacentFile, stepComment, clearActiveComment, toggleFileRead]);
+  }, [selectAdjacentFile, stepComment, clearActiveComment, toggleFileRead, openInEditor]);
 }
 
 /** F6 (⇧F6 backwards) steps focus between the shell's big regions — the layer tree, the
@@ -301,6 +326,7 @@ export function App(): ReactElement {
               <OpenFailureBanner />
               <ReviewOpenFailureBanner />
               <ReviewExportFailureBanner />
+              <EditorOpenFailureBanner />
             </>
           }
           sidebar={

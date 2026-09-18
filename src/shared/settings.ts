@@ -1,5 +1,5 @@
 import * as z from "zod";
-import { defaultTheme, ThemeId } from "./contracts";
+import { defaultTheme, EditorChoice, ThemeId } from "./contracts";
 
 // The app's settings: the reader's own choices, as opposed to a session's state. This module is
 // the contract every side agrees on — main persists exactly this shape, the IPC rows for
@@ -68,6 +68,10 @@ export const Settings = z.object({
   diffLigatures: choice(z.boolean()),
   /** Wrap long lines in place of a horizontal scrollbar. */
   diffWrap: choice(z.boolean()),
+  /** Where Open in Editor sends a file (`shared/editors.ts`). `none` is a value rather than an
+   * absent key because the controls that use it are always drawn: they read the resolved
+   * record and need one answer — disabled, and why — until an editor is picked. */
+  editor: choice(EditorChoice),
 });
 export type Settings = z.infer<typeof Settings>;
 
@@ -117,6 +121,7 @@ export const SETTINGS_DEFAULTS: Omit<ResolvedSettings, "theme"> = {
   diffTabSize: 2,
   diffLigatures: true,
   diffWrap: false,
+  editor: "none",
 };
 
 /** Fills every unchosen key. `systemDark` is an input rather than read here so this stays a
@@ -133,6 +138,7 @@ export function resolveSettings(
     diffTabSize: settings.diffTabSize ?? SETTINGS_DEFAULTS.diffTabSize,
     diffLigatures: settings.diffLigatures ?? SETTINGS_DEFAULTS.diffLigatures,
     diffWrap: settings.diffWrap ?? SETTINGS_DEFAULTS.diffWrap,
+    editor: settings.editor ?? SETTINGS_DEFAULTS.editor,
   };
 }
 

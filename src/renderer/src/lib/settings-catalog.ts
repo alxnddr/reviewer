@@ -1,4 +1,5 @@
-import type { ThemeId } from "../../../shared/contracts";
+import type { EditorChoice, ThemeId } from "../../../shared/contracts";
+import { EDITORS } from "../../../shared/editors";
 import {
   DIFF_FONT_SIZE,
   DIFF_LINE_HEIGHT,
@@ -24,6 +25,7 @@ import { THEMES } from "../../../shared/themes";
 export const SETTING_GROUPS = [
   { id: "appearance", title: "Appearance" },
   { id: "diff", title: "Diff" },
+  { id: "editor", title: "Editor" },
 ] as const;
 export type SettingGroupId = (typeof SETTING_GROUPS)[number]["id"];
 
@@ -73,12 +75,24 @@ export type NumberEntry = Row<KeysOf<number>> & {
 export type FontEntry = Row<KeysOf<string>> & { readonly kind: "font" };
 export type BooleanEntry = Row<KeysOf<boolean>> & { readonly kind: "boolean" };
 
-export type SettingEntry = SelectEntry<"theme"> | NumberEntry | FontEntry | BooleanEntry;
+export type SettingEntry =
+  | SelectEntry<"theme">
+  | SelectEntry<"editor">
+  | NumberEntry
+  | FontEntry
+  | BooleanEntry;
 
 const THEME_OPTIONS: readonly SelectOption<ThemeId>[] = THEMES.map((theme) => ({
   value: theme.id,
   label: theme.label,
 }));
+
+/** None first: it is the fresh-install state, and a reader looking for the way to turn the
+ * buttons back off should find it where the list starts. */
+const EDITOR_OPTIONS: readonly SelectOption<EditorChoice>[] = [
+  { value: "none", label: "None" },
+  ...EDITORS.map((editor) => ({ value: editor.id, label: editor.label })),
+];
 
 /** Every setting, in the order the dialog lists them within their group. */
 export const SETTING_ENTRIES: readonly SettingEntry[] = [
@@ -141,6 +155,15 @@ export const SETTING_ENTRIES: readonly SettingEntry[] = [
     group: "diff",
     label: "Wrap long lines",
     description: "Break a long line onto the next row instead of scrolling sideways to read it.",
+  },
+  {
+    kind: "select",
+    key: "editor",
+    group: "editor",
+    label: "Open files in",
+    description:
+      "Where a file goes when you open it from the diff: the button beside its name, the one on a comment, or E. Needs that editor installed, and a review that reads your checkout rather than its own copy of the diff.",
+    options: EDITOR_OPTIONS,
   },
 ];
 

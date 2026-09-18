@@ -46,7 +46,8 @@ tab of it beside one — lists the recent ones newest-first; **File ▸ Recent R
 all of them. Reviews keep git refs rather than a copy of the diff, so the app rebuilds the change
 from your branch every time you open it — which also means a review opens only where the repo is. To
 send one to a machine without the checkout, `rvw emit --embed-patch` packs the diff into the file
-itself. `rvw --help` has the rest.
+itself; the app still reads from the checkout wherever it finds one, and shows the packed diff only
+where it does not. `rvw --help` has the rest.
 
 **Settings** (⌘,, or the gear in the title bar) hold the theme and the diff's typography — code
 font, size, line height, tab size, ligatures, line wrapping. Each row resets to its default on its

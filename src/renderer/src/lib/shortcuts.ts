@@ -74,6 +74,14 @@ const SHORTCUTS = {
   // ("Mark read" / "Mark unread"), so that one passes its own label.
   "file.read": { group: "reading", keys: ["R"], label: "Mark the focused file read" },
   "overview.toggle": { group: "reading", keys: ["O"], label: "Open or close the overview" },
+  // "the focused file" is the file j/k stand on — or, while a comment is focused, that
+  // comment's line — which is why this sits with the reading keys and not the app's windows.
+  "file.openInEditor": {
+    group: "reading",
+    keys: ["E"],
+    label: "Open the focused file in your editor",
+    short: "Open in editor",
+  },
   "region.next": { group: "reading", keys: ["F6"], label: "Next pane (⇧F6 back)" },
 
   "comment.next": { group: "comments", keys: ["N"], label: "Next comment" },

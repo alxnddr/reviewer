@@ -128,10 +128,14 @@ sha is pinned to the commit it resolved to. Any revision git understands is acce
 Without `--out` the artifact lands in `~/.rvw/reviews/`, where the app's Recent Reviews picker
 (⇧⌘R) finds it. Pass `--out` only when someone asked for the file somewhere specific.
 
-If the review is being emitted somewhere the reader is not — CI, a container, any machine whose
-checkout they do not have — add `--embed-patch`, which carries the diff inside the artifact so it
-opens without the repo. Do not reach for it otherwise: a review that keeps its refs shows the
-change as it stands now and can expand context around a hunk, and an embedded one cannot.
+If the review is being emitted on a machine the reader will not open it on — CI, a container, a
+remote box — add `--embed-patch`, which carries the diff inside the artifact so it opens anywhere.
+Embedding costs nothing on the reader's side: the app reads the diff from their checkout whenever
+it has one (and the review goes live — context expands, files open in an editor) and falls back to
+the embedded patch only when it does not. Emitting on the reader's own machine needs no flag.
+
+On a platform without the app (Linux), `rvw emit` writes the artifact but cannot open it: pass
+`--no-open` and name the written path in your reply so the reader can carry it over.
 
 Outcomes:
 
