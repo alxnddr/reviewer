@@ -107,9 +107,9 @@ diff cut into chapters in an order you chose. `layers` is optional in the schema
 when the user or the project's rules asked for comments alone, or when the change is genuinely one
 thought (a one-file fix, a config bump). Otherwise layer it.
 
-A layer is `{ label, summary?, description?, ranges?, children? }` — nesting is structural, via
-`children`. Only `label` is required; omit `ranges` on a grouping layer whose children carry them,
-and omit `children` on a leaf.
+A layer is `{ label, summary?, description?, ranges?, children?, skim? }` — nesting is structural,
+via `children`. Only `label` is required; omit `ranges` on a grouping layer whose children carry
+them, and omit `children` on a leaf.
 
 - Treat layers as chapters of a reading order you chose, not a listing of what the diff touched.
 - Group by what changed and why — a capability added, a bug fixed, a migration, a constraint now enforced — never by folder, file type, or filename.
@@ -120,7 +120,8 @@ and omit `children` on a leaf.
 - Keep groups non-overlapping in intent. If two layers would explain the same decision, they are one layer.
 - Make them exhaustive together: every changed line belongs to exactly one chapter's reasoning — never explained twice under two layers, never left out silently. After the last chapter, a reader should be able to describe the whole change.
 - What you leave unplaced the app shows as "Not covered by layers", so an omission is visible either way. Make it a decision rather than an oversight.
-- Cut any layer that exists only for completeness — mechanical renames, generated output, formatting. Fold it into the layer it serves.
+- Put the mechanical remainder in one trailing layer marked `"skim": true` — lockfiles, generated output, a rename sweep, a formatting pass. The app renders it as a compact list rather than a section and opens its files folded in the diff, so it costs the reader a line instead of a chapter, and coverage still counts every line of it. One such layer holding all of it, never one per kind.
+- Never mark a layer `skim` to make a long chapter shorter. It means "there is nothing here to read", not "there is a lot here to read" — a reader who opens a skim layer and finds an argument in it stops trusting the mark.
 - Keep the list flat unless a theme genuinely has parts worth reading separately. Most reviews are flat.
 - Nest only when the parent makes a point of its own and each child is a distinct step in that point. Never nest just to shorten a list.
 - Write each summary as the point of the slice: "Retries now back off per host", not "Updates to client.ts".

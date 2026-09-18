@@ -683,6 +683,7 @@ describe("one tab per artifact", () => {
     const recorded = {
       readFiles: { "src/a.ts": "modified::aaa..bbb" },
       collapsedFiles: ["src/a.ts"],
+      foldsSeeded: true,
       readTotal: 5,
       resolvedComments: {},
     };
@@ -759,6 +760,7 @@ describe("repinReviewSessions", () => {
       base,
       head,
       patch,
+      reviewedHead: null,
       overview: null,
       comments: [],
       layers: [],

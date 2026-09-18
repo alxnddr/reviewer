@@ -33,7 +33,7 @@ function reviewSession(overrides: Partial<Session> = {}): Session {
     overview: null,
     reviewDiff: FROZEN,
     reviewSubrange: null,
-    reviewOrigin: { repo: BOX, base: SHA_A, head: SHA_B, patch: PATCH },
+    reviewOrigin: { repo: BOX, base: SHA_A, head: SHA_B, patch: PATCH, reviewedHead: null },
     reviewPath: "/reviews/x.reviewer.json",
     ...NO_PROGRESS,
     ...overrides,

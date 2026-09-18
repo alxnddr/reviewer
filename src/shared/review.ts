@@ -1,6 +1,6 @@
 import * as z from "zod";
 import { errorMessage } from "./errors";
-import { type GitFailure, ReviewRef, RepoInfo, RepoPath } from "./git";
+import { CommitSha, type GitFailure, ReviewRef, RepoInfo, RepoPath } from "./git";
 
 // The review domain contract: `.reviewer.json` is the single integration
 // point, defined here as zod schemas — the schema *is* the format, so every read
@@ -180,13 +180,36 @@ export type Comment = z.infer<typeof Comment>;
  * only two rules are left for the gate to check: at most `MAX_LAYER_DEPTH` levels deep,
  * and every layer reaching some code — its own ranges, or a descendant's. The app reads a
  * too-deep layer as un-nested (a hand-edited artifact still opens and still reads top to
- * bottom) while `rvw emit`/`check` refuse to produce one. */
+ * bottom) while `rvw emit`/`check` refuse to produce one.
+ *
+ * `skim` is the one field that is not about what a layer *says* but about how much of it
+ * there is to read: the lockfile, the generated client, the rename sweep. The skill used to
+ * tell authors to fold that kind of thing into the layer it serves, which buried it inside a
+ * real chapter, inflated that chapter's counts, and still asked the reader to get through it
+ * before the chapter read as finished. Marked instead, it stays a chapter of its own —
+ * covered, counted, navigable — and the app renders it small and opens its files folded. It
+ * is deliberately the author's mark and not a score: CodeRabbit collapses a summary below a
+ * model-assigned complexity threshold, which puts a judgement between the author and the
+ * reader; this is the same effect with nobody in between. Nothing enforces where a skim
+ * layer sits, either — ordering is the author's call everywhere else in this format.
+ *
+ * This object is a `strictObject`, so `skim` is the kind of addition an older build *refuses*
+ * the whole artifact over rather than dropping (contrast `ReviewComment`'s optional three,
+ * which are plain `z.object` keys and silently vanish). It ships with `reviewedHead` for that
+ * reason: one compatibility break, decided once, instead of two. */
 export const ReviewLayerInput = z
   .strictObject({
     label: z.string().min(1),
     summary: z.string().min(1).optional(),
     description: z.string().min(1).optional(),
     ranges: z.array(ReviewAnchor).default([]),
+    /** `true` or absent, never `false`: the flag is a mark an author puts on one layer, and
+     * a `skim: false` on the other twelve would be twelve authored keys saying nothing. The
+     * literal is what makes the absent form the only other form. */
+    skim: z.literal(true).optional().meta({
+      description:
+        "Mark this layer as the mechanical remainder — lockfiles, generated output, a rename sweep, formatting. Write ONE such layer, holding everything of that kind, rather than cutting the lines out of the review: the app renders it as a compact list instead of a section and starts its files folded in the diff, so the reader can see what moved without it inflating the chapter it would otherwise have been buried in. Coverage still counts these lines, so nothing is hidden from the gate. Do not mark a layer skim to make it shorter — mark it skim when there is nothing to read.",
+    }),
     /** A getter, not a `z.lazy` wrapper: it defers the self-reference the same way, but
      * leaves the schema's own type *inferable*, so the two exported types below are read
      * off this declaration instead of hand-written beside it and asserted onto it — a
@@ -218,6 +241,9 @@ export const ReviewLayer = z.object({
   description: z.string().min(1).optional(),
   ranges: z.array(ReviewAnchor),
   parent: z.string().min(1).optional(),
+  /** Carried through from the authored layer verbatim — the app reads it, it never
+   * derives it. Absent, never `false`, on the same rule the wire shape keeps. */
+  skim: z.literal(true).optional(),
 });
 export type ReviewLayer = z.infer<typeof ReviewLayer>;
 
@@ -280,6 +306,21 @@ export const ReviewArtifact = z.strictObject({
   repo: RepoPath,
   base: ReviewRef,
   head: ReviewRef,
+  /** The commit `head` resolved to when the review was written. Pure provenance: nothing
+   * about placement, coverage or the pin reads it (`pinReview` takes `base`/`head` and
+   * nothing else), so an artifact with it and the same artifact without it render
+   * identically. It exists because `head` is usually a *branch name* — deliberately, so the
+   * review follows the branch — and a review authored at A then opened at D has no way to
+   * say that three commits landed in between. Every reviewer in the field states it
+   * (CodeRabbit's `up to f31a1`, Codex's `Reviewed commit:`, Greptile's "Last reviewed
+   * commit"); the app says it as one line on the overview and nowhere else.
+   *
+   * Written whether or not `head` is a branch. A sha-pinned review whose `reviewedHead`
+   * equals its `head` costs one line in the file and removes a conditional from both sides. */
+  reviewedHead: CommitSha.optional().meta({
+    description:
+      "The full commit sha `head` resolved to at emit time — provenance, so the app can tell a reader their branch has moved on since the review was written. `rvw emit` fills this in; do not write it by hand.",
+  }),
   patch: z.string().min(1).optional(),
   /** The tour doc the review opens on; absent on an artifact that has none. */
   overview: ReviewOverview.optional(),
@@ -386,6 +427,9 @@ export type ImportedReview = {
   base: ReviewRef;
   head: ReviewRef;
   patch: string | null;
+  /** The commit the review was written against, or null for an artifact that predates the
+   * field — modelled as a real value, like `patch` and `overview` beside it. */
+  reviewedHead: CommitSha | null;
   /** The authored tour doc, or null for an artifact that carries none — modelled as
    * a real value (not an optional key) so consumers branch on it, like `patch`. */
   overview: ReviewOverview | null;
@@ -409,6 +453,13 @@ export const ReviewOrigin = z.object({
   base: ReviewRef,
   head: ReviewRef,
   patch: z.string().nullable(),
+  /** The commit the artifact said it was written against. It rides on the origin rather
+   * than being re-read from the file because the origin *is* what the session keeps of the
+   * artifact — the drift line and the round-trip export both read it from here, and neither
+   * has the bytes any more. `.default(null)` so a session persisted before this field
+   * existed still parses strictly rather than falling to the salvage tier, which would take
+   * the whole origin with it and strand an open review with nothing to export. */
+  reviewedHead: CommitSha.nullable().default(null),
 });
 export type ReviewOrigin = z.infer<typeof ReviewOrigin>;
 
@@ -416,7 +467,13 @@ export type ReviewOrigin = z.infer<typeof ReviewOrigin>;
  * export needs that the `reviewDiff` render pin cannot retain (a frozen pin drops
  * the refs; a cleared pin drops everything). */
 export function reviewOriginFor(review: ImportedReview): ReviewOrigin {
-  return { repo: review.repo, base: review.base, head: review.head, patch: review.patch };
+  return {
+    repo: review.repo,
+    base: review.base,
+    head: review.head,
+    patch: review.patch,
+    reviewedHead: review.reviewedHead,
+  };
 }
 
 export type ImportReviewResult =
@@ -465,6 +522,9 @@ export function flattenLayers(
       ...(input.description === undefined ? {} : { description: input.description }),
       ranges: input.ranges,
       ...(parent === undefined ? {} : { parent }),
+      // The absent-key rule the optionals either side of it take: a layer nobody marked
+      // arrives without the key, never with a `false` the schema would refuse anyway.
+      ...(input.skim === undefined ? {} : { skim: input.skim }),
     });
     for (const child of input.children) {
       visit(child, id);
@@ -579,6 +639,7 @@ export function importReview(bytes: string, stamp: ReviewStamp): ImportReviewRes
       base: artifact.base,
       head: artifact.head,
       patch: artifact.patch ?? null,
+      reviewedHead: artifact.reviewedHead ?? null,
       overview: artifact.overview ?? null,
       comments,
       layers: flattenLayers(artifact.layers, stamp),

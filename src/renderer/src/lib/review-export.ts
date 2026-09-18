@@ -18,7 +18,7 @@ import {
   type CommentResolutions,
 } from "../../../shared/comment-resolution";
 import { countLabel } from "../../../shared/plural";
-import type { CommitSha, DiffSelection, RepoInfo, ReviewRef } from "../../../shared/git";
+import { CommitSha, type DiffSelection, type RepoInfo, type ReviewRef } from "../../../shared/git";
 import { resolveAnchor } from "../../../shared/diff/anchor";
 import { filesByAnchorPath, type PatchFile } from "../../../shared/diff/patch";
 import { snippetForAnchor, type DiffSnippet } from "./diff/snippet";
@@ -73,6 +73,9 @@ export function serializeReview(review: ImportedReview): ReviewArtifactDraft {
     // Absent patch stays an absent key (the import contract's optional), not an
     // empty string — a null patch and an empty patch are not the same artifact.
     ...(review.patch === null ? {} : { patch: review.patch }),
+    // Provenance the app never authors and never edits: whatever `rvw emit` stamped comes
+    // back out unchanged, so re-emitting a review does not quietly re-date it to now.
+    ...(review.reviewedHead === null ? {} : { reviewedHead: review.reviewedHead }),
     // The tour doc round-trips verbatim, on the same absent-key rule: a review with no
     // overview re-emits without the key, never with a null one.
     ...(review.overview === null ? {} : { overview: review.overview }),
@@ -98,6 +101,10 @@ export function nestLayers(layers: readonly ReviewLayer[]): ReviewLayerDraft[] {
       ...(layer.summary === undefined ? {} : { summary: layer.summary }),
       ...(layer.description === undefined ? {} : { description: layer.description }),
       ...(layer.ranges.length === 0 ? {} : { ranges: layer.ranges }),
+      // `skim` re-emits on the same absent-key rule as the prose fields: it is the author's
+      // mark, the app never sets or clears it, and a layer that carried it in must carry it
+      // back out or a round trip through the app silently un-marks the mechanical chapter.
+      ...(layer.skim === undefined ? {} : { skim: layer.skim }),
     }),
   );
   const indexById = new Map(layers.map((layer, index) => [layer.id, index]));
@@ -135,6 +142,9 @@ export type ExportSourcePlan = {
   base: ReviewRef;
   head: ReviewRef;
   needsPatch: boolean;
+  /** The commit `head` names right now — the artifact's `reviewedHead`. Null only where
+   * there is no commit to name at all (an unborn repo's working tree). */
+  reviewedHead: CommitSha | null;
 };
 
 /** Express a plain repo session's diff (one with no imported `reviewOrigin`) as an
@@ -150,21 +160,32 @@ export function exportSourceFor(
   repo: RepoInfo,
   headSha: CommitSha | null,
 ): ExportSourcePlan {
-  switch (selection.kind) {
-    case "branches":
-    case "reviewRefs":
-      return { repo, base: selection.base, head: selection.head, needsPatch: false };
-    case "commitRange":
-      return { repo, base: selection.first, head: selection.last, needsPatch: true };
-    case "commitRangeWithUncommitted":
-      return { repo, base: selection.first, head: headSha ?? selection.first, needsPatch: true };
-    case "uncommitted": {
-      const ref = headSha ?? EMPTY_TREE_SHA;
-      return { repo, base: ref, head: ref, needsPatch: true };
+  const refs = ((): Omit<ExportSourcePlan, "reviewedHead"> => {
+    switch (selection.kind) {
+      case "branches":
+      case "reviewRefs":
+        return { repo, base: selection.base, head: selection.head, needsPatch: false };
+      case "commitRange":
+        return { repo, base: selection.first, head: selection.last, needsPatch: true };
+      case "commitRangeWithUncommitted":
+        return { repo, base: selection.first, head: headSha ?? selection.first, needsPatch: true };
+      case "uncommitted": {
+        const ref = headSha ?? EMPTY_TREE_SHA;
+        return { repo, base: ref, head: ref, needsPatch: true };
+      }
+      default:
+        return assertNever(selection);
     }
-    default:
-      return assertNever(selection);
-  }
+  })();
+  return {
+    ...refs,
+    // One rule over every arm, and the same one `rvw emit` applies: the commit `head`
+    // resolves to. Three of the four arms already pin a sha, so `head` *is* the answer
+    // there; only a branch comparison records a name, and the session HEAD is what that
+    // name points at right now. Stated once rather than per arm, because a fifth selection
+    // kind should not have to remember this.
+    reviewedHead: CommitSha.safeParse(refs.head).success ? refs.head : headSha,
+  };
 }
 
 /** A comment as Markdown needs: the authored anchor + body plus the render-time

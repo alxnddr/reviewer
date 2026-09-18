@@ -97,6 +97,7 @@ describe("reviewArtifactJsonSchema", () => {
       "overview",
       "patch",
       "repo",
+      "reviewedHead",
     ]);
   });
 });

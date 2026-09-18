@@ -58,13 +58,13 @@ async function resolveExportOrigin(
   if (slice.selection === null) {
     return "nothing";
   }
-  const { repo, base, head, needsPatch } = exportSourceFor(
+  const { repo, base, head, needsPatch, reviewedHead } = exportSourceFor(
     slice.selection,
     slice.repo,
     headShaOf(slice.log),
   );
   if (!needsPatch) {
-    return { repo, base, head, patch: null };
+    return { repo, base, head, patch: null, reviewedHead };
   }
   const response = await bridge.getDiff({
     repoPath: slice.repo.path,
@@ -76,7 +76,7 @@ async function resolveExportOrigin(
   // An empty patch is no usable frozen diff (and no comment could have anchored on
   // it): fall through to the source refs rather than freezing an empty artifact.
   const patch = response.value.patch;
-  return { repo, base, head, patch: patch.length > 0 ? patch : null };
+  return { repo, base, head, patch: patch.length > 0 ? patch : null, reviewedHead };
 }
 
 export const createExportSlice: StateCreator<ReviewState, [], [], ExportSlice> = (set, get) => ({
@@ -101,6 +101,7 @@ export const createExportSlice: StateCreator<ReviewState, [], [], ExportSlice> =
         base: origin.base,
         head: origin.head,
         patch: origin.patch,
+        reviewedHead: origin.reviewedHead,
         overview: slice.overview,
         comments: slice.comments,
         layers: slice.layers,

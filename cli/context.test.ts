@@ -97,7 +97,7 @@ describe("the cwd a range defaults from", () => {
 });
 
 describe("where an --out-less artifact lands", () => {
-  const range = { repoPath: "/work/repo", base: "main", head: "feature" };
+  const range = { repoPath: "/work/repo", base: "main", head: "feature", headSha: "a".repeat(40) };
 
   it("hangs the default under the context's home, never the developer's", () => {
     const context = testContext({} as StricliProcess, { env: {}, home: "/home/agent" });

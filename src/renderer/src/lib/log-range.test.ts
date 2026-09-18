@@ -42,7 +42,13 @@ describe("logRangeFor", () => {
     expect(
       logRangeFor(
         rangeSlice({
-          reviewOrigin: { repo: REPO, base: "main", head: sha("a"), patch: null },
+          reviewOrigin: {
+            repo: REPO,
+            base: "main",
+            head: sha("a"),
+            patch: null,
+            reviewedHead: null,
+          },
           head: "feature",
           base: "trunk",
         }),

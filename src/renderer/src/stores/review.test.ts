@@ -22,6 +22,7 @@ import { commentFingerprint } from "../../../shared/fingerprint";
 import { resolutionOf } from "../../../shared/comment-resolution";
 import { resolveLayerScroll, stepLayer } from "../../../shared/layers";
 import { UNCOVERED_LAYER_ID } from "../lib/coverage";
+import { tallyRead } from "../lib/read-progress";
 import { createScrollCapture, SCROLL_CAPTURE_DEBOUNCE_MS } from "../lib/scroll";
 import {
   BRANCH_LIST,
@@ -123,6 +124,7 @@ function refsReviewSession(id: string, repoPath: string, base: string, head: str
       base,
       head,
       patch: null,
+      reviewedHead: null,
     },
   });
 }
@@ -137,6 +139,7 @@ function frozenReviewSession(id: string, repoPath: string, patch: string): Sessi
       base: "main",
       head: SHA_A,
       patch,
+      reviewedHead: null,
     },
   });
 }
@@ -530,6 +533,7 @@ describe("the picker's two refs", () => {
             base: "a",
             head: "b",
             patch: null,
+            reviewedHead: null,
           },
         },
       },
@@ -1763,6 +1767,10 @@ describe("debounced write-back", () => {
       // `persistedSession` is the one seam that converts, and this is what comes out of it.
       readFiles: {},
       collapsedFiles: [],
+      // Seeded — the fixture diff holds no lockfile or generated file, so the seed folded
+      // nothing, but it *ran*, and the flag is what stops it running again over a reader who
+      // has since opened one of those files back up.
+      foldsSeeded: true,
       // The live count off the loaded diff, not the zero this session was created with: a
       // persisted denominator is only useful if it tracks the review it is counting.
       readTotal: 6,
@@ -2613,7 +2621,13 @@ describe("useReviewStore comment navigation", () => {
 
 describe("review export actions", () => {
   const REPO = { path: "/repo", name: "app" };
-  const ORIGIN: ReviewOrigin = { repo: REPO, base: "main", head: SHA_A, patch: null };
+  const ORIGIN: ReviewOrigin = {
+    repo: REPO,
+    base: "main",
+    head: SHA_A,
+    patch: null,
+    reviewedHead: null,
+  };
   const COMMENT: Comment = {
     file: "src/a.ts",
     side: "additions",
@@ -3076,6 +3090,115 @@ describe("exit gate", () => {
   });
 });
 
+describe("the initial fold seed", () => {
+  /** The fixture diff with a lockfile bolted on, so a load has something to fold and
+   * something to leave alone. */
+  const LOCK_PATCH = [
+    "diff --git a/bun.lock b/bun.lock",
+    "index 5555555..6666666 100644",
+    "--- a/bun.lock",
+    "+++ b/bun.lock",
+    "@@ -1,1 +1,2 @@",
+    " lockfileVersion: 1",
+    "+  added-dep@1.0.0:",
+    "",
+  ].join("\n");
+  const WITH_LOCK = `${MULTI_STATUS_PATCH}${LOCK_PATCH}`;
+
+  function bridgeWithLock(): ReviewerBridge {
+    return makeBridge({
+      getDiff: vi.fn().mockResolvedValue({ ok: true, value: { patch: WITH_LOCK } }),
+    });
+  }
+
+  it("folds the machine-written files of a plain repo session, and only those", async () => {
+    // No artifact, no layers — the case `skim` cannot reach and the heuristic exists for.
+    await openFixtureRepo(bridgeWithLock());
+    await vi.waitFor(() => {
+      expect(active().diff.phase).toBe("loaded");
+    });
+
+    expect([...active().collapsedFiles]).toEqual(["bun.lock"]);
+    expect(active().foldsSeeded).toBe(true);
+  });
+
+  it("leaves the diff alone in every other respect — folding is presentation", async () => {
+    await openFixtureRepo(bridgeWithLock());
+    await vi.waitFor(() => {
+      expect(active().diff.phase).toBe("loaded");
+    });
+    const loaded = active().diff;
+    const files = loaded.phase === "loaded" ? loaded.files : [];
+
+    // Still in the diff, so still in the tree, still walkable with j/k, still anchorable.
+    expect(files.map((file) => file.path)).toContain("bun.lock");
+    // Unread, and counted: the denominator is the reader's, not the author's, and a folded
+    // file is one they still have to say they are done with.
+    expect(active().readFiles.size).toBe(0);
+    expect(tallyRead(files, active().readFiles).total).toBe(files.length);
+  });
+
+  it("seeds once: a file the reader opened back up does not re-fold on the next load", async () => {
+    const bridge = bridgeWithLock();
+    await openFixtureRepo(bridge);
+    await vi.waitFor(() => {
+      expect(active().diff.phase).toBe("loaded");
+    });
+    store.getState().setFileCollapsed("bun.lock", false);
+    expect(active().collapsedFiles.size).toBe(0);
+
+    // A second load of the same session — a brush move, a branch switch, a re-derive. The
+    // seed must not run again over a decision the reader has since made.
+    store.getState().setBase("main");
+    await vi.waitFor(() => {
+      expect(active().diff.phase).toBe("loaded");
+    });
+    expect(active().collapsedFiles.size).toBe(0);
+  });
+
+  it("does not re-seed a session restored with the flag already set", async () => {
+    // The relaunch case, and the reason the flag persists beside the folds rather than being
+    // derived from them: an empty `collapsedFiles` on a seeded session means the reader
+    // opened everything back up, not that nothing has been decided yet.
+    const bridge = bridgeWithLock();
+    await hydrateWith(bridge, {
+      sessions: [storedSession(ID_A, "/repo-a", { foldsSeeded: true })],
+      activeSessionId: ID_A,
+    });
+    await vi.waitFor(() => {
+      expect(slice(ID_A).diff.phase).toBe("loaded");
+    });
+    expect(slice(ID_A).collapsedFiles.size).toBe(0);
+  });
+
+  it("folds a review's skim layer as well as the heuristic's own finds", async () => {
+    const bridge = bridgeWithLock();
+    await hydrateWith(bridge, {
+      sessions: [
+        {
+          ...refsReviewSession(ID_A, "/repo-a", "main", SHA_A),
+          layers: [
+            {
+              id: "mech",
+              label: "Mechanical",
+              skim: true,
+              ranges: [{ file: "notes.txt", side: "additions", startLine: 6, endLine: 6 }],
+            },
+          ],
+        },
+      ],
+      activeSessionId: ID_A,
+    });
+    await vi.waitFor(() => {
+      expect(slice(ID_A).diff.phase).toBe("loaded");
+    });
+
+    // `notes.txt` is ordinary source that the *author* said is not worth reading; `bun.lock`
+    // is what the app worked out on its own. Both fold, from one seed.
+    expect([...slice(ID_A).collapsedFiles].toSorted()).toEqual(["bun.lock", "notes.txt"]);
+  });
+});
+
 describe("reading progress", () => {
   const layers: ReviewLayer[] = [
     {
@@ -3450,6 +3573,7 @@ describe("locating a review's repository", () => {
     base: SHA_A,
     head: SHA_B,
     patch: MULTI_STATUS_PATCH,
+    reviewedHead: null,
   };
 
   /** A review opened frozen, where the box's path does not exist. */

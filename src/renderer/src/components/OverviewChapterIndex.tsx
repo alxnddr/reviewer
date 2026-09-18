@@ -3,7 +3,7 @@ import { AlertTriangle } from "lucide-react";
 import { clamp } from "../../../shared/clamp";
 import { countLabel } from "../../../shared/plural";
 import type { OverviewChapter } from "@/lib/overview";
-import { LineCounts } from "@/components/OverviewLayerSection";
+import { ChapterChip, LineCounts } from "@/components/OverviewLayerSection";
 import { ReadRing, readLabel } from "@/components/ReadRing";
 import { TooltipHint } from "@/components/ui/tooltip";
 
@@ -173,11 +173,11 @@ export function OverviewChapterIndex({
                 lands on a dead end. It is `shrink-0`, so the summary beside it gives up
                 the width — the chapter is still named, and what gets cut is the end of a
                 sentence. */}
-            {chapter.outdated && (
-              <span className="shrink-0 rounded border border-border bg-border/60 px-1.5 text-xs text-foreground">
-                Outdated
-              </span>
-            )}
+            {chapter.outdated && <ChapterChip>Outdated</ChapterChip>}
+            {/* And the same argument again for `Skim`, one step stronger: this row is where
+                a reader decides which chapter to start on, so "there is nothing to read in
+                this one" is exactly the fact they are here for. */}
+            {chapter.skim && <ChapterChip>Skim</ChapterChip>}
             {/* The measured end of the row, in a fixed order — ring, files, lines — so the
                 three read as columns down the list even though each can be absent. */}
             <span className="flex shrink-0 items-center gap-x-2.5 text-xs text-text-faint tabular-nums">

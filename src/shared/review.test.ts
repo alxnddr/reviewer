@@ -417,7 +417,13 @@ describe("pinReview", () => {
   const AUTHORED = { path: "/home/box/app", name: "app" };
   const LOCAL = { path: "/work/app", name: "app" };
   const PATCH = "diff --git a/src/a.ts b/src/a.ts\n";
-  const withPatch = { repo: AUTHORED, base: "main", head: SHA_40, patch: PATCH };
+  const withPatch = {
+    repo: AUTHORED,
+    base: "main",
+    head: SHA_40,
+    patch: PATCH,
+    reviewedHead: null,
+  };
   const refsOnly = { ...withPatch, patch: null };
   const REFS = { kind: "refs", base: "main", head: SHA_40 };
   const FROZEN = { kind: "frozenPatch", patch: PATCH };

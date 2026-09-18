@@ -50,6 +50,9 @@ export function createSessionSlice(
     // it against.
     readFiles: NO_READ_FILES,
     collapsedFiles: NO_COLLAPSED_FILES,
+    // Nothing folded, and nothing seeded: the first diff this slice loads is what decides
+    // which files open as a header band (`lib/initial-folds.ts`).
+    foldsSeeded: false,
     readTotal: 0,
     resolvedComments: NO_RESOLUTIONS,
     reviewPath: null,
@@ -118,6 +121,7 @@ export function reseatedSlice(live: SessionSlice, session: Session): SessionSlic
     selectedFilePath: live.selectedFilePath,
     readFiles: live.readFiles,
     collapsedFiles: live.collapsedFiles,
+    foldsSeeded: live.foldsSeeded,
     readTotal: live.readTotal,
     resolvedComments: live.resolvedComments,
   };
@@ -128,10 +132,14 @@ export function reseatedSlice(live: SessionSlice, session: Session): SessionSlic
  * place that builds a slice so neither can drift from the other. */
 function restoredProgress(
   session: Session,
-): Pick<SessionSlice, "readFiles" | "collapsedFiles" | "readTotal" | "resolvedComments"> {
+): Pick<
+  SessionSlice,
+  "readFiles" | "collapsedFiles" | "foldsSeeded" | "readTotal" | "resolvedComments"
+> {
   return {
     readFiles: new Map(Object.entries(session.readFiles)),
     collapsedFiles: new Set(session.collapsedFiles),
+    foldsSeeded: session.foldsSeeded,
     readTotal: session.readTotal,
     resolvedComments: new Map(Object.entries(session.resolvedComments)),
   };

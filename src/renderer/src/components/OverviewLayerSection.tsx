@@ -84,6 +84,21 @@ export function LineCounts({
   );
 }
 
+/** The one chip a chapter can wear, wherever it is named. Two of them exist — `Outdated`
+ * and `Skim` — and each has to look identical on the section and on the index above it, or
+ * the map and the document read as describing different reviews. One recipe, exported for
+ * the index, the same reason `LineCounts` is.
+ *
+ * `font-normal` because a section's chip sits inside a `font-medium` heading and a chip is
+ * not part of the title; on the index's row it changes nothing. */
+export function ChapterChip({ children }: { children: string }): ReactElement {
+  return (
+    <span className="shrink-0 rounded border border-border bg-border/60 px-1.5 py-px text-xs font-normal text-foreground">
+      {children}
+    </span>
+  );
+}
+
 type FileRowProps = {
   entry: OverviewFileEntry;
   onOpen: () => void;
@@ -128,6 +143,44 @@ function FileRow({ entry, onOpen }: FileRowProps): ReactElement {
       </TooltipHint>
       {missing ? (
         <span className="shrink-0 text-xs text-text-faint">not in this diff</span>
+      ) : (
+        <LineCounts additions={entry.additions} deletions={entry.deletions} />
+      )}
+    </button>
+  );
+}
+
+/** The same row for a chapter the author marked `skim`, set as a list rather than as a
+ * catalogue: no type glyph, no row padding, the path in the faint ink the counts already
+ * use. It is still a button, still hinted, still carries the read slot — the mark is about
+ * how much attention the files are owed, never about what can be reached — but a dozen
+ * lockfiles now cost a dozen lines instead of half a screen.
+ *
+ * Kept as its own component rather than a `dense` flag on `FileRow`: the two differ in what
+ * they *show*, not only in how tightly, and a row with four conditionals in it is how the
+ * catalogue row and the list row end up drifting into a third thing that is neither. */
+function SkimFileRow({ entry, onOpen }: FileRowProps): ReactElement {
+  const missing = entry.status === null;
+  return (
+    <button
+      type="button"
+      disabled={missing}
+      onClick={onOpen}
+      className={cn(
+        "flex w-full items-center gap-2 rounded px-1.5 text-left text-xs",
+        missing ? "cursor-default" : "hover:bg-border/50",
+      )}
+    >
+      <span className="flex size-3 shrink-0 items-center justify-center">
+        {entry.read && <ReadRing tally={READ_ONE} />}
+      </span>
+      <TooltipHint content={entry.path} whenTruncated side="top" align="start">
+        <span className={cn("min-w-0 flex-1 truncate text-text-faint", missing && "line-through")}>
+          {entry.path}
+        </span>
+      </TooltipHint>
+      {missing ? (
+        <span className="shrink-0 text-text-faint">not in this diff</span>
       ) : (
         <LineCounts additions={entry.additions} deletions={entry.deletions} />
       )}
@@ -200,6 +253,9 @@ export function OverviewLayerSection({
   const shown = expanded ? files : files.slice(0, FILES_SHOWN);
   const rest = files.length - shown.length;
   const rank = rankStyle(chapter.depth);
+  // The fold threshold is `FILES_SHOWN` either way: a skim chapter is denser per row, not
+  // longer, and a second threshold would be a number nobody could explain the difference of.
+  const Row = chapter.skim ? SkimFileRow : FileRow;
   const Heading = headingTag(chapter.depth);
   const headingId = layerHeadingDomId(layer.id);
 
@@ -230,10 +286,18 @@ export function OverviewLayerSection({
             {layer.label}
           </button>
         </TooltipHint>
-        {chapter.outdated && (
-          <span className="shrink-0 rounded border border-border bg-border/60 px-1.5 py-px text-xs font-normal text-foreground">
-            Outdated
-          </span>
+        {chapter.outdated && <ChapterChip>Outdated</ChapterChip>}
+        {/* Said once, on the heading, rather than as a sentence under it: the compact list
+            below is the rest of the explanation, and a chapter whose whole point is that it
+            is not worth reading should not open with a paragraph about itself. */}
+        {chapter.skim && (
+          <TooltipHint
+            content="Mechanical — the author marked this layer skim, and its files open folded in the diff"
+            side="top"
+            align="start"
+          >
+            <ChapterChip>Skim</ChapterChip>
+          </TooltipHint>
         )}
       </Heading>
 
@@ -256,9 +320,9 @@ export function OverviewLayerSection({
           printing them here too would say everything twice. Its fact row still carries the
           totals, because the totals are what a group is. */}
       {files.length > 0 && !hasChildren && (
-        <div className="mt-4 flex flex-col gap-0.5">
+        <div className={cn("flex flex-col", chapter.skim ? "mt-3" : "mt-4 gap-0.5")}>
           {shown.map((entry) => (
-            <FileRow key={entry.path} entry={entry} onOpen={() => onOpenFile(entry.path)} />
+            <Row key={entry.path} entry={entry} onOpen={() => onOpenFile(entry.path)} />
           ))}
           {(rest > 0 || expanded) && (
             <Button

@@ -56,6 +56,21 @@ export const ReadProgress = z.object({
    * marking folds, and restoring the marks without the folds would reopen every finished
    * file the reader had already put away. */
   collapsedFiles: z.array(z.string()).default([]),
+  /** Whether the initial folds have already been seeded into `collapsedFiles` for this
+   * review (`lib/initial-folds.ts`: lockfiles, generated output, and the layers an author
+   * marked `skim`). Seeding happens once, on the first diff a session loads; this is the
+   * bit that makes "once" true across a relaunch.
+   *
+   * It rides *here*, with the folds it is about, rather than on the session — which is
+   * what makes it true across the other scope too. Close a review's tab and reopen the
+   * artifact and the record brings back both the folds and the fact that they were seeded,
+   * so a lockfile the reader deliberately opened does not fold itself again in a later
+   * sitting. Deriving it instead ("nothing is folded yet, so seed") would do exactly that
+   * to the reader who unfolds the one file the heuristic found.
+   *
+   * `.default(false)` — a session or record written before this key existed has not been
+   * seeded, which is the honest answer: it gets its folds on the next diff load, once. */
+  foldsSeeded: z.boolean().default(false),
   /** How many files the diff held when these marks were last touched — the denominator.
    * Cached rather than derived because the surfaces that want a *ratio* (a recents row, the
    * start screen) have no diff in hand and deriving one means shelling out to git for every
@@ -81,6 +96,7 @@ export type ReadProgress = z.infer<typeof ReadProgress>;
 export const NO_PROGRESS: ReadProgress = {
   readFiles: {},
   collapsedFiles: [],
+  foldsSeeded: false,
   readTotal: 0,
   resolvedComments: {},
 };

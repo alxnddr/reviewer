@@ -124,11 +124,32 @@ export type SessionSlice = {
   /** Files the code view is showing as a header band only, body folded away. Persisted
    * alongside `readFiles`, and deliberately *not* derived from it: marking a file read folds
    * it, so what is still owed rises up the pane, but the header stays a disclosure — a
-   * finished file opens back up in one click and stays open. Only a gesture ever folds or
-   * unfolds a file; nothing springs shut on its own. Restoring the marks without the folds
-   * would reopen every file the reader had already put away, which is why it travels with
-   * them rather than starting empty. */
+   * finished file opens back up in one click and stays open. Restoring the marks without the
+   * folds would reopen every file the reader had already put away, which is why it travels
+   * with them rather than starting empty.
+   *
+   * **The folds are the reader's, and nothing springs shut on them.** That rule is about
+   * *time*: no file ever closes under someone who is reading it. A fold happens because they
+   * made a gesture — the disclosure, or marking read — and it is theirs from then on.
+   *
+   * There is exactly one other way a path lands in here, and it does not break that rule:
+   * the **initial seed**, written once when a session first loads a diff, before the reader
+   * has looked at anything. Two sources feed it (`lib/initial-folds.ts`): the files the
+   * heuristic reads as machine-written — lockfiles, generated output, source maps, minified
+   * bundles — and the files owned only by layers whose author marked them `skim`. Both are
+   * the same claim: this is not prose anyone wrote, so it opens the way a finished file
+   * does, as a header band one click from its contents.
+   *
+   * What makes it a seed rather than a spring is `foldsSeeded` below: it happens once per
+   * review, and a file the reader opens back up stays open — through a reload, a relaunch,
+   * and a tab closed and reopened. If you find yourself wanting to re-run the seed on a
+   * later diff load, that is the spring this paragraph exists to forbid. */
   collapsedFiles: ReadonlySet<string>;
+  /** Whether this session has already been through that seed. Persisted with the folds it
+   * guards (`shared/review-progress.ts` states why it lives on `ReadProgress`), false for a
+   * session that has never loaded a diff — including every session written before the seed
+   * existed, which gets its folds once, on the next load. */
+  foldsSeeded: boolean;
   /** What the reader decided about each finding: `commentFingerprint` → one of the three
    * words the fix prompt asks an agent to report back (`shared/comment-resolution.ts`).
    *

@@ -14,6 +14,7 @@ import {
   NO_READ_FILES,
   withCollapsed,
 } from "../lib/read-progress";
+import { initialFolds } from "../lib/initial-folds";
 import { NO_RESOLUTIONS, withResolution } from "../../../shared/comment-resolution";
 import { useOnboardingStore } from "../stores/onboarding";
 import { useRecentReviewsStore } from "../stores/recent-reviews";
@@ -321,7 +322,9 @@ function siblingSlice(ordinal: number, spec: SiblingSpec): SessionSlice {
     {
       reviewDiff: review === null ? null : { kind: "refs", base: review.base, head: review.head },
       reviewOrigin:
-        review === null ? null : { repo, base: review.base, head: review.head, patch: null },
+        review === null
+          ? null
+          : { repo, base: review.base, head: review.head, patch: null, reviewedHead: null },
       overview: title === undefined ? null : { title, body: "" },
     },
   );
@@ -686,6 +689,71 @@ export function applyPreviewState(): void {
       });
       break;
     }
+    case "overview-skim": {
+      // The mechanical chapter and the moved branch, on one screen — the two halves of the
+      // `skim` + `reviewedHead` release. A skim section is the same section set denser, with
+      // the chip on its heading and on its index row; the drift line sits under the headline
+      // stats, which is the one place the doc says *when* the review is from.
+      const paths = [
+        "src/engine.ts",
+        "src/util.ts",
+        "bun.lock",
+        "generated/api-client.ts",
+        "generated/schema.ts",
+        "dist/bundle.min.js",
+      ];
+      const files = parsePatch(buildPathsPatch(paths, 4), "preview:overview-skim");
+      const range = (file: string) =>
+        ({ file, side: "additions", startLine: 1, endLine: 4 }) as const;
+      const source = { path: "/preview/fixture", name: "fixture" };
+      const skimLayers: ReviewLayer[] = [
+        {
+          id: "engine",
+          label: "The retry budget",
+          summary: "Retries now back off per host rather than per request",
+          description:
+            "The engine holds one budget per host and the util reads it. Everything below this chapter follows from that one decision.",
+          ranges: [range("src/engine.ts"), range("src/util.ts")],
+        },
+        {
+          id: "mechanical",
+          label: "Generated and locked",
+          summary: "The regenerated client, its schema, the lockfile and the bundle",
+          skim: true,
+          ranges: [
+            range("bun.lock"),
+            range("generated/api-client.ts"),
+            range("generated/schema.ts"),
+            range("dist/bundle.min.js"),
+          ],
+        },
+      ];
+      seedSession({
+        diff: { phase: "loaded", loadId: 1, files },
+        selectedFilePath: files[0]?.path ?? null,
+        reviewDiff: { kind: "refs", base: "main", head: "feature/brush-selection" },
+        reviewOrigin: {
+          repo: source,
+          base: "main",
+          head: "feature/brush-selection",
+          patch: null,
+          // Two commits back in `fixtureEntries`, so the doc says the branch has moved twice
+          // since — the case the field exists for.
+          reviewedHead: "2".repeat(40),
+        },
+        layers: skimLayers,
+        // What the first diff load would have written (`lib/initial-folds.ts`): the harness
+        // seeds slices directly rather than through `runDiffLoad`, so a scene that wants to
+        // show the state *after* a load has to carry its result.
+        collapsedFiles: withCollapsed(NO_COLLAPSED_FILES, initialFolds(files, skimLayers), true),
+        overview: {
+          title: "Back off per host",
+          body: "The retry budget moves from the request to the host. One chapter of argument, and one of output the generator produced from it.",
+        },
+        overviewOpen: true,
+      });
+      break;
+    }
     case "reading": {
       // Part-way through the walkthrough: the first chapter finished (its files folded away
       // in the code view), the second started. What the rail's rings, the band's control,
@@ -759,7 +827,7 @@ export function applyPreviewState(): void {
         brush: { anchor: 2, focus: 3 },
         comments: fixtureComments(),
         layers: fixtureLayers(),
-        reviewOrigin: { ...source, patch: null },
+        reviewOrigin: { ...source, patch: null, reviewedHead: null },
         reviewDiff: { kind: "refs", base: source.base, head: source.head },
         reviewSubrange:
           first !== undefined &&
@@ -823,6 +891,7 @@ export function applyPreviewState(): void {
           base: "main",
           head: "feature/brush-selection",
           patch: null,
+          reviewedHead: null,
         },
         reviewDiff: { kind: "refs", base: "main", head: "feature/brush-selection" },
       });
@@ -924,6 +993,7 @@ export function applyPreviewState(): void {
           base: "main",
           head: "feature/brush-selection",
           patch: null,
+          reviewedHead: null,
         },
         reviewDiff: { kind: "refs", base: "main", head: "feature/brush-selection" },
       });

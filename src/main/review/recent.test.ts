@@ -200,6 +200,7 @@ describe("listRecentReviews", () => {
     await progress.write(join(dir, "started.reviewer.json"), {
       readFiles: { "src/a.ts": "modified::aaa..bbb", "src/b.ts": "added::..ccc" },
       collapsedFiles: [],
+      foldsSeeded: false,
       readTotal: 9,
       resolvedComments: {},
     });
@@ -220,12 +221,14 @@ describe("listRecentReviews", () => {
     await progress.write(gone, {
       readFiles: { "a.ts": "s" },
       collapsedFiles: [],
+      foldsSeeded: false,
       readTotal: 1,
       resolvedComments: {},
     });
     await progress.write(join(dir, "kept.reviewer.json"), {
       readFiles: { "a.ts": "s" },
       collapsedFiles: [],
+      foldsSeeded: false,
       readTotal: 1,
       resolvedComments: {},
     });
@@ -250,6 +253,7 @@ describe("listRecentReviews", () => {
     await progress.write(dropped, {
       readFiles: { "a.ts": "s" },
       collapsedFiles: [],
+      foldsSeeded: false,
       readTotal: 3,
       resolvedComments: {},
     });

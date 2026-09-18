@@ -114,6 +114,29 @@ describe("coverage over an artifact's diff", () => {
     expect(isFullyCovered(report)).toBe(true);
   });
 
+  it("scores a skim layer exactly as it scores any other", () => {
+    // The mark is a rendering decision, and coverage must not be able to see it. If it could,
+    // an author could mark the chapter they did not want to write `skim` and the gate would
+    // stop asking for it — which is the one thing "the gate cannot be argued with" rules out.
+    const ranges: ReviewAnchor[] = [
+      { file: "src/foo.ts", side: "additions", startLine: 11, endLine: 13 },
+      { file: "src/foo.ts", side: "deletions", startLine: 11, endLine: 11 },
+    ];
+    const plain = coverageForArtifact(artifact(patch(ONE_HUNK_PATCH), [layer("l1", ranges)]));
+    const skimmed = coverageForArtifact(
+      artifact(patch(ONE_HUNK_PATCH), [{ ...layer("l1", ranges), skim: true }]),
+    );
+    expect(reportOf(skimmed)).toEqual(reportOf(plain));
+    expect(isFullyCovered(reportOf(skimmed))).toBe(true);
+
+    // And a skim layer that covers nothing leaves the same gap an unmarked one would: the
+    // lines are still owed, and `--require-complete` still refuses.
+    const gap = coverageForArtifact(
+      artifact(patch(ONE_HUNK_PATCH), [{ ...layer("l1", []), skim: true }]),
+    );
+    expect(isFullyCovered(reportOf(gap))).toBe(false);
+  });
+
   it("names the uncovered whole file and the partial hunk's exact contiguous spans", () => {
     // foo fully covered; bar in no layer at all (whole-file gap); a partial layer over
     // bar's additions covering only 5-6 leaves the contiguous span 7-8.

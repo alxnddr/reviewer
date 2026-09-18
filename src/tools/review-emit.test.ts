@@ -35,6 +35,67 @@ function input(overrides: Partial<EmitInput> = {}): EmitInput {
 }
 
 describe("emitReviewArtifact", () => {
+  it("writes the reviewed head through, and changes nothing about the gate by doing it", () => {
+    // `reviewedHead` is provenance and nothing else. The proof that it is inert is that the
+    // gate's verdict and the placement of every anchor are byte-for-byte what they were
+    // without it — so the only difference between the two artifacts is the one key.
+    const plain = emitReviewArtifact(input());
+    const stamped = emitReviewArtifact(input({ reviewedHead: "c".repeat(40) }));
+    expect(plain.ok && stamped.ok).toBe(true);
+    if (!plain.ok || !stamped.ok) return;
+
+    const parsed = parseReviewArtifact(stamped.bytes);
+    expect(parsed.ok).toBe(true);
+    if (!parsed.ok) return;
+    expect(parsed.artifact.reviewedHead).toBe("c".repeat(40));
+    expect(validatePlacement(parsed.artifact, TWO_FILE_PATCH)).toEqual([]);
+
+    // The same bytes with that one line removed.
+    const withoutKey = JSON.parse(stamped.bytes) as Record<string, unknown>;
+    delete withoutKey.reviewedHead;
+    expect(withoutKey).toEqual(JSON.parse(plain.bytes));
+  });
+
+  it("omits the reviewed head when the caller has no sha to offer", () => {
+    const result = emitReviewArtifact(input());
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.bytes).not.toContain("reviewedHead");
+  });
+
+  it("gates a skim layer exactly like any other: its ranges must still place", () => {
+    // The mark changes how the app *renders* a chapter, never what the gate asks of it.
+    // Marking a layer skim must not become a way to smuggle an anchor that does not place —
+    // and, below, must not shrink what coverage demands either.
+    const skimmed = emitReviewArtifact(
+      input({
+        layers: [
+          {
+            label: "Lockfiles",
+            skim: true,
+            ranges: [{ file: "src/bar.ts", side: "additions", startLine: 2, endLine: 2 }],
+          },
+        ],
+      }),
+    );
+    expect(skimmed.ok).toBe(true);
+    if (!skimmed.ok) return;
+    expect(JSON.parse(skimmed.bytes).layers[0]).toMatchObject({ skim: true });
+
+    const misplaced = emitReviewArtifact(
+      input({
+        layers: [
+          {
+            label: "Lockfiles",
+            skim: true,
+            ranges: [{ file: "src/bar.ts", side: "additions", startLine: 900, endLine: 900 }],
+          },
+        ],
+      }),
+    );
+    expect(misplaced.ok).toBe(false);
+  });
+
   it("assembles a refs-only artifact whose anchors place against the captured diff", () => {
     const result = emitReviewArtifact(input());
     expect(result.ok).toBe(true);

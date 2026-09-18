@@ -102,6 +102,13 @@ export function readPaths(files: readonly PatchFile[], readFiles: ReadFiles): Re
  * the ratio — a section can be finished without the reader chasing code that is gone. */
 export type ReadTally = { read: number; total: number };
 
+/** A fold is presentation and a mark is progress, and the two never cross here: a folded
+ * file counts in `total` exactly like any other, whether the reader folded it or the initial
+ * seed did. Nothing about `collapsedFiles` — or about a layer's `skim` — reaches this file,
+ * and that is deliberate. Letting an author shrink the denominator by marking a chapter
+ * mechanical would make "6 of 11 files read" a claim about the artifact instead of about the
+ * reader, which is the one thing progress is not (see this module's header). A reader who
+ * never opens the folded lockfile still has to say so, with `r`, in one keystroke. */
 export function tallyRead(files: readonly PatchFile[], readFiles: ReadFiles): ReadTally {
   let read = 0;
   for (const file of files) {
@@ -163,8 +170,12 @@ export function markFilesRead(
  * different questions and a reader is allowed to disagree with the default: marking a file
  * read folds it (there is nothing left to look at, and the files still owed should rise up
  * the pane), but the header stays a disclosure, so opening a finished file back up is one
- * click and it stays open. Nothing is derived, so nothing can spring shut under the
- * reader — the only thing that ever folds a file is a gesture they made. */
+ * click and it stays open. Nothing is derived, so nothing springs shut under a reader
+ * mid-review: past the first load, the only thing that folds a file is a gesture they made.
+ *
+ * The first load is the exception, and it is a *seed* rather than a spring — the lockfiles
+ * and the `skim` layers, written once before anyone has looked at anything
+ * (`lib/initial-folds.ts`, and the `collapsedFiles` header in `stores/review/slice.ts`). */
 export const NO_COLLAPSED_FILES: ReadonlySet<string> = new Set();
 
 /** Fold or unfold a set of paths, returning the SAME set when nothing changed — the same

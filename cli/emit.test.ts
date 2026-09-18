@@ -209,6 +209,9 @@ describe("rvw emit", () => {
       repo,
       base: baseSha,
       head: headSha,
+      // The range resolves `--head <sha>` to itself, so the provenance the shell threads in
+      // is that same sha — and the bytes only match if the shell actually threads it.
+      reviewedHead: headSha,
       patch: patch.patch,
       comments: VALID_DRAFT.comments,
       layers: VALID_DRAFT.layers,
@@ -330,6 +333,19 @@ describe("rvw emit — the range nobody typed", () => {
       // A branch, stored as a branch: the review is meant to follow it.
       head: "feature",
     });
+    // ...and the commit that branch pointed at, recorded beside it. This is the case the
+    // field exists for: `head` alone cannot say which commit was reviewed, because tomorrow
+    // it names a different one.
+    expect(readArtifact(out)).toMatchObject({ head: "feature", reviewedHead: headSha });
+  });
+
+  it("records the reviewed head for a sha-pinned range too, where it merely agrees", async () => {
+    // Stated as its own case because the alternative — writing it only when `head` is a name —
+    // is a conditional on both sides of the wire to save one line in the file.
+    const out = outPath("pinned.reviewer.json");
+    const result = await runCli(explicit(VALID_DRAFT, "--out", out));
+    expect(result.code).toBe(0);
+    expect(readArtifact(out)).toMatchObject({ head: headSha, reviewedHead: headSha });
   });
 
   it("resolves a rev expression to a sha rather than refusing it", async () => {

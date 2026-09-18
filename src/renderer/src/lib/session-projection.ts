@@ -79,6 +79,7 @@ export function persistedSession(slice: PersistedSlice): Session {
     // downstream has to know the wire shape.
     readFiles: Object.fromEntries(slice.readFiles),
     collapsedFiles: [...slice.collapsedFiles],
+    foldsSeeded: slice.foldsSeeded,
     // Pruned on the way out, at the one seam that has both the marks and the comments in
     // hand. A mark is keyed by what its comment *says* (`commentFingerprint`), so editing a
     // body drops the mark — and without this the dropped mark would sit in the record

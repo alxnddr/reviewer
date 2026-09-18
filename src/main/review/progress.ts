@@ -83,8 +83,8 @@ export function createProgressStore(dir: string): ProgressStore {
       // treatment: no progress shown, the file left alone for whichever build owns it.
       return NO_PROGRESS;
     }
-    const { readFiles, collapsedFiles, readTotal, resolvedComments } = parsed.data;
-    return { readFiles, collapsedFiles, readTotal, resolvedComments };
+    const { readFiles, collapsedFiles, foldsSeeded, readTotal, resolvedComments } = parsed.data;
+    return { readFiles, collapsedFiles, foldsSeeded, readTotal, resolvedComments };
   }
 
   return {

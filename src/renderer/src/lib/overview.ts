@@ -80,6 +80,15 @@ export type OverviewChapter = {
   /** Its extent's first range no longer places against the loaded diff — the same flag the
    * rail shows, so a drifted chapter reads as drifted in both places. */
   outdated: boolean;
+  /** The author marked this layer (or one it hangs off) `skim`: the mechanical remainder,
+   * there so the lines are covered and navigable rather than so they are read. The doc sets
+   * it denser and says so; the diff opens its files folded (`lib/initial-folds.ts`).
+   *
+   * Inherited down the tree, unlike every other field here, which are the layer's own or its
+   * extent's totals. A skim parent means its sections are skim — marking a group mechanical
+   * and then having its children render full-size would be the mark doing nothing. Nothing
+   * about progress or coverage reads it: a skim chapter counts exactly like any other. */
+  skim: boolean;
   /** A few real lines from the first range that still places, or null (a layer whose
    * extent carries no range, a drifted layer, or an unloaded diff). */
   snippet: { file: string; snippet: DiffSnippet } | null;
@@ -270,6 +279,10 @@ export function buildOverview({
       firstCommentId: held[0]?.id ?? null,
       read: layerTally(files, layer, layers, readFiles),
       outdated: resolveLayerScroll(layer, layers, files, frozen).kind === "outdated",
+      // The entry's ancestors, not just the layer, so the mark carries down a group. The
+      // inferred "not covered by layers" chapter is in no outline and so is never skim,
+      // which is right: nobody marked those files anything.
+      skim: layer.skim === true || (entry?.ancestors ?? []).some((a) => a.skim === true),
       snippet: firstSnippet(ranges, byPath),
     };
   });

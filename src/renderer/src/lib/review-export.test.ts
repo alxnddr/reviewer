@@ -253,6 +253,45 @@ describe("serializeReview", () => {
     expect(serializeReview({ ...review, comments: [] })).not.toHaveProperty("comments");
   });
 
+  it("round-trips the two strict-object additions: a skim layer and the reviewed head", () => {
+    // Both are authored-or-stamped provenance the app only ever *reads*, and both travel
+    // through hand-copied projections (`flattenLayers`/`nestLayers` for one, `serializeReview`
+    // for the other). A field added to the schema and not copied round-trips through import
+    // and vanishes on export, silently — which is exactly what this asserts against.
+    const marked: ReviewArtifactDraft = {
+      ...FIXTURE,
+      reviewedHead: "c".repeat(40),
+      layers: [
+        FIXTURE.layers![0]!,
+        {
+          label: "Lockfiles",
+          summary: "the mechanical remainder",
+          skim: true,
+          ranges: [{ file: "src/b.ts", side: "deletions", startLine: 3, endLine: 3 }],
+        },
+      ],
+    };
+
+    const imported = importFixture(marked, "hh");
+    expect(imported.reviewedHead).toBe("c".repeat(40));
+    expect(imported.layers.map((layer) => layer.skim)).toEqual([undefined, true]);
+
+    const serialized = serializeReview(imported);
+    expect(serialized.reviewedHead).toBe("c".repeat(40));
+    expect(serialized.layers?.[1]).toMatchObject({ label: "Lockfiles", skim: true });
+    // Absent, not `false`, on the layer nobody marked — the same absent-key rule the prose
+    // fields keep, and the only form the `z.literal(true)` schema would accept back.
+    expect(serialized.layers?.[0]).not.toHaveProperty("skim");
+    // ...and it still re-imports and re-emits to the same bytes.
+    expect(serializeReview(importFixture(serialized, "ii"))).toEqual(serialized);
+  });
+
+  it("omits the reviewed head entirely for an artifact written before it existed", () => {
+    const review = importFixture(FIXTURE, "jj");
+    expect(review.reviewedHead).toBeNull();
+    expect(serializeReview(review)).not.toHaveProperty("reviewedHead");
+  });
+
   it("preserves the embedded patch verbatim and drops an absent one", () => {
     const withPatch = serializeReview(importFixture(FIXTURE, "ee"));
     expect(withPatch.patch).toBe(FIXTURE.patch);
@@ -616,22 +655,45 @@ describe("exportSourceFor", () => {
 
   it("exports a branch comparison as refs, no patch needed", () => {
     const plan = exportSourceFor({ kind: "branches", base: "main", head: "feature" }, repo, HEAD);
-    expect(plan).toEqual({ repo, base: "main", head: "feature", needsPatch: false });
+    // The one arm whose `head` is a name rather than a commit, and so the one where
+    // `reviewedHead` is a second fact: the session HEAD is what that branch points at now.
+    expect(plan).toEqual({
+      repo,
+      base: "main",
+      head: "feature",
+      needsPatch: false,
+      reviewedHead: HEAD,
+    });
+  });
+
+  it("records no reviewed head for a branch comparison whose log has not loaded", () => {
+    const plan = exportSourceFor({ kind: "branches", base: "main", head: "feature" }, repo, null);
+    // Null, not the branch name: `reviewedHead` is a sha or it is absent, and an export taken
+    // before the walk landed simply does not say which commit it was written against.
+    expect(plan.reviewedHead).toBeNull();
   });
 
   it("freezes a commit range, recording its endpoints as the refs", () => {
     const plan = exportSourceFor({ kind: "commitRange", first: HEAD, last: LAST }, repo, HEAD);
-    expect(plan).toEqual({ repo, base: HEAD, head: LAST, needsPatch: true });
+    // A pinned arm: `head` is already the commit, so the provenance is that sha and not the
+    // session HEAD, which may well be newer than the range the reviewer brushed.
+    expect(plan).toEqual({ repo, base: HEAD, head: LAST, needsPatch: true, reviewedHead: LAST });
   });
 
   it("sources a working-tree diff at HEAD and freezes it", () => {
     const plan = exportSourceFor({ kind: "uncommitted" }, repo, HEAD);
-    expect(plan).toEqual({ repo, base: HEAD, head: HEAD, needsPatch: true });
+    expect(plan).toEqual({ repo, base: HEAD, head: HEAD, needsPatch: true, reviewedHead: HEAD });
   });
 
   it("falls back to the empty-tree hash for an unborn repo's working tree", () => {
     const plan = exportSourceFor({ kind: "uncommitted" }, repo, null);
-    expect(plan).toEqual({ repo, base: EMPTY_TREE, head: EMPTY_TREE, needsPatch: true });
+    expect(plan).toEqual({
+      repo,
+      base: EMPTY_TREE,
+      head: EMPTY_TREE,
+      needsPatch: true,
+      reviewedHead: EMPTY_TREE,
+    });
   });
 });
 

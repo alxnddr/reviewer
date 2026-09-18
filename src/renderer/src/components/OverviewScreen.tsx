@@ -3,6 +3,8 @@ import { ArrowRight } from "lucide-react";
 import type { Comment, ReviewLayer } from "../../../shared/review";
 import { countLabel } from "../../../shared/plural";
 import { buildOverview, chapterIndex } from "@/lib/overview";
+import { reviewDrift } from "@/lib/review-drift";
+import { shortSha } from "@/lib/refs";
 import { NO_READ_FILES } from "@/lib/read-progress";
 import { useScrollIntoViewById } from "@/lib/use-scroll-into-view";
 import { Button } from "@/components/ui/button";
@@ -65,6 +67,14 @@ export function OverviewScreen(): ReactElement | null {
   const frozen = useReviewStore(
     (state) => selectActiveSlice(state)?.reviewDiff?.kind === "frozenPatch",
   );
+  // The three inputs of the drift line, each read on its own so the doc re-renders for a
+  // moved branch and for nothing else. `reviewedHead` lives on the origin because that is
+  // what the session keeps of the artifact once the bytes are gone (`shared/review.ts`).
+  const reviewDiff = useReviewStore((state) => selectActiveSlice(state)?.reviewDiff ?? null);
+  const log = useReviewStore((state) => selectActiveSlice(state)?.log ?? null);
+  const reviewedHead = useReviewStore(
+    (state) => selectActiveSlice(state)?.reviewOrigin?.reviewedHead ?? null,
+  );
   const lastChapterId = useReviewStore((state) => selectActiveSlice(state)?.lastChapterId ?? null);
   const readFiles = useReviewStore((state) => selectActiveSlice(state)?.readFiles ?? NO_READ_FILES);
   const setActiveLayer = useReviewStore((state) => state.setActiveLayer);
@@ -98,6 +108,7 @@ export function OverviewScreen(): ReactElement | null {
     return null;
   }
   const loaded = files !== null;
+  const drift = reviewDrift({ reviewedHead, reviewDiff, log });
   const firstLayerId = layers[0]?.id ?? null;
   const resumeLayerId = model.resumeLayerId;
   // The chapters again, one line each, or none at all — the rule for which is in
@@ -165,6 +176,38 @@ export function OverviewScreen(): ReactElement | null {
             <div className="mt-2">
               <StatRow>{stats}</StatRow>
             </div>
+          )}
+
+          {/* The branch has moved since this was written. A line of its own rather than two
+              more items in the row above — that row was cut to three on purpose, and this is
+              a sentence about *when* the review is from, not a measurement of the change.
+              It appears only when the two shas actually differ, so a review read the hour it
+              was written says nothing at all. */}
+          {drift !== null && (
+            <p className="mt-2 flex flex-wrap items-center gap-x-1.5 text-sm text-text-muted">
+              Written at
+              <code className="font-mono text-xs text-foreground">
+                {shortSha(drift.reviewedHead)}
+              </code>
+              <span aria-hidden="true" className="text-text-faint">
+                ·
+              </span>
+              the branch is now at
+              <code className="font-mono text-xs text-foreground">
+                {shortSha(drift.currentHead)}
+              </code>
+              {/* Absent rather than zero when the reviewed commit is not in this walk at all
+                  — a rebase or a force-push — because "0 commits since" would be a claim the
+                  log cannot make. */}
+              {drift.since !== null && (
+                <>
+                  <span aria-hidden="true" className="text-text-faint">
+                    ·
+                  </span>
+                  {`${countLabel(drift.since, "commit")} since`}
+                </>
+              )}
+            </p>
           )}
 
           <Markdown

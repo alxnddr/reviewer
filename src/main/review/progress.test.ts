@@ -32,6 +32,7 @@ function progress(overrides: Partial<ReadProgress> = {}): ReadProgress {
   return {
     readFiles: { "src/a.ts": "modified::aaa..bbb", "src/b.ts": "added::..ccc" },
     collapsedFiles: ["src/a.ts"],
+    foldsSeeded: true,
     readTotal: 7,
     resolvedComments: { "9d534093": "addressed" },
     ...overrides,
@@ -54,10 +55,12 @@ describe("createProgressStore", () => {
     expect(await store.read(REVIEW)).toEqual(progress());
   });
 
-  it("reads a record written before comment marks existed as nothing resolved", async () => {
-    // The version envelope's whole job, exercised at the one field that has crossed it: a
-    // v1 record from the build before `resolvedComments` still parses (the key defaults),
-    // and the reader loses nothing they had.
+  it("reads a record written before comment marks and fold seeding existed", async () => {
+    // The version envelope's whole job, exercised at the two fields that have crossed it: a
+    // v1 record from the build before `resolvedComments` and `foldsSeeded` still parses (both
+    // keys default), and the reader loses nothing they had. `foldsSeeded` defaults to false
+    // on purpose — an old record has genuinely never been seeded, so the review it belongs to
+    // folds its lockfiles once, the next time it loads a diff.
     const dir = makeDir();
     writeRaw(
       dir,
@@ -75,6 +78,7 @@ describe("createProgressStore", () => {
     expect(await store.read(REVIEW)).toEqual({
       readFiles: { "src/a.ts": "modified::aaa..bbb" },
       collapsedFiles: [],
+      foldsSeeded: false,
       readTotal: 4,
       resolvedComments: {},
     });

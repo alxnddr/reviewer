@@ -188,7 +188,7 @@ export const emitCommand = buildCommand<EmitFlags, [], LocalContext>({
       writeCannotRun(this, flags.json, resolved.error);
       return;
     }
-    const { repoPath, base, head } = resolved.range;
+    const { repoPath, base, head, headSha } = resolved.range;
 
     const capture = capturePatch(this.env, repoPath, base, head);
     if (!capture.ok) {
@@ -202,6 +202,7 @@ export const emitCommand = buildCommand<EmitFlags, [], LocalContext>({
       repo: repoPath,
       base,
       head,
+      reviewedHead: headSha,
       patch: capture.patch,
       embedPatch: flags.embedPatch === true,
       comments: draft.content.comments,

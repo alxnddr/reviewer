@@ -22,6 +22,12 @@ import type { CliError } from "./errors";
 // Resolution goes through `git rev-parse --verify <ref>^{commit}`, so any revision git
 // understands is accepted; the deny-list below is what runs *before* that spawn, the same
 // validate-then-spawn posture `cli/git.ts` takes.
+//
+// Both decisions used to end at the ref, and the sha the second one had in hand was thrown
+// away. It is kept now, as `ResolvedRange.headSha`, because the artifact wants to say which
+// commit the review was written against (`reviewedHead`) and the branch name it stores
+// deliberately cannot: a review authored at A and opened at D looks identical to one authored
+// at D. Nothing about the range changed — the ref written is the ref that was always written.
 
 /** The range flags every live-range verb shares, all optional — each absent one is resolved
  * from the repo the caller is standing in. */
@@ -34,11 +40,19 @@ export type RangeFlags = {
 /** A range resolved to the exact three values an artifact carries: the canonical work-tree
  * toplevel and two artifact-ready refs (a branch name or a full sha, never a rev expression
  * and never `HEAD`). What `emit` writes and `diff` captures — one shape, so the two verbs
- * cannot disagree about what `--base main` meant. */
+ * cannot disagree about what `--base main` meant.
+ *
+ * `headSha` is the fourth value, and it is not a ref: it is the commit `head` named at the
+ * moment it was resolved, which the artifact records as `reviewedHead`. It is carried
+ * *beside* `head` rather than replacing it because the two answer different questions — what
+ * the review follows, and what it was written against — and a branch head is precisely the
+ * case where they are not the same string. Always set: every path below resolves a commit
+ * before it decides what to write, and the one that cannot resolve one fails instead. */
 export type ResolvedRange = {
   readonly repoPath: string;
   readonly base: string;
   readonly head: string;
+  readonly headSha: string;
 };
 
 export type RangeResult =
@@ -101,11 +115,15 @@ export function resolveRange(env: NodeJS.ProcessEnv, flags: RangeFlags, cwd: str
     return base;
   }
 
-  return { ok: true, range: { repoPath, base: base.ref, head: head.ref } };
+  return { ok: true, range: { repoPath, base: base.ref, head: head.ref, headSha: head.sha } };
 }
 
 type RefResult =
-  | { readonly ok: true; readonly ref: string }
+  /** `ref` is what the artifact stores; `sha` is what it resolved to. They differ only for a
+   * local branch — the one input this module deliberately writes back as written — and
+   * carrying both is what lets `emit` record the branch *and* the commit without asking git a
+   * second time for something it has already answered. */
+  | { readonly ok: true; readonly ref: string; readonly sha: string }
   | { readonly ok: false; readonly error: CliError };
 
 /** One given ref turned into the form the artifact stores. Validated, then resolved, then
@@ -138,11 +156,11 @@ function resolveRef(env: NodeJS.ProcessEnv, repo: string, flag: string, input: s
   }
 
   if (MOVING_REFS.has(input)) {
-    return { ok: true, ref: sha };
+    return { ok: true, ref: sha, sha };
   }
 
   const branch = localBranchName(env, repo, input);
-  return { ok: true, ref: branch ?? sha };
+  return { ok: true, ref: branch ?? sha, sha };
 }
 
 /** The local branch `input` names, or null when it names anything else. `--symbolic-full-name`
@@ -170,15 +188,12 @@ function localBranchName(env: NodeJS.ProcessEnv, repo: string, input: string): s
  * back to the resolved sha on a detached HEAD. An unborn branch has no commit to review, and
  * that surfaces as the `rev-parse` failure it is. */
 function defaultHead(env: NodeJS.ProcessEnv, repo: string): RefResult {
-  const symbolic = git(env, repo, ["symbolic-ref", "--short", "--quiet", "HEAD"]);
-  if (symbolic.ok) {
-    const name = symbolic.stdout.trim();
-    if (BranchName.safeParse(name).success) {
-      return { ok: true, ref: name };
-    }
-  }
-  const detached = git(env, repo, ["rev-parse", "--verify", "HEAD^{commit}"]);
-  if (!detached.ok) {
+  // The sha first, whichever form the ref takes. It is the failure that matters — an unborn
+  // branch has no commit to review, and asking for the name first would have answered one
+  // before discovering there is nothing behind it — and it is also the commit the artifact
+  // records as `reviewedHead`, which a branch head has to carry too.
+  const resolved = git(env, repo, ["rev-parse", "--verify", "HEAD^{commit}"]);
+  if (!resolved.ok) {
     return {
       ok: false,
       error: {
@@ -187,7 +202,15 @@ function defaultHead(env: NodeJS.ProcessEnv, repo: string): RefResult {
       },
     };
   }
-  return { ok: true, ref: detached.stdout.trim() };
+  const sha = resolved.stdout.trim();
+  const symbolic = git(env, repo, ["symbolic-ref", "--short", "--quiet", "HEAD"]);
+  if (symbolic.ok) {
+    const name = symbolic.stdout.trim();
+    if (BranchName.safeParse(name).success) {
+      return { ok: true, ref: name, sha };
+    }
+  }
+  return { ok: true, ref: sha, sha };
 }
 
 /** The base nobody named: the fork point of `head`, which is the commit a reader would call
@@ -205,7 +228,7 @@ function defaultBase(env: NodeJS.ProcessEnv, repo: string, head: string): RefRes
     }
     const sha = forkPoint.stdout.trim();
     if (CommitSha.safeParse(sha).success) {
-      return { ok: true, ref: sha };
+      return { ok: true, ref: sha, sha };
     }
   }
   return {

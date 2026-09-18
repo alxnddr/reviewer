@@ -110,6 +110,7 @@ const SessionWithViewStateSalvage = z.object({
   // cost them the review.
   readFiles: ReadProgress.shape.readFiles.catch({}),
   collapsedFiles: ReadProgress.shape.collapsedFiles.catch([]),
+  foldsSeeded: ReadProgress.shape.foldsSeeded.catch(false),
   readTotal: ReadProgress.shape.readTotal.catch(0),
   resolvedComments: ReadProgress.shape.resolvedComments.catch({}),
 });

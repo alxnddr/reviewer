@@ -23,6 +23,12 @@ export type EmitInput = {
   repo: string;
   base: string;
   head: string;
+  /** The commit `head` resolved to, written through to the artifact's `reviewedHead`.
+   * Provenance and nothing else: the gate below never reads it, so an artifact with it and
+   * one without it pass or fail identically. Optional here because it is the shell that
+   * resolves refs — a caller assembling an artifact from something other than a live range
+   * has no sha to offer, and an absent one is an absent key. */
+  reviewedHead?: string;
   patch: string;
   /** Carry the captured diff *in* the artifact, making it readable on a machine that does not
    * have the repo — the CI case, where the review is produced on a runner whose checkout path
@@ -63,6 +69,9 @@ export function emitReviewArtifact(input: EmitInput): EmitResult {
     repo: input.repo,
     base: input.base,
     head: input.head,
+    // Undefined drops the key (`JSON.stringify`), which is the absent-optional shape the
+    // schema wants — the same rule `overview` below relies on.
+    reviewedHead: input.reviewedHead,
     // Absent unless asked for, and absent rather than null when the capture came back empty:
     // the schema's `patch` is a non-empty string, and an empty one is not a diff the app
     // could freeze anyway — it would fall through to the refs form on open (`pinReview`),

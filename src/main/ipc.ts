@@ -73,6 +73,7 @@ export function registerIpcHandlers(
       void progressStore.write(session.reviewPath, {
         readFiles: session.readFiles,
         collapsedFiles: session.collapsedFiles,
+        foldsSeeded: session.foldsSeeded,
         readTotal: session.readTotal,
         resolvedComments: session.resolvedComments,
       });
