@@ -159,6 +159,40 @@ export type ReviewComment = z.infer<typeof ReviewComment>;
 export const Comment = ReviewComment.extend({ id: z.uuid() });
 export type Comment = z.infer<typeof Comment>;
 
+/** The longest a range `note` may be. A note is one row's worth of explanation, sitting in
+ * the space a file row has left after its path and its counts — long enough for a clause a
+ * reader takes in without stopping, short enough that it cannot become the paragraph the
+ * layer's `description` already is. */
+const MAX_NOTE_LENGTH = 120;
+
+/** A layer's range: an anchor plus the one line saying what *this* slice of the layer
+ * contributes to it. The overview lists a chapter's files with a tick and a `+`/`−` count;
+ * before this, the only place to explain a particular file was the layer's prose, which does
+ * not line up with the rows the reader is looking at while they choose where to start.
+ *
+ * Layer ranges only, and deliberately not `ReviewAnchor` itself: a comment already has
+ * `body`, and the validator's problem anchors and coverage's uncovered spans are the same
+ * four fields (`AnchorSpan`) and must stay incapable of carrying prose. So the note is
+ * `.extend()`ed on here, where a range is a *place in a chapter*, rather than on the anchor
+ * every tool in the codebase reports positions with.
+ *
+ * **First note wins.** A layer may anchor several ranges in one file; the row that file gets
+ * shows the first note in authored order and never joins them — a sentence stitched out of
+ * two notes is a sentence nobody wrote, and showing the longest is a rule no author could
+ * predict. The `.meta` says so, because an author whose second note is silently unread has
+ * to be able to find out why from the schema `rvw schema` publishes. */
+export const ReviewLayerRange = ReviewAnchor.extend({
+  note: z
+    .string()
+    .min(1)
+    .max(MAX_NOTE_LENGTH)
+    .optional()
+    .meta({
+      description: `One line, at most ${MAX_NOTE_LENGTH} characters, saying what this range contributes to its layer — shown beside the file's row in the overview. Not what changed in it (the diff shows that) and not a second summary (the layer's own is the chapter's point): "why this file is in this chapter". Optional, and worth writing exactly where the row would otherwise leave the reader guessing. When a layer anchors several ranges in one file, only the first note is shown, so put it on the range you want read.`,
+    }),
+});
+export type ReviewLayerRange = z.infer<typeof ReviewLayerRange>;
+
 /** A layer as written in the artifact: **nested**, and identity-free. A layer that
  * contains others carries them in `children`, so the outline is a real tree on the wire
  * rather than a flat array an author has to encode one into — no id to invent, no `parent`
@@ -202,7 +236,13 @@ export const ReviewLayerInput = z
     label: z.string().min(1),
     summary: z.string().min(1).optional(),
     description: z.string().min(1).optional(),
-    ranges: z.array(ReviewAnchor).default([]),
+    /** `ReviewLayerRange`, not a bare anchor: a range here is a place *in a chapter* and may
+     * carry the one-line `note` that explains it on the overview's file row. Adding it there
+     * rather than widening `ReviewAnchor` is what keeps every locator in the codebase four
+     * fields. An unknown key inside a range is dropped rather than refused — the range schema
+     * is a plain object, unlike this one — so a note reaching an older build costs the note
+     * and nothing else. */
+    ranges: z.array(ReviewLayerRange).default([]),
     /** `true` or absent, never `false`: the flag is a mark an author puts on one layer, and
      * a `skim: false` on the other twelve would be twelve authored keys saying nothing. The
      * literal is what makes the absent form the only other form. */
@@ -239,7 +279,7 @@ export const ReviewLayer = z.object({
   label: z.string().min(1),
   summary: z.string().min(1).optional(),
   description: z.string().min(1).optional(),
-  ranges: z.array(ReviewAnchor),
+  ranges: z.array(ReviewLayerRange),
   parent: z.string().min(1).optional(),
   /** Carried through from the authored layer verbatim — the app reads it, it never
    * derives it. Absent, never `false`, on the same rule the wire shape keeps. */
@@ -267,6 +307,23 @@ export function walkLayerInputs(layers: readonly ReviewLayerInput[]): LayerInput
   return entries;
 }
 
+/** The author's answer to "should this land", on the one axis a reader triaging a queue of
+ * reviews acts on. Three values, because every scale in the field collapses onto them without
+ * losing a distinction anyone acts on — Greptile's 0–5 rubric, CodeRabbit's four-way merge
+ * risk, Qodo's `safe_to_merge | merge_with_caution | changes_required` all read as these.
+ *
+ * A word and not a number, deliberately. Every other figure on the overview is *measured* by
+ * the app from the diff, and a `4/5` beside them would be the one authored digit on a screen
+ * of counted ones — read as a score the app computed, which it cannot and will not. Nothing
+ * checks a verdict either: it is the reviewer's judgement, so the gate has no opinion about
+ * it (`rvw check`'s 0/1/2 contract says nothing about whether the change is good) and no
+ * comment severity rolls up into it. The app gives the claim a place to sit and stops there.
+ *
+ * On `ReviewOverview`, which is a plain `z.object` — so unlike `skim` and `reviewedHead`, an
+ * artifact carrying a verdict still opens in an older build, with the key dropped. */
+export const ReviewVerdict = z.enum(["ready", "caution", "blocked"]);
+export type ReviewVerdict = z.infer<typeof ReviewVerdict>;
+
 /** The review's front matter — the tour doc the app opens on, before any diff.
  * `title` names the change the way its author would say it out loud; `body` is the
  * long-form "what this does, why it is shaped this way", written in the *same*
@@ -276,10 +333,19 @@ export function walkLayerInputs(layers: readonly ReviewLayerInput[]): LayerInput
  * gate, and the renderer are shared rather than forked. The walkthrough itself is never authored here: the app derives the chapter
  * list, its files, and its counts from `layers` and the loaded diff, so the doc can
  * never drift from the layers it introduces. Optional — an artifact without one opens
- * straight onto the diff. */
+ * straight onto the diff.
+ *
+ * `verdict` is the one key here the app did not already have a place for, and the only
+ * authored *judgement* anywhere in the artifact: everything else on this doc is either prose
+ * or a number the app measured. It is optional and shorthand — the sentence in `body` is
+ * still where the reasoning lives. */
 export const ReviewOverview = z.object({
   title: z.string().min(1),
   body: z.string().min(1),
+  verdict: ReviewVerdict.optional().meta({
+    description:
+      "Your claim about whether this should land: `ready` (land it as it stands), `caution` (landable, but read the comments first — a tradeoff, a risk, a follow-up you are naming), `blocked` (something here has to change before it lands). Shown as a chip on the doc and on the picker row, so a reader with four reviews waiting can tell them apart without opening them. It never replaces the verdict sentence in `body`: the chip is the index, the sentence is the content, and a chip with no sentence under it is a rating.",
+  }),
 });
 export type ReviewOverview = z.infer<typeof ReviewOverview>;
 

@@ -94,11 +94,24 @@ describe("summarizeArtifact", () => {
       // The parent and its child: a reader comparing rows means sections, not top-level ones.
       layers: 2,
       portable: false,
+      // The fixture overview states none, and a row says so rather than guessing at one.
+      verdict: null,
     });
   });
 
   it("has no title for an artifact that carries no tour doc, rather than inventing one", () => {
     expect(summarizeArtifact(artifact({ overview: undefined }))?.title).toBeNull();
+  });
+
+  it("carries the author's verdict onto the row, and null when the doc states none", () => {
+    // The one judgement on a picker row: a reader choosing between waiting reviews reads it
+    // before opening any of them, so it has to survive the peek and not just the open.
+    const decided = artifact({
+      overview: { title: "The change", body: "why", verdict: "blocked" },
+    });
+    expect(summarizeArtifact(decided)?.verdict).toBe("blocked");
+    expect(summarizeArtifact(artifact())?.verdict).toBeNull();
+    expect(summarizeArtifact(artifact({ overview: undefined }))?.verdict).toBeNull();
   });
 
   it("calls an artifact portable exactly when it carries a diff of its own", () => {

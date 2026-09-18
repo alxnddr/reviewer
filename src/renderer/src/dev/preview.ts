@@ -1,6 +1,6 @@
 import type { BranchList, LogEntry } from "../../../shared/git";
 import type { RecentReview } from "../../../shared/review-ipc";
-import type { Comment, ReviewLayer, ReviewOverview } from "../../../shared/review";
+import type { Comment, ReviewLayer, ReviewOverview, ReviewVerdict } from "../../../shared/review";
 import {
   buildHugeAdditionPatch,
   buildManyFilesPatch,
@@ -285,6 +285,9 @@ function fixtureOverview(): ReviewOverview {
       "> The fixture prose deliberately walks every block the grammar renders, so the doc is its own preview.",
       "```ts\nexport function shout(name: string): string {\n  return `${greet(name).toUpperCase()}!`;\n}\n```",
     ].join("\n\n"),
+    // The author's one judgement, so the doc's title line and every recents row drawn from
+    // this fixture carry the chip the two surfaces have to agree about.
+    verdict: "caution",
   };
 }
 
@@ -365,19 +368,27 @@ function fixtureRecents(): RecentReview[] {
     title: string | null,
     comments: number,
     progress: RecentReview["progress"],
+    verdict: ReviewVerdict | null,
   ][] = [
-    [1, "reviewer", "Name tabs after the review, not the repository", 4, { read: 3, total: 11 }],
-    [5, "reviewer", "Drop the env-var fallback from settings", 2, null],
-    [9, "api-server", "Split the ingest worker in two", 7, { read: 14, total: 16 }],
-    [26, "api-server", null, 1, null],
-    [50, "dotfiles", "Move the shell config under XDG", 0, { read: 4, total: 4 }],
-    [96, "reviewer", "Anchor comments against the real diff", 11, null],
-    [200, "web-app", "Rewrite the onboarding flow", 3, { read: 1, total: 23 }],
-    [400, "notes", "Retire the legacy exporter", 5, null],
-    [1400, "playground", "First pass at the parser", 2, null],
+    [
+      1,
+      "reviewer",
+      "Name tabs after the review, not the repository",
+      4,
+      { read: 3, total: 11 },
+      "caution",
+    ],
+    [5, "reviewer", "Drop the env-var fallback from settings", 2, null, "ready"],
+    [9, "api-server", "Split the ingest worker in two", 7, { read: 14, total: 16 }, "blocked"],
+    [26, "api-server", null, 1, null, null],
+    [50, "dotfiles", "Move the shell config under XDG", 0, { read: 4, total: 4 }, "ready"],
+    [96, "reviewer", "Anchor comments against the real diff", 11, null, null],
+    [200, "web-app", "Rewrite the onboarding flow", 3, { read: 1, total: 23 }, "caution"],
+    [400, "notes", "Retire the legacy exporter", 5, null, null],
+    [1400, "playground", "First pass at the parser", 2, null, null],
   ];
   const reviews: RecentReview[] = rows.map(
-    ([hoursAgo, repo, title, comments, progress], index) => ({
+    ([hoursAgo, repo, title, comments, progress, verdict], index) => ({
       path: `/Users/demo/.rvw/reviews/${repo}-main-feature-${index}.reviewer.json`,
       modified: new Date(Date.now() - hoursAgo * HOUR_MS).toISOString(),
       summary: {
@@ -389,6 +400,9 @@ function fixtureRecents(): RecentReview[] {
         comments,
         layers: (index % 4) + 1,
         portable: index === 2,
+        // Most rows carry one and some do not, which is the mix the list has to read well
+        // in: a chip column that is only sometimes filled is the thing to look at.
+        verdict,
       },
       progress,
     }),
@@ -421,6 +435,7 @@ function seedRecents(reviews: RecentReview[], extra = 0): void {
         comments: index % 5,
         layers: 1,
         portable: false,
+        verdict: null,
       },
       progress: null,
     })),
@@ -706,6 +721,12 @@ export function applyPreviewState(): void {
       const range = (file: string) =>
         ({ file, side: "additions", startLine: 1, endLine: 4 }) as const;
       const source = { path: "/preview/fixture", name: "fixture" };
+      // A note per range, which is where the two halves of this scene meet: the skim chapter
+      // is a list of paths nobody will open, so the line beside each one is the whole of what
+      // the reader gets from it. The engine chapter carries them too, to show the same slot
+      // at a section's full width — and `src/util.ts` deliberately carries none, since a row
+      // without one is what the empty slot has to look like beside a row with one.
+      const noted = (file: string, note: string) => ({ ...range(file), note });
       const skimLayers: ReviewLayer[] = [
         {
           id: "engine",
@@ -713,7 +734,7 @@ export function applyPreviewState(): void {
           summary: "Retries now back off per host rather than per request",
           description:
             "The engine holds one budget per host and the util reads it. Everything below this chapter follows from that one decision.",
-          ranges: [range("src/engine.ts"), range("src/util.ts")],
+          ranges: [noted("src/engine.ts", "holds the per-host budget"), range("src/util.ts")],
         },
         {
           id: "mechanical",
@@ -721,10 +742,16 @@ export function applyPreviewState(): void {
           summary: "The regenerated client, its schema, the lockfile and the bundle",
           skim: true,
           ranges: [
-            range("bun.lock"),
-            range("generated/api-client.ts"),
-            range("generated/schema.ts"),
-            range("dist/bundle.min.js"),
+            noted("bun.lock", "axios 1.6 → 1.7, one transitive bump"),
+            noted("generated/api-client.ts", "regenerated from the schema below — no hand edits"),
+            // Exactly the schema's 120-character cap, so the scene shows the longest note
+            // there can be: it truncates against the row's measure rather than wrapping it,
+            // and the hover carries the rest.
+            noted(
+              "generated/schema.ts",
+              "the retry fields the engine reads, and nothing else moved in it — regenerated whenever the upstream API contract changes",
+            ),
+            noted("dist/bundle.min.js", "checked-in build output, regenerated"),
           ],
         },
       ];
@@ -749,6 +776,7 @@ export function applyPreviewState(): void {
         overview: {
           title: "Back off per host",
           body: "The retry budget moves from the request to the host. One chapter of argument, and one of output the generator produced from it.",
+          verdict: "ready",
         },
         overviewOpen: true,
       });

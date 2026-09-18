@@ -104,6 +104,36 @@ type FileRowProps = {
   onOpen: () => void;
 };
 
+/** What the author said this file contributes to the chapter, on the row itself. The prose
+ * that used to have to carry this lived in the layer's `description`, several lines above a
+ * list of paths — so a reader matching "the client is regenerated, the lockfile follows" to
+ * six rows did that matching themselves. Here it sits in the row it is about.
+ *
+ * Laid out as the row's *remaining* measure — `flex-1` over a zero basis — which is what
+ * makes a long note unable to squeeze the path: the note never contributes to the row's
+ * natural width, it only takes what is left after the path and the counts have theirs, and
+ * truncates inside it. The full text is on hover, the same recipe the path uses.
+ *
+ * The empty case is a span, not nothing: that slot is what holds the counts at the right
+ * edge, so a chapter where one file has a note and five do not keeps one column of counts
+ * rather than five rows of ragged ones. */
+function FileNote({ note }: { note: string | null }): ReactElement {
+  if (note === null) {
+    return <span className="min-w-0 flex-1" />;
+  }
+  return (
+    <TooltipHint content={note} whenTruncated side="top" align="start">
+      <span className="flex min-w-0 flex-1 items-center gap-1.5 text-xs text-text-faint">
+        {/* The boundary between the path and the note, said with the app's own separator
+            rather than with ink alone — on a skim row the two are set in the same faint
+            grey, and without it a note reads as a continuation of the filename. */}
+        <span aria-hidden="true">·</span>
+        <span className="min-w-0 truncate">{note}</span>
+      </span>
+    </TooltipHint>
+  );
+}
+
 /** One file the layer covers: its path and the layer's own footprint in it. A file the
  * loaded diff no longer carries stays listed — the layer still claims it — but says so
  * and does not pretend to navigate anywhere useful. */
@@ -134,13 +164,14 @@ function FileRow({ entry, onOpen }: FileRowProps): ReactElement {
       <TooltipHint content={entry.path} whenTruncated side="top" align="start">
         <span
           className={cn(
-            "min-w-0 flex-1 truncate text-sm",
+            "min-w-0 shrink truncate text-sm",
             missing ? "text-text-faint line-through" : "text-text-muted",
           )}
         >
           {entry.path}
         </span>
       </TooltipHint>
+      <FileNote note={entry.note} />
       {missing ? (
         <span className="shrink-0 text-xs text-text-faint">not in this diff</span>
       ) : (
@@ -175,10 +206,14 @@ function SkimFileRow({ entry, onOpen }: FileRowProps): ReactElement {
         {entry.read && <ReadRing tally={READ_ONE} />}
       </span>
       <TooltipHint content={entry.path} whenTruncated side="top" align="start">
-        <span className={cn("min-w-0 flex-1 truncate text-text-faint", missing && "line-through")}>
+        <span className={cn("min-w-0 shrink truncate text-text-faint", missing && "line-through")}>
           {entry.path}
         </span>
       </TooltipHint>
+      {/* The note earns its place most on this row: a skim chapter's whole argument for
+          existing is that its files need a glance and not a read, and one line saying which
+          dependency moved is exactly the glance. */}
+      <FileNote note={entry.note} />
       {missing ? (
         <span className="shrink-0 text-text-faint">not in this diff</span>
       ) : (

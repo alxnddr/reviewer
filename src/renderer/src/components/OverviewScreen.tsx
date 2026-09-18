@@ -13,6 +13,7 @@ import { ReadRing } from "@/components/ReadRing";
 import { OverviewLayerSection, layerSectionDomId } from "@/components/OverviewLayerSection";
 import { OverviewChapterIndex } from "@/components/OverviewChapterIndex";
 import { Markdown } from "@/components/Markdown";
+import { VerdictChip } from "@/components/VerdictChip";
 import { cn } from "@/lib/utils";
 import { selectActiveSlice, useReviewStore } from "@/stores/review";
 
@@ -171,7 +172,14 @@ export function OverviewScreen(): ReactElement | null {
             has to be able to scroll clear of the pill, or the last thing a reader reaches is
             permanently half-covered by the control that took them there. */}
         <div className="mx-auto max-w-3xl px-6 pt-10 pb-28 select-text">
-          <h1 className="text-lg leading-7 font-medium text-foreground">{overview.title}</h1>
+          {/* The title, and the author's verdict on the same line — the one thing on this
+              page the app did not measure, so it sits with the one other thing the author
+              wrote at the top rather than among the counted facts below. Baseline-aligned and
+              wrapping as a unit, the same way a chapter heading carries its chips. */}
+          <h1 className="flex flex-wrap items-baseline gap-x-2 gap-y-1 text-lg leading-7 font-medium text-foreground">
+            {overview.title}
+            {overview.verdict !== undefined && <VerdictChip verdict={overview.verdict} />}
+          </h1>
           {stats.length > 0 && (
             <div className="mt-2">
               <StatRow>{stats}</StatRow>

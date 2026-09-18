@@ -1,5 +1,6 @@
 import * as z from "zod";
 import { GitFailure, ReviewRef } from "./git";
+import { ReviewVerdict } from "./review";
 import { ReviewProgressSummary } from "./review-progress";
 import { SessionId } from "./session";
 
@@ -168,6 +169,12 @@ export const RecentReviewSummary = z.object({
   comments: z.number().int().nonnegative(),
   layers: z.number().int().nonnegative(),
   portable: z.boolean(),
+  /** The author's verdict, or null on a review that states none. The one *judgement* on a
+   * row — everything else here is a count or a name — and the reason it travels at all: a
+   * reader with four reviews waiting is choosing which to open, and "is this one a pass"
+   * is the question they are choosing on. Read off the same `overview` the title comes
+   * from, so a row costs no extra parse. */
+  verdict: ReviewVerdict.nullable(),
 });
 export type RecentReviewSummary = z.infer<typeof RecentReviewSummary>;
 

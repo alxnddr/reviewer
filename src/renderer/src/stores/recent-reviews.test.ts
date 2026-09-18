@@ -22,6 +22,7 @@ function row(title: string, path = `/reviews/${title}.reviewer.json`): RecentRev
       comments: 1,
       layers: 1,
       portable: false,
+      verdict: null,
     },
     progress: null,
   };

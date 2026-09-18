@@ -59,6 +59,9 @@ export function summarizeArtifact(bytes: string): RecentReviewSummary | null {
     base: artifact.base,
     head: artifact.head,
     title: artifact.overview?.title ?? null,
+    // The same read as the title, one key over: the row shows the author's claim about the
+    // change beside the name of it, and neither is derived from anything.
+    verdict: artifact.overview?.verdict ?? null,
     comments: artifact.comments.length,
     layers: countLayers(artifact.layers),
     portable: artifact.patch !== undefined && artifact.patch.length > 0,

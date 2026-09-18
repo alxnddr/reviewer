@@ -27,6 +27,7 @@ function review(overrides: Partial<RecentReview> = {}): RecentReview {
       comments: 3,
       layers: 2,
       portable: false,
+      verdict: null,
     },
     progress: null,
     ...overrides,

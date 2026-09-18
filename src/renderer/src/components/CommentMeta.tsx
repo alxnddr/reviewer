@@ -1,6 +1,7 @@
 import { type ReactElement } from "react";
 import { type Comment, type CommentSeverity, reservedTag } from "../../../shared/review";
 import { cn } from "@/lib/utils";
+import { PILL } from "@/components/ui/pill";
 
 // The authored vocabulary a comment can carry, drawn once for every surface that shows a
 // comment: the card in the diff and the row in the rail. One module rather than a pill per
@@ -23,11 +24,6 @@ import { cn } from "@/lib/utils";
 // weight: `pre-existing`, `decision` and `question` say where a comment came from rather
 // than how much it matters, so they are drawn *quieter* than a label the author invented.
 // That is the entire extent of the app's opinion, and it lives in one `reservedTag` call.
-
-/** The shared pill shape. Small caps-height chrome that sits on one line beside 13–14px
- * text without changing the line box — `leading-none` plus symmetric padding, so a row
- * that gains a pill does not get taller. */
-const PILL = "inline-flex shrink-0 items-center rounded px-1 py-0.5 text-xs leading-none";
 
 /** Severity → its tone. A `switch` with no `default`, so a fourth level added to the enum
  * is a compile error here rather than an unstyled pill nobody notices (the closed-union

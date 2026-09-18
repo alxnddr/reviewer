@@ -458,6 +458,14 @@ export function reviewToMarkdown(review: MarkdownReview): string {
       : [`# ${headingText(overview.title)}`, "", `Review — ${codeSpan(review.repo.name)}`, ""];
   lines.push(`${codeSpan(review.base)} … ${codeSpan(review.head)}`);
   if (overview !== null) {
+    // The verdict above the prose, on a line of its own, exactly where the app puts the chip.
+    // A record of a review that drops the reviewer's conclusion is a record of half of it —
+    // the same reason `labelsOf` carries severity and tag onto every bullet. The word is the
+    // author's and goes out unquoted: it is a value from a closed enum in this codebase, not
+    // free text a `#` could restructure the document from.
+    if (overview.verdict !== undefined) {
+      lines.push("", `Verdict — ${overview.verdict}`);
+    }
     lines.push("", overview.body.trim());
   }
 

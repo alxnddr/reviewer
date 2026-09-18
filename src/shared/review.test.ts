@@ -10,6 +10,8 @@ import {
   ReviewAnchor,
   ReviewArtifact,
   ReviewComment,
+  ReviewLayerRange,
+  ReviewOverview,
   type ReviewStamp,
 } from "./review";
 
@@ -553,5 +555,96 @@ describe("the comment vocabulary", () => {
     expect(reservedTag("perf")).toBeNull();
     expect(reservedTag("pre existing")).toBeNull();
     expect(reservedTag(undefined)).toBeNull();
+  });
+});
+
+describe("a layer range's note", () => {
+  const anchor = { file: "src/a.ts", side: "additions", startLine: 10, endLine: 20 } as const;
+
+  it("parses on a layer range and rides through the artifact untouched", () => {
+    const artifact = ReviewArtifact.parse(
+      validArtifact({
+        layers: [{ label: "Wire the library", ranges: [{ ...anchor, note: "the contract" }] }],
+      }),
+    );
+    expect(artifact.layers[0]?.ranges[0]?.note).toBe("the contract");
+  });
+
+  it("is dropped from a comment rather than admitted — a comment already has a body", () => {
+    // The field is `.extend()`ed onto the layer range alone, so a note written on a comment
+    // is an unknown key on a plain object: dropped, exactly like any other typo there. The
+    // point is that no second place to write prose about a finding comes into existence.
+    const parsed = ReviewComment.parse({ ...anchor, body: "why", note: "not a place for this" });
+    expect("note" in parsed).toBe(false);
+  });
+
+  it("leaves ReviewAnchor itself at four fields — the type every locator is reported as", () => {
+    // `AnchorSpan` is what the validator's problems and coverage's uncovered spans are, and
+    // neither has any business carrying a sentence. Pinned separately from the comment
+    // vocabulary's copy of this assertion because a note is the field most likely to be
+    // "simplified" up onto the anchor by someone who has just read the layer schema.
+    expect(Object.keys(ReviewAnchor.parse(anchor))).toEqual([
+      "file",
+      "side",
+      "startLine",
+      "endLine",
+    ]);
+  });
+
+  it("refuses an over-long note at the note, so `rvw emit` can name the field to fix", () => {
+    const parsed = ReviewLayerRange.safeParse({ ...anchor, note: "x".repeat(121) });
+    expect(parsed.success).toBe(false);
+    expect(parsed.success ? [] : parsed.error.issues.map((issue) => issue.path)).toEqual([
+      ["note"],
+    ]);
+  });
+
+  it("refuses an empty note — an absent key is how you say you have none", () => {
+    expect(ReviewLayerRange.safeParse({ ...anchor, note: "" }).success).toBe(false);
+    expect(ReviewLayerRange.parse(anchor).note).toBeUndefined();
+  });
+});
+
+describe("the overview verdict", () => {
+  const overview = { title: "Back off per host", body: "why it is shaped this way" };
+
+  it("parses the three words and refuses a fourth", () => {
+    for (const verdict of ["ready", "caution", "blocked"]) {
+      expect(ReviewOverview.parse({ ...overview, verdict }).verdict).toBe(verdict);
+    }
+    // Not a score, and not somebody else's vocabulary: an artifact that writes one is told
+    // so at emit rather than opening with the claim silently gone.
+    expect(ReviewOverview.safeParse({ ...overview, verdict: "approved" }).success).toBe(false);
+    expect(ReviewOverview.safeParse({ ...overview, verdict: 4 }).success).toBe(false);
+  });
+
+  it("is optional, and absent stays absent", () => {
+    const parsed = ReviewOverview.parse(overview);
+    expect(parsed.verdict).toBeUndefined();
+    expect("verdict" in parsed).toBe(false);
+  });
+
+  it("reaches the imported review verbatim — the app derives nothing about it", () => {
+    const result = importReview(
+      JSON.stringify(validArtifact({ overview: { ...overview, verdict: "caution" } })),
+      fixedStamp(),
+    );
+    expect(result.ok).toBe(true);
+    if (!result.ok) {
+      return;
+    }
+    // The doc rides through import untouched, like `patch` and the refs beside it: the one
+    // authored judgement in the artifact is never recomputed, re-derived or defaulted.
+    expect(result.review.overview?.verdict).toBe("caution");
+  });
+
+  it("drops an unknown key rather than refusing the doc — how an older build reads one", () => {
+    // `ReviewOverview` is a plain `z.object`, unlike `ReviewArtifact` and `ReviewLayerInput`,
+    // and that is the whole compatibility story for this field: a build that predates the
+    // verdict opens a review carrying one and simply does not show it, where the same
+    // artifact carrying `skim` or `reviewedHead` would be refused outright. Asserted with a
+    // key no schema will ever know, so the claim stays true once `verdict` is old news.
+    const parsed = ReviewOverview.parse({ ...overview, fromTheFuture: "a later field" });
+    expect("fromTheFuture" in parsed).toBe(false);
   });
 });

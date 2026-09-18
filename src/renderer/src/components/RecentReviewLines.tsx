@@ -2,6 +2,7 @@ import type { ReactElement } from "react";
 import { FileWarning, Layers, MessageSquare, PackageCheck } from "lucide-react";
 import type { RecentReview } from "../../../shared/review-ipc";
 import { ReadRing } from "@/components/ReadRing";
+import { VerdictChip } from "@/components/VerdictChip";
 import { recentRange, recentTitle, showsRange } from "@/lib/recent-reviews";
 import { absoluteTime, shortAge } from "@/lib/relative-time";
 import { cn } from "@/lib/utils";
@@ -59,6 +60,12 @@ export function RecentReviewLines({
           </span>
         ) : (
           <>
+            {/* The author's verdict leads the metadata line, ahead of the repo. Not line
+                one: the title is what the list is scanned by and a chip there would move
+                its truncation point on every row that carries one. Here it is the first
+                thing on a line the eye already sweeps left to right, and it is the fact a
+                reader choosing between four waiting reviews is choosing on. */}
+            {summary.verdict !== null && <VerdictChip verdict={summary.verdict} />}
             <span className="shrink-0 font-medium text-text-muted">{summary.repoName}</span>
             {/* Absent when the line above already *is* the range — an untitled review would
                 otherwise print its endpoints twice, once as its name and once as its

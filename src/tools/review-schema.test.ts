@@ -87,6 +87,38 @@ describe("reviewArtifactJsonSchema", () => {
     expect(schema.description).toContain("`rvw check`");
   });
 
+  it("publishes the two optional fields an author writes by hand: a range note and a verdict", () => {
+    // `rvw schema` is what the authoring skill names as the authority on field rules, so a
+    // field the app reads and the published document does not describe is a field agents
+    // will not write. Both are checked through the compiled validator rather than by looking
+    // for a key, since an agent's own validator is what would reject them.
+    const annotated = {
+      ...VALID,
+      overview: { title: "Back off per host", body: "why", verdict: "caution" },
+      layers: [
+        {
+          label: "One",
+          ranges: [
+            { file: "a.ts", side: "additions", startLine: 2, endLine: 4, note: "read first" },
+          ],
+        },
+      ],
+    };
+    expect(compiled()(annotated)).toBe(true);
+    expect(ReviewArtifact.safeParse(annotated).success).toBe(true);
+
+    // A verdict outside the closed three is refused by both, so an agent authoring against
+    // the document alone learns the vocabulary is not open before it emits.
+    expect(compiled()({ ...VALID, overview: { title: "t", body: "b", verdict: "approved" } })).toBe(
+      false,
+    );
+
+    // ...and each carries the prose that says *when* to write one, not just its type.
+    const document = JSON.stringify(reviewArtifactJsonSchema());
+    expect(document).toContain("only the first note is shown");
+    expect(document).toContain("the chip is the index, the sentence is the content");
+  });
+
   it("is derived from the contract, not hand-written: every artifact key appears in the schema", () => {
     const properties = reviewArtifactJsonSchema().properties ?? {};
     expect(Object.keys(properties).toSorted()).toEqual([

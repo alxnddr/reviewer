@@ -286,6 +286,36 @@ describe("serializeReview", () => {
     expect(serializeReview(importFixture(serialized, "ii"))).toEqual(serialized);
   });
 
+  it("round-trips a range note and a verdict — the two fields an older build drops", () => {
+    // The loose-object half of the same hazard the test above pins: both ride on plain
+    // `z.object`s, so nothing refuses them, and a projection that stopped copying one would
+    // lose it in silence rather than loudly. `nestLayers` copies `ranges` wholesale today,
+    // which is what makes the note survive — asserted rather than assumed, because "wholesale"
+    // is a property of one line that a later edit could take away.
+    const annotated: ReviewArtifactDraft = {
+      ...FIXTURE,
+      overview: { title: "Back off per host", body: "Why this exists.", verdict: "caution" },
+      layers: [
+        {
+          label: "The contract",
+          ranges: [
+            { file: "src/a.ts", side: "additions", startLine: 10, endLine: 20, note: "read first" },
+          ],
+        },
+      ],
+    };
+
+    const imported = importFixture(annotated, "kk");
+    expect(imported.overview?.verdict).toBe("caution");
+    expect(imported.layers[0]?.ranges[0]?.note).toBe("read first");
+
+    const serialized = serializeReview(imported);
+    expect(serialized.overview).toEqual(annotated.overview);
+    expect(serialized.layers?.[0]?.ranges?.[0]).toMatchObject({ note: "read first" });
+    // ...and it still re-imports and re-emits to the same bytes.
+    expect(serializeReview(importFixture(serialized, "ll"))).toEqual(serialized);
+  });
+
   it("omits the reviewed head entirely for an artifact written before it existed", () => {
     const review = importFixture(FIXTURE, "jj");
     expect(review.reviewedHead).toBeNull();
@@ -447,6 +477,34 @@ describe("reviewToMarkdown", () => {
       ## Validation
 
       guards the input
+      "
+    `);
+  });
+
+  it("states the verdict above the prose, where the app draws its chip", () => {
+    // The portable record has to carry the author's conclusion, not only their argument —
+    // the same rule that puts severity and tag on every comment bullet. A review that states
+    // none renders exactly the document it did before this existed, which the snapshot above
+    // is the standing proof of.
+    const markdown = reviewToMarkdown({
+      repo: REPO,
+      base: "main",
+      head: HEAD,
+      overview: { title: "Back off per host", body: "Why this exists.", verdict: "blocked" },
+      layers: [],
+      comments: [],
+    });
+
+    expect(markdown).toMatchInlineSnapshot(`
+      "# Back off per host
+
+      Review — \`app\`
+
+      \`main\` … \`aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\`
+
+      Verdict — blocked
+
+      Why this exists.
       "
     `);
   });

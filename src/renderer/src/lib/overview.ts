@@ -15,11 +15,11 @@ import {
 } from "./read-progress";
 
 // The tour doc's model: the artifact's authored prose (the overview body, each layer's
-// `summary` and `description`) is the only part a human writes — every *number* the doc
-// shows is derived here, from the same `layers` the rail steps and the same loaded diff
-// the code view renders. That is the contract: nothing countable is ever read out of the
-// artifact, so a review can't claim three comments while the app holds five, and a
-// hand-authored table of contents can't drift the moment a layer moves. Pure and
+// `summary` and `description`, a range's `note`) is the only part a human writes — every
+// *number* the doc shows is derived here, from the same `layers` the rail steps and the
+// same loaded diff the code view renders. That is the contract: nothing countable is ever
+// read out of the artifact, so a review can't claim three comments while the app holds
+// five, and a hand-authored table of contents can't drift the moment a layer moves. Pure and
 // render-free — the screen maps this to elements and owns nothing but styling and
 // navigation.
 
@@ -40,6 +40,12 @@ export type OverviewFileEntry = {
    * no longer carries: a mark is made against content, and there is none here to have
    * read. */
   read: boolean;
+  /** The line the author wrote about this file's part in the chapter, or null. The *first*
+   * note among the chapter's ranges in this file, in authored order — the rule the schema
+   * states and the reason it is decided here rather than at the row: a chapter's ranges are
+   * already flattened over its whole extent in authored order by the time they reach this
+   * function, so "first" means the same thing as it does in the file the author wrote. */
+  note: string | null;
 };
 
 /** A chapter of the doc: one layer, projected against the loaded diff. Every figure is the
@@ -245,10 +251,9 @@ export function buildOverview({
     const entries: OverviewFileEntry[] = [];
     for (const path of paths) {
       const changed = changedByPath.get(path);
+      const forFile = rangesByPath.get(path) ?? [];
       const counts =
-        changed === undefined
-          ? { additions: 0, deletions: 0 }
-          : coveredIn(changed, rangesByPath.get(path) ?? []);
+        changed === undefined ? { additions: 0, deletions: 0 } : coveredIn(changed, forFile);
       additions += counts.additions;
       deletions += counts.deletions;
       entries.push({
@@ -257,6 +262,10 @@ export function buildOverview({
         additions: counts.additions,
         deletions: counts.deletions,
         read: read.has(path),
+        // First note wins (shared/review.ts). The bucket is in authored order because
+        // `ranges` above is, so this is the first note the author wrote for this file in
+        // this chapter — not the first range, which may carry none while a later one does.
+        note: forFile.find((range) => range.note !== undefined)?.note ?? null,
       });
     }
     // Comments held anywhere in the extent, in comment order so "the first one" is a

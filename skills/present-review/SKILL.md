@@ -25,7 +25,10 @@ supplies `repo`, `base` and `head`, so never hand-write them.
 
 ```json
 {
-  "overview": { "title": "Replace the polling loop with a socket subscription", "body": "..." },
+  "overview": {
+    "title": "Replace the polling loop with a socket subscription",
+    "body": "...", "verdict": "caution"
+  },
   "comments": [
     { "file": "src/client.ts", "side": "additions", "startLine": 42, "endLine": 47, "body": "Why." },
     {
@@ -40,7 +43,12 @@ supplies `repo`, `base` and `head`, so never hand-write them.
       "label": "Subscription contract",
       "summary": "Events carry a sequence number so a reconnect can resume",
       "description": "Read this first; every later slice assumes it.",
-      "ranges": [{ "file": "src/protocol.ts", "side": "additions", "startLine": 1, "endLine": 30 }]
+      "ranges": [
+        {
+          "file": "src/protocol.ts", "side": "additions", "startLine": 1, "endLine": 30,
+          "note": "the sequence number every later slice reads"
+        }
+      ]
     }
   ]
 }
@@ -71,6 +79,8 @@ refuses the draft; a `https://` link is left alone and opens in the browser.
 - Name the tests that pin the behavior and say whether you ran them. Link the ones the change touched, as file references — a path that is not in the diff fails the gate, so a linked name is checked rather than claimed; name an unchanged test in plain backticks.
 - If this should have been two changes, say so and say where the seam is. The diff cannot show that; only you can.
 - End the body with the verdict in one sentence: whether this should land as is, and if not, the one thing that stops it. Not a score, not a percentage, not an estimate — a verdict is a judgement you own, and the rule below against counting is about numbers, which the app measures for itself.
+- Set `verdict` to `ready`, `caution` or `blocked` when you can say which — shorthand for the sentence you just wrote, shown as a chip on the doc and on the reader's list of waiting reviews so they can tell a pass from a blocker without opening it. Map your own scale onto the three: land it as it stands → `ready`; landable once the reader has read the comments → `caution`; something here has to change first → `blocked`.
+- Never let the chip replace the sentence. Nothing computes a verdict, nothing checks it, and no comment severity rolls up into it — it is your claim, and a claim with no reason under it is a rating. Leave it out rather than guess.
 - Write actively and concretely: "the parser now rejects trailing commas", not "trailing commas are no longer accepted".
 - Use the domain's words. Prefer the real noun over "the abstraction layer" or "the refactored logic".
 - Do not list the layers or preview the walkthrough. The app derives that.
@@ -109,7 +119,7 @@ thought (a one-file fix, a config bump). Otherwise layer it.
 
 A layer is `{ label, summary?, description?, ranges?, children?, skim? }` — nesting is structural,
 via `children`. Only `label` is required; omit `ranges` on a grouping layer whose children carry
-them, and omit `children` on a leaf.
+them, and omit `children` on a leaf. A range is `{ file, side, startLine, endLine, note? }`.
 
 - Treat layers as chapters of a reading order you chose, not a listing of what the diff touched.
 - Group by what changed and why — a capability added, a bug fixed, a migration, a constraint now enforced — never by folder, file type, or filename.
@@ -133,6 +143,10 @@ them, and omit `children` on a leaf.
 - When a layer changes behavior in a way the diff does not make obvious, trace one small concrete input through the old path and the new one — a GFM table works well — and name the step where they diverge.
 - Reach for either only when the diff is genuinely hard to read. Most layers need neither.
 - Leave the description off when the summary is genuinely enough. An empty description costs the reader more than none.
+- Put a `note` on a range when the file's part in the chapter is not obvious from its name: one line, at most 120 characters, saying what this file contributes — not what changed in it. It is printed on that file's own row in the overview, beside its `+`/`−` counts, which is where a reader deciding what to open is actually looking.
+- Write notes where the list is long or the paths are opaque, and skip them where the summary already covers every file in the chapter. A note per row on a two-file layer is ceremony.
+- Notes pay off most on the skim layer: `bun.lock` — "axios 1.6 → 1.7, one transitive bump" costs one line and answers the only question anyone has about it.
+- Only the first note on a file is read, per layer. If you anchor several ranges in one file, put the note on the one you want the reader to see and leave the others bare.
 - Never order alphabetically, by path, or one layer per file. That is a directory listing with extra steps.
 
 ## Emitting

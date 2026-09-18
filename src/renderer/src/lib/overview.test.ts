@@ -65,7 +65,14 @@ describe("buildOverview", () => {
     expect(chapter?.additions).toBe(2);
     expect(chapter?.deletions).toBe(1);
     expect(chapter?.files).toEqual([
-      { path: "src/foo.ts", status: "modified", additions: 2, deletions: 1, read: false },
+      {
+        path: "src/foo.ts",
+        status: "modified",
+        additions: 2,
+        deletions: 1,
+        read: false,
+        note: null,
+      },
     ]);
     // The headline still describes the whole diff.
     expect(model.files).toBe(3);
@@ -135,7 +142,14 @@ describe("buildOverview", () => {
     expect(model.chapters[1]?.snippet).toBeNull();
     // The layer still claims the file; it is listed, marked absent from this diff.
     expect(model.chapters[1]?.files).toEqual([
-      { path: "src/vanished.ts", status: null, additions: 0, deletions: 0, read: false },
+      {
+        path: "src/vanished.ts",
+        status: null,
+        additions: 0,
+        deletions: 0,
+        read: false,
+        note: null,
+      },
     ]);
   });
 
@@ -193,10 +207,75 @@ describe("buildOverview", () => {
     });
 
     expect(model.chapters[0]?.files).toEqual([
-      { path: "src/foo.ts", status: "modified", additions: 2, deletions: 0, read: false },
-      { path: "src/bar.ts", status: "modified", additions: 2, deletions: 0, read: false },
+      {
+        path: "src/foo.ts",
+        status: "modified",
+        additions: 2,
+        deletions: 0,
+        read: false,
+        note: null,
+      },
+      {
+        path: "src/bar.ts",
+        status: "modified",
+        additions: 2,
+        deletions: 0,
+        read: false,
+        note: null,
+      },
     ]);
     expect(model.chapters[0]?.additions).toBe(4);
+  });
+
+  it("shows the first note authored for a file, and null for a file with none", () => {
+    // The rule the schema states (`shared/review.ts`): a layer may anchor several ranges in
+    // one file, the row shows the first note in authored order, and nothing joins them. The
+    // second range here carries a note the reader will never see, which is the case worth
+    // pinning — it is the one an author could otherwise only discover by not being read.
+    const annotated = layer("annotated", [
+      { file: "src/foo.ts", side: "additions", startLine: 11, endLine: 12, note: "the contract" },
+      {
+        file: "src/foo.ts",
+        side: "deletions",
+        startLine: 11,
+        endLine: 11,
+        note: "never shown — second note on the same file",
+      },
+      { file: "src/bar.ts", side: "additions", startLine: 2, endLine: 3 },
+    ]);
+    const model = buildOverview({
+      layers: [annotated],
+      files: FILES,
+      comments: [],
+      frozen: false,
+      readFiles: NO_READ_FILES,
+    });
+
+    expect(model.chapters[0]?.files.map((entry) => [entry.path, entry.note])).toEqual([
+      ["src/foo.ts", "the contract"],
+      ["src/bar.ts", null],
+    ]);
+  });
+
+  it("reads the first note over the whole extent, so a group carries its children's", () => {
+    // A note belongs to a range, and a group's extent is its children's ranges — so the
+    // rollup's own file row says what the child's note says rather than going blank at the
+    // level a reader is most likely to be choosing chapters from.
+    const group = layer("group", []);
+    const child = layer(
+      "child",
+      [{ file: "src/bar.ts", side: "additions", startLine: 2, endLine: 3, note: "the caller" }],
+      { parent: "group" },
+    );
+    const model = buildOverview({
+      layers: [group, child],
+      files: FILES,
+      comments: [],
+      frozen: false,
+      readFiles: NO_READ_FILES,
+    });
+
+    expect(model.chapters[0]?.files[0]?.note).toBe("the caller");
   });
 
   it("numbers chapters by section, at any depth", () => {
