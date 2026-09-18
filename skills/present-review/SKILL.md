@@ -58,6 +58,10 @@ refuses the draft; a `https://` link is left alone and opens in the browser.
 - Order the support deliberately — dependency before dependent, cause before effect, or largest consequence first. Never arbitrary.
 - Give the reader what they need before line one: the assumption that changed, the invariant now enforced, the term you use that they may not know.
 - Name the tradeoff you accepted and what you deliberately did not do. A reviewer cannot recover that from the diff.
+- Say what you checked and found sound, in one short list of three to six items, each one thing you actually did. A review with few comments needs this most: it is how the reader tells clean from unread.
+- Name the tests that pin the behavior and say whether you ran them. Link the ones the change touched, as file references — a path that is not in the diff fails the gate, so a linked name is checked rather than claimed; name an unchanged test in plain backticks.
+- If this should have been two changes, say so and say where the seam is. The diff cannot show that; only you can.
+- End the body with the verdict in one sentence: whether this should land as is, and if not, the one thing that stops it. Not a score, not a percentage, not an estimate — a verdict is a judgement you own, and the rule below against counting is about numbers, which the app measures for itself.
 - Write actively and concretely: "the parser now rejects trailing commas", not "trailing commas are no longer accepted".
 - Use the domain's words. Prefer the real noun over "the abstraction layer" or "the refactored logic".
 - Do not list the layers or preview the walkthrough. The app derives that.
@@ -75,6 +79,12 @@ Anchor to the smallest span that carries the point. `side` is `additions` or `de
 says why, not what — the diff already shows what changed. It is markdown, so a `symbol`, a short
 list, or a fenced snippet of the fix all render — but keep it to the point: a comment is read
 beside the code, and a card that turns into a document stops being a comment.
+
+- Open the body with a bold three-to-seven-word claim on its own line — what is wrong, not where — and put the why in the paragraph under it. The rail previews that line as plain words, so spend it on the conclusion, not the approach to it.
+- Say what breaks and on what: the input, state, or sequence that reaches this code, and the wrong result it produces. If you cannot name one, you have a question and not a finding — say which.
+- One comment per issue. Anchor it to the clearest instance and name the other sites as file references (`[the same check in the worker](src/worker.ts)`), which the gate resolves against the diff. Do not repeat the paragraph at each one.
+- Open with **Decision** (or **Question**) when the comment is a call the reader has to make rather than a defect — a threshold, a default, a name, a dropped case. Nothing is broken yet, and the first word should say so.
+- Open with **Pre-existing** when the finding is in code this change did not touch, so the reader does not blame the change. It is still a finding: anchor it to the nearest changed or context line in the same file — a line inside a hunk's context places, which is why `rvw diff --json`'s spans are the floor and not the ceiling of what you can anchor to.
 
 ## Organizing layers
 
@@ -94,7 +104,8 @@ and omit `children` on a leaf.
 - Put the contract first: the type, schema, interface, or config a change rests on, ahead of the code that consumes it.
 - Put the cause before the consequence: the behavior change before the call sites it forced, the fix before the tests that pin it.
 - Keep groups non-overlapping in intent. If two layers would explain the same decision, they are one layer.
-- Make them exhaustive together. After the last chapter, a reader should be able to describe the whole change.
+- Make them exhaustive together: every changed line belongs to exactly one chapter's reasoning — never explained twice under two layers, never left out silently. After the last chapter, a reader should be able to describe the whole change.
+- What you leave unplaced the app shows as "Not covered by layers", so an omission is visible either way. Make it a decision rather than an oversight.
 - Cut any layer that exists only for completeness — mechanical renames, generated output, formatting. Fold it into the layer it serves.
 - Keep the list flat unless a theme genuinely has parts worth reading separately. Most reviews are flat.
 - Nest only when the parent makes a point of its own and each child is a distinct step in that point. Never nest just to shorten a list.
@@ -103,6 +114,9 @@ and omit `children` on a leaf.
 - Use the description for what you would say out loud before the reviewer looks: why this slice exists, what to notice, where it gets subtle.
 - Write the description so it lands for someone who has not opened the diff. No "here you can see", "below", "as shown".
 - Do not restate the summary in the description. Add the reason, the constraint, or the thing that is easy to miss.
+- When a layer's code is hard to scan, put a few lines of pseudocode in its description: strip the syntax, the error handling and the boilerplate, and keep the control flow, so the reader can confirm the intent before reading the real thing.
+- When a layer changes behavior in a way the diff does not make obvious, trace one small concrete input through the old path and the new one — a GFM table works well — and name the step where they diverge.
+- Reach for either only when the diff is genuinely hard to read. Most layers need neither.
 - Leave the description off when the summary is genuinely enough. An empty description costs the reader more than none.
 - Never order alphabetically, by path, or one layer per file. That is a directory listing with extra steps.
 
