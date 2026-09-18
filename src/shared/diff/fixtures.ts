@@ -267,3 +267,160 @@ export function buildHugeAdditionPatch(lineCount: number): string {
     "",
   ].join("\n");
 }
+
+/** A function moved whole from one file to another, and re-indented on the way — the case
+ * move detection exists for. The deleted run is `src/moved-from.ts` old-file lines 3..10
+ * (seven lines of function plus the blank after it); the added run is `src/moved-to.ts`
+ * new-file lines 3..10, the same lines at four-space indentation. Whitespace is the only
+ * difference, which is what makes this fixture prove the normalization rather than assume it. */
+export const MOVED_BLOCK_PATCH = `diff --git a/src/moved-from.ts b/src/moved-from.ts
+index 1111111..2222222 100644
+--- a/src/moved-from.ts
++++ b/src/moved-from.ts
+@@ -1,13 +1,5 @@
+ import { helper } from "./helper";
+ 
+-export function formatTitle(input: string): string {
+-  const trimmed = input.trim();
+-  if (trimmed.length === 0) {
+-    return "untitled";
+-  }
+-  return trimmed.toUpperCase();
+-}
+-
+ export function render(input: string): string {
+   return helper(formatTitle(input));
+ }
+diff --git a/src/moved-to.ts b/src/moved-to.ts
+index 3333333..4444444 100644
+--- a/src/moved-to.ts
++++ b/src/moved-to.ts
+@@ -1,5 +1,13 @@
+ export const VERSION = 1;
+ 
++export function formatTitle(input: string): string {
++    const trimmed = input.trim();
++    if (trimmed.length === 0) {
++      return "untitled";
++    }
++    return trimmed.toUpperCase();
++}
++
+ export function version(): string {
+   return "v" + VERSION;
+ }
+`;
+
+/** Two moves that are not the same thing. `src/reorder.ts` really moves a function past the
+ * one below it — old-file lines 1..4 leave, new-file lines 5..8 arrive, and the two spans do
+ * not overlap. `src/reindented.ts` only re-indents three lines where they stand: a perfect
+ * line-for-line match from `2..4` to `2..4`, which is a true statement and a useless one, and
+ * is what the in-place rule exists to throw away. */
+export const IN_FILE_MOVE_PATCH = `diff --git a/src/reindented.ts b/src/reindented.ts
+index 5555555..6666666 100644
+--- a/src/reindented.ts
++++ b/src/reindented.ts
+@@ -1,6 +1,6 @@
+ export function pad(value: string): string {
+-  if (value.length > 3) {
+-    return value;
+-  }
++    if (value.length > 3) {
++      return value;
++    }
+   return value.padStart(3, "0");
+ }
+diff --git a/src/reorder.ts b/src/reorder.ts
+index 7777777..8888888 100644
+--- a/src/reorder.ts
++++ b/src/reorder.ts
+@@ -1,12 +1,12 @@
+-function alpha(value: number): number {
+-  return value + 1;
+-}
+-
+ function beta(value: number): number {
+   return value * 2;
+ }
+ 
++function alpha(value: number): number {
++  return value + 1;
++}
++
+ export const table = {
+   alpha,
+   beta,
+ };
+`;
+
+/** Two independent rewrites that happen to share their first three lines and their last two —
+ * the coincidence the thresholds have to refuse. Each side is an eleven-line run, so the
+ * three-line preamble is 27% of the shorter block and fails the coverage rule, and the
+ * two-line `return merged; }` tail is below the three-line floor. Nothing here is a move. */
+export const NEAR_MISS_MOVE_PATCH = `diff --git a/src/near-a.ts b/src/near-a.ts
+index 9999999..aaaaaaa 100644
+--- a/src/near-a.ts
++++ b/src/near-a.ts
+@@ -1,12 +1,2 @@
+-export function optionsFor(kind: string): Options {
+-  const base = defaults();
+-  const merged = Object.assign({}, base);
+-  merged.kind = kind;
+-  merged.retries = 3;
+-  merged.timeout = 5000;
+-  merged.verbose = false;
+-  merged.label = kind + "-a";
+-  merged.order = 1;
+-  return merged;
+-}
++export const optionsFor = memoize(buildOptions);
+ 
+diff --git a/src/near-b.ts b/src/near-b.ts
+index bbbbbbb..ccccccc 100644
+--- a/src/near-b.ts
++++ b/src/near-b.ts
+@@ -1,1 +1,13 @@
++export function optionsFor(kind: string): Options {
++  const base = defaults();
++  const merged = Object.assign({}, base);
++  merged.strategy = "eager";
++  merged.window = 12;
++  merged.cache = true;
++  merged.label = kind + "-b";
++  merged.order = 2;
++  merged.tag = "b";
++  merged.extra = null;
++  return merged;
++}
+ 
+`;
+
+/** `fileCount` files that each delete `linesPerFile` lines and add `linesPerFile` lines, where
+ * file N adds exactly what file N-1 deleted — a diff that is nothing *but* moves, which is the
+ * shape that makes move detection work hardest: every seed finds a candidate and every
+ * candidate extends the whole way. The generated text is unique per source file, so the seed
+ * index stays honest rather than collapsing under `MAX_SEED_OCCURRENCES`. Used to measure the
+ * detection cost rather than assume it. */
+export function buildMovedLinesPatch(fileCount: number, linesPerFile: number): string {
+  const body = (fileIndex: number): string[] =>
+    Array.from(
+      { length: linesPerFile },
+      (_unused, line) => `export const moved${fileIndex}_${line} = ${line} * ${fileIndex + 1};`,
+    );
+  return Array.from({ length: fileCount }, (_unused, fileIndex) => {
+    const name = `src/moved-${String(fileIndex).padStart(3, "0")}.ts`;
+    const removed = body(fileIndex).map((line) => `-${line}`);
+    const added = body((fileIndex + fileCount - 1) % fileCount).map((line) => `+${line}`);
+    return [
+      `diff --git a/${name} b/${name}`,
+      "index 1111111..2222222 100644",
+      `--- a/${name}`,
+      `+++ b/${name}`,
+      `@@ -1,${linesPerFile + 1} +1,${linesPerFile + 1} @@`,
+      ...removed,
+      ...added,
+      " // tail",
+      "",
+    ].join("\n");
+  }).join("");
+}
