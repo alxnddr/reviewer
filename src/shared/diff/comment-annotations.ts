@@ -5,6 +5,9 @@ import type {
   Hunk,
 } from "@pierre/diffs";
 import type { Comment, ReviewAnchor, ReviewSide } from "../review";
+import { fnv1a } from "../fingerprint";
+import { NO_RESOLUTIONS, resolutionOf, type CommentResolutions } from "../comment-resolution";
+import type { CommentResolution } from "../review-progress";
 import { filesByAnchorPath, type PatchFile } from "./patch";
 import { resolveAnchor } from "./anchor";
 import { hunkSpan } from "./walk";
@@ -36,6 +39,11 @@ export type CommentSlot =
       editing: boolean;
       active: boolean;
       twoColumn: boolean;
+      /** What the reader decided about this finding, or null for one they have not
+       * answered. Resolved here rather than read by the card, because the card is inside a
+       * portal CodeView only re-renders on a `version` change — a mark looked up downstream
+       * would be invisible until something else happened to bump it. */
+      resolution: CommentResolution | null;
     }
   | { kind: "draft"; anchor: ReviewAnchor; twoColumn: boolean };
 
@@ -65,22 +73,10 @@ export type CommentDraft = { fileId: string; anchor: ReviewAnchor };
  * every visible change (open editor, discard, start a draft). */
 export type CommentUiState = { editingId: string | null; draft: CommentDraft | null };
 
-/** 32-bit FNV-1a over a content string. A pure per-item `version`: any change to
- * the rendered annotation set (a placed line, an outdated flag, an edited body,
- * an opened editor, a draft) changes the string and therefore the number, which
- * is the signal CodeView reconciles on. */
-function fnv1a(input: string): number {
-  let hash = 0x811c9dc5;
-  for (let index = 0; index < input.length; index += 1) {
-    // oxlint-disable-next-line unicorn/prefer-code-point -- FNV-1a folds fixed-width units and this loop is indexed by `input.length` (UTF-16 units); `codePointAt` would change every hash
-    hash ^= input.charCodeAt(index);
-    hash = Math.imul(hash, 0x01000193);
-  }
-  // oxlint-disable-next-line unicorn/prefer-math-trunc -- `>>> 0` is the uint32 coercion FNV-1a ends on; `Math.trunc` would leave the sign bit and return a negative
-  return hash >>> 0;
-}
-
-/** Fold everything the item renders into one number. Body is included so an edit
+/** Fold everything the item renders into one number — a pure per-item `version`: any
+ * change to the rendered annotation set (a placed line, an outdated flag, an edited body,
+ * an opened editor, a draft, the reader's mark) changes the string and therefore the number,
+ * which is the signal CodeView reconciles on. Body is included so an edit
  * bumps the version; `editing`/draft are included so opening an editor does too.
  * `twoColumn` is in here because the comment frame sizes itself against the lane it
  * sits beside — it changes what the slot renders without changing a single comment,
@@ -101,7 +97,7 @@ function annotationsVersion(
     const slot = annotation.metadata;
     const wide = slot.twoColumn ? 1 : 0;
     return slot.kind === "comment"
-      ? `c|${annotation.side}|${annotation.lineNumber}|${slot.comment.id}|${slot.outdated ? 1 : 0}|${slot.editing ? 1 : 0}|${slot.active ? 1 : 0}|${wide}|${slot.comment.body}`
+      ? `c|${annotation.side}|${annotation.lineNumber}|${slot.comment.id}|${slot.outdated ? 1 : 0}|${slot.editing ? 1 : 0}|${slot.active ? 1 : 0}|${wide}|${slot.resolution ?? ""}|${slot.comment.body}`
       : `d|${annotation.side}|${annotation.lineNumber}|${slot.anchor.startLine}-${slot.anchor.endLine}|${wide}`;
   });
   return fnv1a(`${collapsed ? "1" : "0"}\n${parts.join("\n")}`);
@@ -153,6 +149,10 @@ export function buildCommentItems(
    * (the reader's disclosures, plus the fold that rides on marking a file read), applied
    * here because the fold is a property of the rendered item. */
   collapsedPaths: ReadonlySet<string> = new Set(),
+  /** The reader's marks, keyed by fingerprint. Resolved into each slot for the reason on
+   * `CommentSlot.resolution`, and folded into the version so marking a comment repaints its
+   * card. Defaults to none, which is what every caller that predates marks wants. */
+  resolutions: CommentResolutions = NO_RESOLUTIONS,
 ): CodeViewDiffItem<CommentSlot>[] {
   const byFile = groupByFile(files, comments);
   return files.map((file) => {
@@ -174,6 +174,7 @@ export function buildCommentItems(
           editing: ui.editingId === comment.id,
           active: activeCommentId === comment.id,
           twoColumn,
+          resolution: resolutionOf(resolutions, comment),
         },
       });
     }

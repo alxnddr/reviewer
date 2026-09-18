@@ -201,6 +201,7 @@ describe("listRecentReviews", () => {
       readFiles: { "src/a.ts": "modified::aaa..bbb", "src/b.ts": "added::..ccc" },
       collapsedFiles: [],
       readTotal: 9,
+      resolvedComments: {},
     });
 
     const result = await listRecentReviews(progress, env, home);
@@ -216,11 +217,17 @@ describe("listRecentReviews", () => {
     write(dir, "kept.reviewer.json", artifact(), 10);
     const progress = progressIn(home);
     const gone = join(dir, "deleted.reviewer.json");
-    await progress.write(gone, { readFiles: { "a.ts": "s" }, collapsedFiles: [], readTotal: 1 });
+    await progress.write(gone, {
+      readFiles: { "a.ts": "s" },
+      collapsedFiles: [],
+      readTotal: 1,
+      resolvedComments: {},
+    });
     await progress.write(join(dir, "kept.reviewer.json"), {
       readFiles: { "a.ts": "s" },
       collapsedFiles: [],
       readTotal: 1,
+      resolvedComments: {},
     });
 
     await listRecentReviews(progress, env, home);
@@ -240,7 +247,12 @@ describe("listRecentReviews", () => {
     }
     const progress = progressIn(home);
     const dropped = join(dir, `r${RECENT_MAX}.reviewer.json`);
-    await progress.write(dropped, { readFiles: { "a.ts": "s" }, collapsedFiles: [], readTotal: 3 });
+    await progress.write(dropped, {
+      readFiles: { "a.ts": "s" },
+      collapsedFiles: [],
+      readTotal: 3,
+      resolvedComments: {},
+    });
 
     const result = await listRecentReviews(progress, env, home);
     expect(result.truncated).toBe(1);

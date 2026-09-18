@@ -33,6 +33,7 @@ function progress(overrides: Partial<ReadProgress> = {}): ReadProgress {
     readFiles: { "src/a.ts": "modified::aaa..bbb", "src/b.ts": "added::..ccc" },
     collapsedFiles: ["src/a.ts"],
     readTotal: 7,
+    resolvedComments: { "9d534093": "addressed" },
     ...overrides,
   };
 }
@@ -51,6 +52,50 @@ describe("createProgressStore", () => {
     const store = createProgressStore(makeDir());
     await store.write(REVIEW, progress());
     expect(await store.read(REVIEW)).toEqual(progress());
+  });
+
+  it("reads a record written before comment marks existed as nothing resolved", async () => {
+    // The version envelope's whole job, exercised at the one field that has crossed it: a
+    // v1 record from the build before `resolvedComments` still parses (the key defaults),
+    // and the reader loses nothing they had.
+    const dir = makeDir();
+    writeRaw(
+      dir,
+      REVIEW,
+      JSON.stringify({
+        version: 1,
+        path: REVIEW,
+        updated: new Date().toISOString(),
+        readFiles: { "src/a.ts": "modified::aaa..bbb" },
+        collapsedFiles: [],
+        readTotal: 4,
+      }),
+    );
+    const store = createProgressStore(dir);
+    expect(await store.read(REVIEW)).toEqual({
+      readFiles: { "src/a.ts": "modified::aaa..bbb" },
+      collapsedFiles: [],
+      readTotal: 4,
+      resolvedComments: {},
+    });
+  });
+
+  it("writes a mark into its own record and never into the artifact it is about", async () => {
+    // The rule this store exists for, at the one field a reader might expect on the wire
+    // instead: `rvw emit` owns every byte of an artifact, so marking a comment must leave
+    // that file bit-identical. Asserted against real bytes rather than argued about.
+    const dir = makeDir();
+    const artifactDir = mkdtempSync(join(tmpdir(), "reviewer-artifact-"));
+    tempDirs.push(artifactDir);
+    const artifact = join(artifactDir, "app.reviewer.json");
+    const authored = `${JSON.stringify({ repo: "/repo", base: "main", head: "feature" })}\n`;
+    writeFileSync(artifact, authored, "utf8");
+
+    const store = createProgressStore(dir);
+    await store.write(artifact, progress({ resolvedComments: { abc12345: "disagree" } }));
+
+    expect(readFileSync(artifact, "utf8")).toBe(authored);
+    expect((await store.read(artifact)).resolvedComments).toEqual({ abc12345: "disagree" });
   });
 
   it("creates its directory on first write rather than requiring one to exist", async () => {

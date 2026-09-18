@@ -684,6 +684,7 @@ describe("one tab per artifact", () => {
       readFiles: { "src/a.ts": "modified::aaa..bbb" },
       collapsedFiles: ["src/a.ts"],
       readTotal: 5,
+      resolvedComments: {},
     };
     const progress: ProgressStore = { ...emptyProgress(), read: () => Promise.resolve(recorded) };
 

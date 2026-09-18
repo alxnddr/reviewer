@@ -140,7 +140,10 @@ export const createExportSlice: StateCreator<ReviewState, [], [], ExportSlice> =
       // place against right now" state rather than a silent claim they place.
       const frozen = origin.patch !== null;
       const files = slice.diff.phase === "loaded" ? slice.diff.files : [];
-      const comments = markdownCommentsFrom(slice.comments, files, frozen);
+      // The reader's marks travel into the document: a record of a review that omits what
+      // was done with it is a record of half of it. They stay out of `serializeReview`
+      // above, which re-emits the *artifact* — progress is never authored.
+      const comments = markdownCommentsFrom(slice.comments, files, frozen, slice.resolvedComments);
       const response = await bridge.saveReviewMarkdown({
         content: reviewToMarkdown({
           repo: origin.repo,

@@ -14,6 +14,7 @@ import {
   NO_READ_FILES,
   withCollapsed,
 } from "../lib/read-progress";
+import { NO_RESOLUTIONS, withResolution } from "../../../shared/comment-resolution";
 import { useOnboardingStore } from "../stores/onboarding";
 import { useRecentReviewsStore } from "../stores/recent-reviews";
 import { createSessionSlice, useReviewStore, type SessionSlice } from "../stores/review";
@@ -552,6 +553,30 @@ export function applyPreviewState(): void {
         diff: { phase: "loaded", loadId: 1, files },
         selectedFilePath: files[0]?.path ?? null,
         comments: fixtureComments(),
+      });
+      break;
+    }
+    case "comments-resolved": {
+      // The same three comments with the reader's marks on two of them: one addressed, one
+      // disagreed with, one still open. What this scene is for is the comparison the design
+      // rests on — the author's coloured pills against the reader's greyscale mark, and the
+      // warning-toned drift row against both — plus the rail's "1 of 3 open" and the two-way
+      // copy menu that only exists once something is marked.
+      const files = parsePatch(MULTI_STATUS_PATCH, "preview:comments-resolved");
+      const comments = fixtureComments();
+      let resolvedComments = NO_RESOLUTIONS;
+      const [first, , drifted] = comments;
+      if (first !== undefined) {
+        resolvedComments = withResolution(resolvedComments, first, "addressed");
+      }
+      if (drifted !== undefined) {
+        resolvedComments = withResolution(resolvedComments, drifted, "disagree");
+      }
+      seedSession({
+        diff: { phase: "loaded", loadId: 1, files },
+        selectedFilePath: files[0]?.path ?? null,
+        comments,
+        resolvedComments,
       });
       break;
     }

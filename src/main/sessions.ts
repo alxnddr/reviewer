@@ -111,6 +111,7 @@ const SessionWithViewStateSalvage = z.object({
   readFiles: ReadProgress.shape.readFiles.catch({}),
   collapsedFiles: ReadProgress.shape.collapsedFiles.catch([]),
   readTotal: ReadProgress.shape.readTotal.catch(0),
+  resolvedComments: ReadProgress.shape.resolvedComments.catch({}),
 });
 
 /** v1 sessions predate `comments`/`layers`; supplying empties lets a clean v1

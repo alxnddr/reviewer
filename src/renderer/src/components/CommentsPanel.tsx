@@ -2,6 +2,8 @@ import { memo, useMemo, type ReactElement } from "react";
 import { History, MapPinOff, MessageSquare } from "lucide-react";
 import type { Comment } from "../../../shared/review";
 import { countLabel } from "../../../shared/plural";
+import { NO_RESOLUTIONS, resolutionOf, tallyResolutions } from "../../../shared/comment-resolution";
+import type { CommentResolution } from "../../../shared/review-progress";
 import type { PatchFile } from "../../../shared/diff/patch";
 import type { FitToContentRefs } from "@/lib/fit-panel";
 import { orderedComments, type CommentNavEntry } from "@/lib/diff/comment-navigation";
@@ -10,6 +12,7 @@ import { FileTypeIcon } from "@/components/FileTypeIcon";
 import { TooltipHint } from "@/components/ui/tooltip";
 import { commentLocation } from "@/lib/comment-location";
 import { commentMetaLabel, SeverityPill } from "@/components/CommentMeta";
+import { CommentMarkGlyph, commentMarkLabel } from "@/components/CommentMark";
 import { useScrollIntoViewById } from "@/lib/use-scroll-into-view";
 import { flattenMarkdown } from "../../../shared/markdown";
 import {
@@ -149,6 +152,9 @@ export function CommentsPanel({
   const activeCommentId = useReviewStore(
     (state) => selectActiveSlice(state)?.activeCommentId ?? null,
   );
+  const resolutions = useReviewStore(
+    (state) => selectActiveSlice(state)?.resolvedComments ?? NO_RESOLUTIONS,
+  );
   const focusComment = useReviewStore((state) => state.focusComment);
   const entries = useMemo(
     () => orderedComments(files, comments, frozen),
@@ -177,7 +183,7 @@ export function CommentsPanel({
   if (comments.length === 0) {
     return null;
   }
-  const count = comments.length;
+  const tally = tallyResolutions(comments, resolutions);
 
   const renderGroups = (groups: { file: string; rows: CommentNavEntry[] }[]): ReactElement[] =>
     groups.map((group) => (
@@ -192,6 +198,7 @@ export function CommentsPanel({
               <CommentRow
                 entry={entry}
                 active={entry.comment.id === activeCommentId}
+                resolution={resolutionOf(resolutions, entry.comment)}
                 onFocus={focusComment}
               />
             </li>
@@ -226,8 +233,16 @@ export function CommentsPanel({
             acts on — how much is left to answer — so it is worth a permanent slot, and
             keeping it permanent is also what stops the heading from renaming itself the
             instant you click to fold it. Open, the rows below happen to add up to it; that
-            is a reason to trust it, not a reason to take it away. */}
-        {countLabel(count, "comment")}
+            is a reason to trust it, not a reason to take it away.
+
+            Once anything is marked it becomes the *ratio*, because the number the reader is
+            now acting on is what is left rather than what there was. Before that it stays
+            the plain count: "7 of 7 open" on a review nobody has touched is a denominator
+            nothing is counting down, and it would put a progress claim on every review
+            whether or not its reader uses the marks at all. */}
+        {tally.open === tally.total
+          ? countLabel(tally.total, "comment")
+          : `${tally.open} of ${tally.total} open`}
       </RailSection>
       {expanded && (
         <div
@@ -304,6 +319,10 @@ function FileHeading({ path }: { path: string }): ReactElement {
 type CommentRowProps = {
   entry: CommentNavEntry;
   active: boolean;
+  /** The reader's mark on this finding, or null. Resolved by the panel rather than the row
+   * so the memo below stays a value compare — a row handed the whole map would re-render on
+   * every mark made anywhere in the review. */
+  resolution: CommentResolution | null;
   /** Takes the id rather than closing over it, so the panel can hand every row the
    * one store action and the memo below holds. */
   onFocus: (commentId: string) => void;
@@ -324,10 +343,12 @@ type CommentRowProps = {
 const CommentRow = memo(function CommentRow({
   entry,
   active,
+  resolution,
   onFocus,
 }: CommentRowProps): ReactElement {
   const { comment, status } = entry;
   const meta = commentMetaLabel(comment);
+  const markLabel = commentMarkLabel(resolution);
   // The placed line — where the comment actually renders on the current diff, which
   // is what a reader jumping there will see in the gutter, not the authored line it
   // may have drifted from. A stranded comment never placed, so it keeps its own.
@@ -342,7 +363,13 @@ const CommentRow = memo(function CommentRow({
       // Indented to line the preview up with the heading's file name (the glyph and its
       // gap), so a file and everything under it share one left edge.
       indent={COMMENT_INDENT_PX}
-      className="group gap-2"
+      // Answered findings recede, the same way their cards do, so what is left to do is what
+      // the column reads as. Deliberately *not* sorted to the bottom, which is what task 009
+      // asked for and what 007's severity sort was already refused for: `orderedComments` is
+      // the one order this list, the floating `i/N` counter and the `n`/`p` walk all share,
+      // and a list that re-sorts on its own makes the third row and "3 of 7" name different
+      // comments. Dimming buys the same triage without moving anything.
+      className={cn("group gap-2", resolution !== null && "opacity-55")}
     >
       {/* The severity, and *only* the severity — the card shows the tag as well. The rail
           is 256px: two pills ahead of a preview leave it four or five words, and looking at
@@ -359,6 +386,11 @@ const CommentRow = memo(function CommentRow({
           what makes this column navigable is that it matches what scrolling past the cards
           shows. A pill the reader can scan buys the same triage without moving anything. */}
       {comment.severity !== undefined && <SeverityPill severity={comment.severity} />}
+      {/* Greyscale, at the head of the row where a severity pill would be — the mark is the
+          reader's answer to the pill and belongs on the same edge. A glyph rather than the
+          word: at 256px the word would cost the preview four more characters, and the hint
+          already carries it. */}
+      {resolution !== null && <CommentMarkGlyph resolution={resolution} />}
       {/* The hint hangs off the preview, not the row: the row is the hit target and a
           hint on it would repeat what the row already shows. This one says what the
           line cannot hold — the body in full, and the anchor it was authored against. */}
@@ -386,6 +418,11 @@ const CommentRow = memo(function CommentRow({
                 — which already carries the body in full — is where the reader checks what a
                 truncated tag actually said. */}
             {meta !== null && <span className="text-background/70">{meta}</span>}
+            {/* The reader's own mark, spelled out where the row has only a glyph for it —
+                and phrased in the first person, because that is what separates it from
+                everything else in this hint: the rest is what the review said, this is what
+                the reader did. */}
+            {markLabel !== null && <span className="text-background/70">{markLabel}</span>}
           </div>
         }
       >

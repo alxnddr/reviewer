@@ -1,6 +1,7 @@
 import type { RepoInfo } from "../../../../shared/git";
 import type { Session, SessionId } from "../../../../shared/session";
 import { NO_COLLAPSED_FILES, NO_READ_FILES } from "../../lib/read-progress";
+import { NO_RESOLUTIONS } from "../../../../shared/comment-resolution";
 import type { SessionSlice } from "./slice";
 
 // The two ways a `SessionSlice` comes into being: from nothing (a repository the reader just
@@ -50,6 +51,7 @@ export function createSessionSlice(
     readFiles: NO_READ_FILES,
     collapsedFiles: NO_COLLAPSED_FILES,
     readTotal: 0,
+    resolvedComments: NO_RESOLUTIONS,
     reviewPath: null,
     needsDerive: true,
     requestTicket: 0,
@@ -117,6 +119,7 @@ export function reseatedSlice(live: SessionSlice, session: Session): SessionSlic
     readFiles: live.readFiles,
     collapsedFiles: live.collapsedFiles,
     readTotal: live.readTotal,
+    resolvedComments: live.resolvedComments,
   };
 }
 
@@ -125,10 +128,11 @@ export function reseatedSlice(live: SessionSlice, session: Session): SessionSlic
  * place that builds a slice so neither can drift from the other. */
 function restoredProgress(
   session: Session,
-): Pick<SessionSlice, "readFiles" | "collapsedFiles" | "readTotal"> {
+): Pick<SessionSlice, "readFiles" | "collapsedFiles" | "readTotal" | "resolvedComments"> {
   return {
     readFiles: new Map(Object.entries(session.readFiles)),
     collapsedFiles: new Set(session.collapsedFiles),
     readTotal: session.readTotal,
+    resolvedComments: new Map(Object.entries(session.resolvedComments)),
   };
 }

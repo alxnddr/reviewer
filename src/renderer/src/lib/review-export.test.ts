@@ -12,6 +12,7 @@ import {
   type ReviewStamp,
 } from "../../../shared/review";
 import type { RepoInfo } from "../../../shared/git";
+import { NO_RESOLUTIONS, withResolution } from "../../../shared/comment-resolution";
 import {
   buildHugeAdditionPatch,
   MULTI_STATUS_PATCH,
@@ -1201,5 +1202,106 @@ describe("the comment vocabulary", () => {
     });
     expect(codeSpansOf(markdown)).toContain("# not a heading");
     expect(headingsOf(markdown).some((heading) => heading.includes("not a heading"))).toBe(false);
+  });
+});
+
+describe("the reader's mark on a comment", () => {
+  // Task 009's round trip, at the two exports: the prompt is a *work order* and carries only
+  // what is still open, while the Markdown document is a *record* and carries everything
+  // including what was done about it. The artifact is not in this list at all — it re-emits
+  // what was authored, and a mark was not.
+  const open = promptComment({ file: "src/a.ts", startLine: 10, endLine: 12, body: "still open" });
+  const done = promptComment({
+    file: "src/b.ts",
+    startLine: 3,
+    endLine: 3,
+    body: "already fixed",
+    resolution: "addressed",
+  });
+
+  it("leaves the marked comments out of the work order", () => {
+    const prompt = commentsToPrompt(promptReview({ comments: [open, done] }));
+    expect(prompt).toContain("still open");
+    expect(prompt).not.toContain("already fixed");
+  });
+
+  it("says in its header how many it left out, so the payload is never a silent subset", () => {
+    expect(commentsToPrompt(promptReview({ comments: [open, done] }))).toContain(
+      "1 comment from a code review of `app` (`main` … `feature`). Address each one. 1 further comment the reader has already marked addressed, skipped or disagreed with is not included.",
+    );
+  });
+
+  it("counts several left-out comments in the plural", () => {
+    const alsoDone = promptComment({
+      file: "src/c.ts",
+      body: "also fixed",
+      resolution: "disagree",
+    });
+    expect(commentsToPrompt(promptReview({ comments: [open, done, alsoDone] }))).toContain(
+      "2 further comments the reader has already marked addressed, skipped or disagreed with are not included.",
+    );
+  });
+
+  it("says nothing at all about marks on a review that has none", () => {
+    expect(commentsToPrompt(promptReview({ comments: [open] }))).not.toContain("further comment");
+  });
+
+  it("carries the marked ones when asked, each block saying whose decision it was", () => {
+    const prompt = commentsToPrompt(
+      promptReview({ comments: [open, done], includeResolved: true }),
+    );
+    expect(prompt).toContain("2 comments from a code review");
+    expect(prompt).not.toContain("further comment");
+    expect(prompt).toContain("### `src/b.ts:3` (the reader already marked this addressed)");
+  });
+
+  it("carries the mark on a single comment copied on purpose from its own card", () => {
+    // The card's own copy is a deliberate act on one finding, so a marked one still copies —
+    // and says it was marked, because an agent handed a settled claim needs to know it is
+    // settled.
+    expect(commentToPrompt(done)).toContain(
+      "### `src/b.ts:3` (the reader already marked this addressed)",
+    );
+  });
+
+  it("prints the mark in the Markdown bullet, worded so it is not read as a label", () => {
+    const markdown = reviewToMarkdown({
+      repo: { path: "/repos/app", name: "app" },
+      base: "main",
+      head: "a".repeat(40),
+      overview: null,
+      layers: [],
+      comments: [
+        {
+          file: "src/a.ts",
+          side: "additions",
+          startLine: 10,
+          endLine: 12,
+          body: "The loop is quadratic.",
+          severity: "blocking",
+          resolution: "skipped",
+          outdated: false,
+        },
+      ],
+    });
+    expect(markdown).toContain(
+      "- `src/a.ts` L10–12 · blocking · marked skipped — The loop is quadratic.",
+    );
+  });
+
+  it("projects the mark onto the comment the exports share, and nothing when unmarked", () => {
+    const one: Comment = {
+      id: ID,
+      file: "src/a.ts",
+      side: "additions",
+      startLine: 1,
+      endLine: 1,
+      body: "why",
+    };
+    const two: Comment = { ...one, id: "00000000-0000-4000-8000-000000000002", body: "other" };
+    const marks = withResolution(NO_RESOLUTIONS, one, "disagree");
+    const projected = markdownCommentsFrom([one, two], [], true, marks);
+    expect(projected[0]?.resolution).toBe("disagree");
+    expect(projected[1]?.resolution).toBeUndefined();
   });
 });

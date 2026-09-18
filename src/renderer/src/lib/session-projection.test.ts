@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { parsePatch } from "../../../shared/diff/patch";
 import { MULTI_STATUS_PATCH } from "../../../shared/diff/fixtures";
 import type { Comment } from "../../../shared/review";
+import { commentFingerprint } from "../../../shared/fingerprint";
 import type { LogEntry, RepoInfo } from "../../../shared/git";
 import {
   headShaOf,
@@ -99,6 +100,7 @@ describe("persistedSession", () => {
       readFiles: new Map([["src/keep.ts", "sig-1"]]),
       collapsedFiles: new Set(["src/keep.ts"]),
       readTotal: 7,
+      resolvedComments: new Map([[commentFingerprint(COMMENT), "addressed" as const]]),
       diff: { phase: "idle" },
       ...overrides,
     };
@@ -121,6 +123,7 @@ describe("persistedSession", () => {
       reviewOrigin: { repo: REPO, base: "main", head: sha("a"), patch: null },
       reviewPath: "/reviews/x.reviewer.json",
       readFiles: { "src/keep.ts": "sig-1" },
+      resolvedComments: { [commentFingerprint(COMMENT)]: "addressed" },
       collapsedFiles: ["src/keep.ts"],
       readTotal: 7,
     });

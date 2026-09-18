@@ -7,6 +7,7 @@ import { emptySoloReason, layerOutline } from "../../../shared/layers";
 import { useFitToContent } from "@/lib/fit-panel";
 import { unplaceableComments } from "../../../shared/diff/comment-annotations";
 import { isFullyRead, NO_COLLAPSED_FILES, NO_READ_FILES, tallyRead } from "@/lib/read-progress";
+import { NO_RESOLUTIONS } from "../../../shared/comment-resolution";
 import { resolveExpandLoader } from "@/lib/diff/expand-context";
 import { DiffView } from "@/components/DiffView";
 import { LayerIntro } from "@/components/LayerIntro";
@@ -160,6 +161,12 @@ export function DiffScreen(): ReactElement | null {
   const collapsedPaths = useReviewStore(
     (state) => selectActiveSlice(state)?.collapsedFiles ?? NO_COLLAPSED_FILES,
   );
+  // The reader's marks on the findings. Read here rather than in the card for the reason on
+  // `DiffViewProps.resolutions`: a card is a CodeView portal and only repaints on a version
+  // bump, so the mark has to travel with the items.
+  const resolutions = useReviewStore(
+    (state) => selectActiveSlice(state)?.resolvedComments ?? NO_RESOLUTIONS,
+  );
   const setLayerRead = useReviewStore((state) => state.setLayerRead);
   const setFileCollapsed = useReviewStore((state) => state.setFileCollapsed);
   const resetReviewSubrange = useReviewStore((state) => state.resetReviewSubrange);
@@ -170,6 +177,7 @@ export function DiffScreen(): ReactElement | null {
   const addComment = useReviewStore((state) => state.addComment);
   const editComment = useReviewStore((state) => state.editComment);
   const discardComment = useReviewStore((state) => state.discardComment);
+  const setCommentResolution = useReviewStore((state) => state.setCommentResolution);
   const stepComment = useReviewStore((state) => state.stepComment);
   const clearActiveComment = useReviewStore((state) => state.clearActiveComment);
   const commentScrolled = useReviewStore((state) => state.commentScrolled);
@@ -191,6 +199,7 @@ export function DiffScreen(): ReactElement | null {
   const onAddComment = useSessionBound(addComment, activeSessionId);
   const onEditComment = useSessionBound(editComment, activeSessionId);
   const onDiscardComment = useSessionBound(discardComment, activeSessionId);
+  const onSetCommentResolution = useSessionBound(setCommentResolution, activeSessionId);
   const onStepComment = useSessionBound(stepComment, activeSessionId);
   const onClearActiveComment = useSessionBound(clearActiveComment, activeSessionId);
   const onCommentScrolled = useSessionBound(commentScrolled, activeSessionId);
@@ -318,12 +327,14 @@ export function DiffScreen(): ReactElement | null {
           activeCommentId={activeCommentId}
           pendingCommentScroll={pendingCommentScroll}
           collapsedPaths={collapsedPaths}
+          resolutions={resolutions}
           onSetFileCollapsed={onSetFileCollapsed}
           loadDiffFiles={loadDiffFiles}
           onScrollTop={onScrollTop}
           onAddComment={onAddComment}
           onEditComment={onEditComment}
           onDiscardComment={onDiscardComment}
+          onSetCommentResolution={onSetCommentResolution}
           onStepComment={onStepComment}
           onClearActiveComment={onClearActiveComment}
           onCommentScrolled={onCommentScrolled}

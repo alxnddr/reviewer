@@ -3,8 +3,9 @@ import * as z from "zod";
 // Where a reader got to, as something that survives the tab being closed.
 //
 // Progress is the one piece of review state nobody authored: the artifact says what the
-// change *is*, and this says how much of it one person has been through. It therefore lives
-// nowhere near the artifact — `rvw emit` owns every byte of `~/.rvw/reviews`, and the app
+// change *is*, and this says how much of it one person has been through — which files they
+// have read, and which findings they have answered. It therefore lives nowhere near the
+// artifact — `rvw emit` owns every byte of `~/.rvw/reviews`, and the app
 // writing reader state into that directory would make two programs owners of one folder. It
 // is app-owned, in userData, alongside the sessions store.
 //
@@ -28,6 +29,21 @@ import * as z from "zod";
 // when its progress changes, and otherwise left alone, so a build that cannot understand an
 // old record simply shows no progress for it and moves on.
 
+/** What a reader decided about one finding, in the three words the fix prompt asks an
+ * agent to report back (`PROMPT_RULES`, `lib/review-export.ts`). That alignment is the
+ * whole design: the reader copies a prompt, the agent answers "addressed" / "skipped — why"
+ * / "disagree — why" per `path:line`, and the reader marks each comment with the word they
+ * were just handed. A fourth state, or a synonym of one of these, would break the round
+ * trip at the only place it is a round trip.
+ *
+ * Reader-owned, never derived. The mechanical equivalent — Greptile marks a comment
+ * `addressed` when a later commit touched the file — is already computed here as an
+ * anchor's `outdated` status, and is shown *beside* a mark as a hint, never as one. Baz
+ * decides its Accepted "not based on UI interaction"; this is the opposite choice, and it
+ * follows from the same rule that keeps this file out of the artifact. */
+export const CommentResolution = z.enum(["addressed", "skipped", "disagree"]);
+export type CommentResolution = z.infer<typeof CommentResolution>;
+
 /** The read marks as they persist: a JSON object rather than the `Map`/`Set` the app works
  * in, because this shape crosses IPC and lands in a JSON file. `lib/read-progress.ts` owns
  * the meaning of the values; this owns only the transport. */
@@ -46,10 +62,28 @@ export const ReadProgress = z.object({
    * row. Stale if the range moved on underneath; opening the review recomputes honestly,
    * which is why nothing but a picker hint is ever rendered from it. */
   readTotal: z.number().int().nonnegative().default(0),
+  /** `commentFingerprint` (shared/fingerprint.ts) → what the reader decided about that
+   * finding. Keyed by the fingerprint rather than by the comment's `id`, because the id is
+   * stamped fresh at every import and would key a mark to one sitting of one tab.
+   *
+   * It rides here with the read marks rather than on the artifact for the reason at the top
+   * of this file, and because the two are the same kind of thing at two scales: a file the
+   * reader has been through, and a finding they have answered. Both scopes then come for
+   * free — `ReviewProgressFile` spreads this shape, so a mark persists into the session and
+   * into the per-review record without a second channel.
+   *
+   * A record from a build that did not know the key reads as `{}` (the default), which is
+   * exactly "nothing resolved". */
+  resolvedComments: z.record(z.string(), CommentResolution).default({}),
 });
 export type ReadProgress = z.infer<typeof ReadProgress>;
 
-export const NO_PROGRESS: ReadProgress = { readFiles: {}, collapsedFiles: [], readTotal: 0 };
+export const NO_PROGRESS: ReadProgress = {
+  readFiles: {},
+  collapsedFiles: [],
+  readTotal: 0,
+  resolvedComments: {},
+};
 
 /** One artifact's progress, as it sits on disk.
  *

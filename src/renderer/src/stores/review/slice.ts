@@ -9,6 +9,7 @@ import type {
 import type { SessionId } from "../../../../shared/session";
 import { NO_FILES, soloedDiff, type SoloedDiff } from "../../lib/soloed-diff";
 import type { ReadFiles } from "../../lib/read-progress";
+import type { CommentResolutions } from "../../../../shared/comment-resolution";
 import type { BrushRange } from "../../lib/selection";
 import type { BranchesState, DiffState, LogState } from "../../lib/load-state";
 import type { ReviewState } from "./state";
@@ -128,6 +129,15 @@ export type SessionSlice = {
    * would reopen every file the reader had already put away, which is why it travels with
    * them rather than starting empty. */
   collapsedFiles: ReadonlySet<string>;
+  /** What the reader decided about each finding: `commentFingerprint` → one of the three
+   * words the fix prompt asks an agent to report back (`shared/comment-resolution.ts`).
+   *
+   * Persisted beside `readFiles`, through the same write-back and into the same two scopes,
+   * because it is the same kind of state: what one person has done with this review, never
+   * what the review claims about itself. Keyed by fingerprint rather than by `comment.id`
+   * precisely so it survives the re-import that mints new ids — which is the only reason it
+   * is worth persisting at all. */
+  resolvedComments: CommentResolutions;
   /** The `.reviewer.json` this session was opened from, or null for a plain repo session.
    * Identity only — never rendered, never exported. It is what makes "this review is already
    * open" and "this review's progress lives here" one question with one answer. */

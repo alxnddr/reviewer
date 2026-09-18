@@ -14,6 +14,8 @@ import { useGutterUtility } from "@/components/diff/DiffGutterAdd";
 import { useDiffSearch } from "@/lib/diff/use-diff-search";
 import { indexOfComment, navigableEntries, orderedComments } from "@/lib/diff/comment-navigation";
 import { buildCommentItems, type CommentSlot } from "../../../shared/diff/comment-annotations";
+import type { CommentResolutions } from "../../../shared/comment-resolution";
+import type { CommentResolution } from "../../../shared/review-progress";
 import type { PatchFile } from "../../../shared/diff/patch";
 import { useDiffOptions } from "@/lib/diff/use-diff-options";
 import { useDiffScroll } from "@/lib/diff/use-diff-scroll";
@@ -45,6 +47,11 @@ type DiffViewProps = {
    * opening a finding from the tour doc, the commit that mounts this view, scrolls at
    * all. `useDiffScroll` consumes it through `onCommentScrolled`. */
   pendingCommentScroll: string | null;
+  /** What the reader decided about each finding, keyed by fingerprint. Handed down rather
+   * than read by the card, because a comment card lives in a CodeView portal that only
+   * re-renders when its item's `version` changes — so the mark has to reach the items
+   * (`buildCommentItems`) to be visible at all. */
+  resolutions: CommentResolutions;
   /** Files rendered as a header band with the body folded away — the reader's own
    * disclosures, plus the fold that rides on marking a file read. */
   collapsedPaths: ReadonlySet<string>;
@@ -61,6 +68,8 @@ type DiffViewProps = {
   onAddComment: (anchor: ReviewAnchor, body: string) => void;
   onEditComment: (commentId: string, body: string) => void;
   onDiscardComment: (commentId: string) => void;
+  /** Record or clear one finding's mark, routed to the owning session's slice. */
+  onSetCommentResolution: (commentId: string, resolution: CommentResolution | null) => void;
   /** Comment step-through, routed to the owning session's slice — drives the
    * floating navigator's prev/next and close. */
   onStepComment: (direction: 1 | -1) => void;
@@ -94,12 +103,14 @@ export function DiffView({
   activeCommentId,
   pendingCommentScroll,
   collapsedPaths,
+  resolutions,
   onSetFileCollapsed,
   loadDiffFiles,
   onScrollTop,
   onAddComment,
   onEditComment,
   onDiscardComment,
+  onSetCommentResolution,
   onStepComment,
   onClearActiveComment,
   onCommentScrolled,
@@ -109,6 +120,7 @@ export function DiffView({
     onAddComment,
     onEditComment,
     onDiscardComment,
+    onSetCommentResolution,
   });
 
   // Find-in-diff. The surface is virtualized, so off-screen lines never enter the
@@ -130,8 +142,19 @@ export function DiffView({
         activeCommentId,
         diffStyle,
         collapsedPaths,
+        resolutions,
       ),
-    [files, comments, editingId, draft, frozen, activeCommentId, diffStyle, collapsedPaths],
+    [
+      files,
+      comments,
+      editingId,
+      draft,
+      frozen,
+      activeCommentId,
+      diffStyle,
+      collapsedPaths,
+      resolutions,
+    ],
   );
 
   // Every comment resolved against the loaded diff, in reading order — one sort, read

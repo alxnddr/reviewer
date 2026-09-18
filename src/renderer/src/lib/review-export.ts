@@ -11,6 +11,12 @@ import {
   type ReviewSide,
 } from "../../../shared/review";
 import { assertNever } from "../../../shared/assert";
+import type { CommentResolution } from "../../../shared/review-progress";
+import {
+  NO_RESOLUTIONS,
+  resolutionOf,
+  type CommentResolutions,
+} from "../../../shared/comment-resolution";
 import { countLabel } from "../../../shared/plural";
 import type { CommitSha, DiffSelection, RepoInfo, ReviewRef } from "../../../shared/git";
 import { resolveAnchor } from "../../../shared/diff/anchor";
@@ -175,6 +181,13 @@ export type MarkdownComment = {
   severity?: CommentSeverity;
   evidence?: string;
   outdated: boolean;
+  /** What the reader decided about this finding, absent for one they have not answered.
+   * The only field here that is *not* the review's: everything else describes what was
+   * written, and this describes what one person did about it. It is in the projection
+   * because both exports have to say it — the Markdown one because a record of a review
+   * that omits what was done with it is a record of half of it, and the prompt one because
+   * it is what decides whether a comment is in the work order at all. */
+  resolution?: CommentResolution;
 };
 
 export type MarkdownReview = {
@@ -206,10 +219,12 @@ function resolveComments(
   comments: readonly Comment[],
   files: readonly PatchFile[],
   frozen: boolean,
+  resolutions: CommentResolutions,
 ): ResolvedComment[] {
   const byPath = filesByAnchorPath(files);
   return comments.map((comment) => {
     const file = byPath.get(comment.file) ?? null;
+    const mark = resolutionOf(resolutions, comment);
     const resolution = resolveAnchor(
       comment,
       frozen ? { kind: "frozen" } : { kind: "derived", file: file?.fileDiff ?? null },
@@ -224,6 +239,7 @@ function resolveComments(
         ...(comment.tag === undefined ? {} : { tag: comment.tag }),
         ...(comment.severity === undefined ? {} : { severity: comment.severity }),
         ...(comment.evidence === undefined ? {} : { evidence: comment.evidence }),
+        ...(mark === null ? {} : { resolution: mark }),
         outdated: resolution.status === "outdated",
       },
       file,
@@ -236,8 +252,11 @@ export function markdownCommentsFrom(
   comments: readonly Comment[],
   files: readonly PatchFile[],
   frozen: boolean,
+  /** The reader's marks. Defaults to none, so a caller that has no progress in hand exports
+   * the review exactly as it did before marks existed. */
+  resolutions: CommentResolutions = NO_RESOLUTIONS,
 ): MarkdownComment[] {
-  return resolveComments(comments, files, frozen).map((resolved) => resolved.comment);
+  return resolveComments(comments, files, frozen, resolutions).map((resolved) => resolved.comment);
 }
 
 /** A comment belongs to the layer that owns it — the deepest one whose own ranges cover
@@ -356,6 +375,15 @@ function labelsOf(comment: MarkdownComment): string {
   return labels.length === 0 ? "" : ` · ${labels.join(" · ")}`;
 }
 
+/** The reader's mark as a header segment, kept apart from `labelsOf` beside it because the
+ * two are different claims: those are what the review said about a finding, this is what one
+ * person did about it. "marked" is the word that says so — a bare `addressed` in the same
+ * dot-separated run would read as another label the author wrote. Empty for an unanswered
+ * comment, so a review nobody has marked exports exactly the bullets it did before. */
+function markOf(comment: MarkdownComment): string {
+  return comment.resolution === undefined ? "" : ` · marked ${comment.resolution}`;
+}
+
 /** One comment as a list item: a machine-token header (`path` + location as code
  * spans, then the authored labels) then the body inline, its continuation lines indented
  * so a multi-line body stays inside the item.
@@ -368,7 +396,7 @@ function labelsOf(comment: MarkdownComment): string {
  * whitespace to make a re-export differ from a hand-written file. */
 function commentBullet(comment: MarkdownComment): string {
   const [first, ...rest] = comment.body.split("\n");
-  const head = `- ${codeSpan(comment.file)} ${locationOf(comment)}${labelsOf(comment)} — ${first ?? ""}`;
+  const head = `- ${codeSpan(comment.file)} ${locationOf(comment)}${labelsOf(comment)}${markOf(comment)} — ${first ?? ""}`;
   const lines = [head, ...rest.map((line) => `  ${line}`)];
   const evidence = comment.evidence;
   if (evidence !== undefined) {
@@ -460,8 +488,9 @@ export function promptCommentsFrom(
   comments: readonly Comment[],
   files: readonly PatchFile[],
   frozen: boolean,
+  resolutions: CommentResolutions = NO_RESOLUTIONS,
 ): PromptComment[] {
-  return resolveComments(comments, files, frozen).map(({ comment, file }) => ({
+  return resolveComments(comments, files, frozen, resolutions).map(({ comment, file }) => ({
     ...comment,
     snippet:
       comment.outdated || file === null
@@ -516,6 +545,14 @@ function promptLabels(comment: PromptComment): string[] {
 
 function promptQualifiers(comment: PromptComment): string[] {
   const clauses: string[] = [];
+  if (comment.resolution !== undefined) {
+    // Reachable two ways: the full-set payload, and copying one marked comment on purpose
+    // from its own card (the default whole-review payload has already dropped these). It
+    // says *who* decided, because every other word in this heading is the review's and this
+    // one is the reader's — an agent handed a block it is told was already answered needs
+    // that distinction to know the claim is not being made again.
+    clauses.push(`the reader already marked this ${comment.resolution}`);
+  }
   if (comment.side === "deletions") {
     clauses.push(
       "deletions side — these are lines of the file as it stood before this change, not of the file now",
@@ -643,6 +680,10 @@ export type PromptReview = {
   overview: ReviewOverview | null;
   layers: readonly ReviewLayer[];
   comments: readonly PromptComment[];
+  /** Whether to carry the comments the reader has already marked. False — the default — is
+   * the work order: what is still open. True is the whole review, for the reader who wants
+   * the agent to see what was already decided. */
+  includeResolved?: boolean;
 };
 
 /** Every comment of a review as one prompt: a header naming the change and the diff, then
@@ -660,9 +701,18 @@ export type PromptReview = {
  * the same number there. Each block is identified by its anchor, which is how every surface
  * in the app already identifies a comment and the only identifier an agent can act on. */
 export function commentsToPrompt(review: PromptReview): string {
+  // The work order is what is still open. A reader who has just had an agent fix three of
+  // seven comments and copies again should not be handing the same agent the three it
+  // already did — that is the whole reason the marks exist. What the payload must never do
+  // is contain *less* than the review without saying so, which is what the header sentence
+  // below is for: a silent subset is a payload the reader cannot check.
+  const included = review.includeResolved
+    ? review.comments
+    : review.comments.filter((comment) => comment.resolution === undefined);
+  const excluded = review.comments.length - included.length;
   const other: PromptComment[] = [];
   const byLayer: PromptComment[][] = review.layers.map(() => []);
-  for (const comment of review.comments) {
+  for (const comment of included) {
     const index = layerIndexOfComment(review.layers, comment);
     if (index === null) {
       other.push(comment);
@@ -677,7 +727,7 @@ export function commentsToPrompt(review: PromptReview): string {
   const loose = other.toSorted(compareComments);
 
   const title = review.overview?.title;
-  const count = review.comments.length;
+  const count = included.length;
   const refs =
     review.refs === null ? "" : ` (${codeSpan(review.refs.base)} … ${codeSpan(review.refs.head)})`;
   const lines: string[] = [
@@ -687,6 +737,10 @@ export function commentsToPrompt(review: PromptReview): string {
     "",
     `${countLabel(count, "comment")} from a code review of ${codeSpan(review.repo.name)}${refs}. Address each one.${
       sections.length === 0 ? "" : " They are grouped in the review’s own reading order."
+    }${
+      excluded === 0
+        ? ""
+        : ` ${countLabel(excluded, "further comment")} the reader has already marked addressed, skipped or disagreed with ${excluded === 1 ? "is" : "are"} not included.`
     }`,
     "",
     ...promptPreamble(true),

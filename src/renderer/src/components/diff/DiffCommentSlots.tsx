@@ -2,6 +2,7 @@ import { useCallback, useState, type ReactElement, type ReactNode } from "react"
 import type { CodeViewProps } from "@pierre/diffs/react";
 import type { ReviewAnchor } from "../../../../shared/review";
 import type { CommentDraft, CommentSlot } from "../../../../shared/diff/comment-annotations";
+import type { CommentResolution } from "../../../../shared/review-progress";
 import { CommentEditor } from "@/components/CommentEditor";
 import { CommentThread } from "@/components/CommentThread";
 
@@ -24,6 +25,7 @@ export type CommentSlotHandlers = {
   onAddComment: (anchor: ReviewAnchor, body: string) => void;
   onEditComment: (commentId: string, body: string) => void;
   onDiscardComment: (commentId: string) => void;
+  onSetCommentResolution: (commentId: string, resolution: CommentResolution | null) => void;
 };
 
 /** Comment cards, their editors, and the two pieces of state that say which is which.
@@ -34,6 +36,7 @@ export function useCommentSlots({
   onAddComment,
   onEditComment,
   onDiscardComment,
+  onSetCommentResolution,
 }: CommentSlotHandlers): CommentSlots {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [draft, setDraft] = useState<CommentDraft | null>(null);
@@ -89,13 +92,15 @@ export function useCommentSlots({
             comment={slot.comment}
             outdated={slot.outdated}
             active={slot.active}
+            resolution={slot.resolution}
             onEdit={() => openEdit(slot.comment.id)}
             onDiscard={() => onDiscardComment(slot.comment.id)}
+            onSetResolution={(resolution) => onSetCommentResolution(slot.comment.id, resolution)}
           />
         </CommentAnnotationFrame>
       );
     },
-    [openEdit, onAddComment, onEditComment, onDiscardComment],
+    [openEdit, onAddComment, onEditComment, onDiscardComment, onSetCommentResolution],
   );
 
   return { editingId, draft, openDraft, renderAnnotation };

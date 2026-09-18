@@ -3,13 +3,20 @@ import { clamp } from "../../../../shared/clamp";
 import type { PatchFile } from "../../../../shared/diff/patch";
 import { findLayer, soloFiles } from "../../../../shared/layers";
 import type { SessionId } from "../../../../shared/session";
+import type { CommentResolution } from "../../../../shared/review-progress";
 import { isFileRead, markFilesRead, withCollapsed } from "../../lib/read-progress";
+import { withResolution } from "../../../../shared/comment-resolution";
 import { commentFocus, setSlice, sliceSolo, withSlice, type Getter, type Setter } from "./slice";
 import type { ReviewState } from "./state";
 
 // Where the reader is in the diff, and how much of it they have been through: the focused
-// file, the scroll position that rides with it, the read marks, and the folds the marks pull
-// along. All of it persists — this is the half of a session that a relaunch owes back.
+// file, the scroll position that rides with it, the read marks, the folds the marks pull
+// along, and what they decided about each finding. All of it persists — this is the half of
+// a session that a relaunch owes back.
+//
+// The comment marks sit here rather than in `curation.ts` beside the comment edits, and the
+// line between the two is what a write means. Curation changes the review; this records what
+// one reader did about it. A mark never reaches the artifact, exactly like a read file.
 
 export type ProgressSlice = {
   selectFile: (path: string, sessionId?: SessionId) => void;
@@ -36,6 +43,19 @@ export type ProgressSlice = {
    * disclosure. Independent of the read mark: marking read folds, but folding is not
    * marking, and a finished file the reader opens again stays open. */
   setFileCollapsed: (path: string, collapsed: boolean, sessionId?: SessionId) => void;
+  /** Record what the reader decided about one finding, or clear the mark with null. The
+   * three words are `CommentResolution`'s and are the ones the fix prompt asks an agent to
+   * report back, so setting one is transcription rather than translation.
+   *
+   * Keyed by the comment's fingerprint, not its id: the id is minted fresh at every import,
+   * and a mark that did not survive reopening the review would not be worth persisting. An
+   * id naming no comment in this session is a no-op — the same silence every other action
+   * here answers a stale target with. */
+  setCommentResolution: (
+    commentId: string,
+    resolution: CommentResolution | null,
+    sessionId?: SessionId,
+  ) => void;
 };
 
 /** Every read-progress write funnels through here — one file, a chapter's worth, or a
@@ -195,6 +215,26 @@ export const createProgressSlice: StateCreator<ReviewState, [], [], ProgressSlic
         slice.diff.files.filter((file) => wanted.has(file.path)),
         false,
       );
+    });
+  },
+
+  setCommentResolution: (commentId, resolution, sessionId) => {
+    withSlice(get, sessionId, (slice, id) => {
+      const comment = slice.comments.find((candidate) => candidate.id === commentId);
+      if (comment === undefined) {
+        return;
+      }
+      // `withResolution` answers the same map when the word is already the one on the
+      // comment, so re-picking it costs no render and — the write-back riding on the
+      // change — no disk write. Deliberately not guarded on the diff being loaded, unlike
+      // the file marks above: a mark is about the finding, not about a file on screen, so
+      // one made from the rail before the diff finishes is a mark the reader meant.
+      const resolvedComments = withResolution(slice.resolvedComments, comment, resolution);
+      if (resolvedComments === slice.resolvedComments) {
+        return;
+      }
+      setSlice(set, get, id, { resolvedComments });
+      get().scheduleSessionWriteBack(id);
     });
   },
 

@@ -7,6 +7,7 @@ import {
   promptCommentsFrom,
   type PromptComment,
 } from "../../lib/review-export";
+import { isResolved } from "../../../../shared/comment-resolution";
 import { commentFocus, setSlice, withSlice, type SessionSlice } from "./slice";
 import type { ReviewState } from "./state";
 
@@ -52,7 +53,13 @@ export type CurationSlice = {
   /** Every comment in the review as one prompt, grouped by the layers the review authored,
    * whatever is soloed on screen. "All" has to mean the review or it means whatever the
    * reader last clicked, which is not something a clipboard can say. */
-  copyAllCommentsPrompt: (sessionId?: SessionId) => Promise<boolean>;
+  copyAllCommentsPrompt: (
+    /** True to carry the comments the reader has already marked as well. The default payload
+     * is the work order — what is still open — and says in its header how many it left out;
+     * this is the way to the whole review, for handing an agent what was already decided. */
+    options?: { includeResolved?: boolean },
+    sessionId?: SessionId,
+  ) => Promise<boolean>;
 };
 
 /** Comments projected for a prompt, against the diff the reader is actually looking at.
@@ -65,7 +72,15 @@ export type CurationSlice = {
  * reader two different things about the same comment. */
 function promptCommentsOf(slice: SessionSlice, comments: readonly Comment[]): PromptComment[] {
   const files = slice.diff.phase === "loaded" ? slice.diff.files : [];
-  return promptCommentsFrom(comments, files, slice.reviewDiff?.kind === "frozenPatch");
+  return promptCommentsFrom(
+    comments,
+    files,
+    slice.reviewDiff?.kind === "frozenPatch",
+    // The reader's marks ride along for the same reason `frozen` is read off the render pin:
+    // the payload has to agree with what is on screen. A card the rail shows as answered
+    // must not turn up in a work order as if it were open.
+    slice.resolvedComments,
+  );
 }
 
 /** Write to the clipboard, reporting whether it landed. Never throws: a denied or absent
@@ -179,9 +194,18 @@ export const createCurationSlice: StateCreator<ReviewState, [], [], CurationSlic
       return copied ?? false;
     },
 
-    copyAllCommentsPrompt: async (sessionId) => {
+    copyAllCommentsPrompt: async (options, sessionId) => {
       const copied = await withSlice(get, sessionId, async (slice) => {
         if (slice.comments.length === 0) {
+          return false;
+        }
+        // A review whose every comment is marked has an empty work order, and a payload of a
+        // heading over nothing is worse than no payload: it reads as a review with no
+        // findings. Nothing copied, so no check — the same signal a refused clipboard gives.
+        if (
+          options?.includeResolved !== true &&
+          slice.comments.every((comment) => isResolved(slice.resolvedComments, comment))
+        ) {
           return false;
         }
         const text = commentsToPrompt({
@@ -197,6 +221,7 @@ export const createCurationSlice: StateCreator<ReviewState, [], [], CurationSlic
           layers: slice.layers,
           // The session's own comments, never the soloed subset: "all" is the review.
           comments: promptCommentsOf(slice, slice.comments),
+          includeResolved: options?.includeResolved ?? false,
         });
         if (!(await writeClipboard(text))) {
           return false;

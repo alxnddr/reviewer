@@ -1,11 +1,13 @@
 import { type ReactElement } from "react";
 import { History, Pencil, Trash2 } from "lucide-react";
 import type { Comment } from "../../../shared/review";
+import type { CommentResolution } from "../../../shared/review-progress";
 import { Button } from "@/components/ui/button";
 import { TooltipHint } from "@/components/ui/tooltip";
 import { CommentBody } from "@/components/CommentBody";
 import { CommentEvidence } from "@/components/CommentEvidence";
 import { CommentMeta } from "@/components/CommentMeta";
+import { CommentMark, CommentMarkMenu } from "@/components/CommentMark";
 import { CopyCommentPromptButton } from "@/components/CopyPromptButton";
 import { OpenInEditorButton } from "@/components/OpenInEditorButton";
 import { commentLocation } from "@/lib/comment-location";
@@ -19,8 +21,14 @@ type CommentThreadProps = {
   /** The comment the reader just jumped to (via `n`/`p` or the sidebar list): it
    * gets a ring so the scrolled-to card is unmistakable among its neighbours. */
   active: boolean;
+  /** What the reader decided about this finding, or null for one they have not answered.
+   * Handed in from the slot rather than read here: the card lives in a CodeView portal that
+   * only re-renders on an item `version` change, and the mark is folded into that version
+   * (`buildCommentItems`). */
+  resolution: CommentResolution | null;
   onEdit: () => void;
   onDiscard: () => void;
+  onSetResolution: (resolution: CommentResolution | null) => void;
 };
 
 /** One curated comment, rendered beneath its anchored line (or the file header
@@ -43,13 +51,22 @@ type CommentThreadProps = {
  * layout and covers no comment text; while shown it overlaps the code line above,
  * which is hover-only, right-aligned (where lines have usually already ended), and
  * back the moment the pointer leaves. The hover group is the wrapper, not the card,
- * so reaching up for the toolbar does not dismiss it. */
+ * so reaching up for the toolbar does not dismiss it.
+ *
+ * **A marked comment goes quiet, and nothing else.** The card is not collapsed, struck
+ * through or moved: the reader answered it, they did not delete it, and a review read a
+ * second time has to show the same twelve findings in the same order it showed the first
+ * time. Dimming is enough to make the open ones stand out in a scroll, and hovering — or
+ * focusing — brings the card back to full ink so a marked comment is still readable without
+ * unmarking it. */
 export function CommentThread({
   comment,
   outdated,
   active,
+  resolution,
   onEdit,
   onDiscard,
+  onSetResolution,
 }: CommentThreadProps): ReactElement {
   const location = commentLocation(comment);
 
@@ -57,7 +74,13 @@ export function CommentThread({
     <div className="group/comment relative">
       <div
         className={cn(
-          "rounded-lg border border-border-strong bg-comment-surface px-4 py-3 font-sans text-foreground shadow-surface transition-colors",
+          "rounded-lg border border-border-strong bg-comment-surface px-4 py-3 font-sans text-foreground shadow-surface transition-[color,background-color,border-color,opacity]",
+          // Answered findings recede so the open ones read as the work left. Not `hidden`
+          // and not `line-through`: the first loses the review's own order and the second
+          // makes prose unreadable at exactly the moment someone is re-checking whether the
+          // mark was right. Full ink is one hover away, and the toolbar that unmarks it is
+          // on the same hover.
+          resolution !== null && "opacity-55 group-hover/comment:opacity-100",
           // The jumped-to card wears the kit's own focus shape — a 1px accent edge
           // inside a soft accent halo, exactly what every control in the system does
           // on `focus-visible`.
@@ -81,6 +104,12 @@ export function CommentThread({
             </TooltipHint>
           </div>
         )}
+        {/* Above the author's pills, because it is the reader's answer *to* them and the
+            first thing they need on a second pass ("did I already deal with this?"). It is
+            greyscale where those are coloured, which is the whole visual grammar: hue is
+            what the review said, ink is what the reader did — and it is what keeps the mark
+            apart from the warning-toned drift row above it. */}
+        <CommentMark resolution={resolution} className="mb-1.5" />
         {/* Above the body, on its own line, and only when the author set something: the
             pills are how the reader decides whether to read this card at all, so they come
             before the sentence rather than trailing it. Sharing the outdated row was the
@@ -93,16 +122,17 @@ export function CommentThread({
       {/* Its own popover surface, so it reads as hovering above the diff rather than
           printed on it — the same treatment the stepper and the find bar take. */}
       <div className="absolute right-2 bottom-full mb-1 flex items-center gap-0.5 rounded-lg bg-popover p-0.5 opacity-0 shadow-md ring-1 ring-foreground/10 transition-opacity duration-(--duration-fast) group-hover/comment:opacity-100 focus-within:opacity-100">
-        {/* Four glyphs on a surface that only appears on hover: whichever one the reader is
+        {/* Five glyphs on a surface that only appears on hover: whichever one the reader is
             reaching for, they arrived without a label. `top`, so the popup opens away from
             the card it is about rather than over the comment body.
 
-            Open in editor leads, then Copy, and Discard trails — the order of how often they
+            The mark leads, then open in editor, then Copy, and Discard trails — the order of how often they
             are wanted and the reverse of how much they cost. It is also the only order that
             takes a new glyph without moving the rest: the strip is right-anchored and grows
             leftward, so an insertion at this end leaves Copy, Edit and Discard under the
             hand that already knows where they are. The open lands on the comment's first
             line, translated to the file on disk (`lib/editor-target.ts`). */}
+        <CommentMarkMenu resolution={resolution} onSetResolution={onSetResolution} />
         <OpenInEditorButton
           path={comment.file}
           anchorSide={comment.side}

@@ -18,6 +18,8 @@ import { buildCommentItems, type CommentSlot } from "../../../shared/diff/commen
 import { MULTI_STATUS_PATCH } from "../../../shared/diff/fixtures";
 import { parsePatch } from "../../../shared/diff/patch";
 import { NO_PROGRESS } from "../../../shared/review-progress";
+import { commentFingerprint } from "../../../shared/fingerprint";
+import { resolutionOf } from "../../../shared/comment-resolution";
 import { resolveLayerScroll, stepLayer } from "../../../shared/layers";
 import { UNCOVERED_LAYER_ID } from "../lib/coverage";
 import { createScrollCapture, SCROLL_CAPTURE_DEBOUNCE_MS } from "../lib/scroll";
@@ -1764,6 +1766,7 @@ describe("debounced write-back", () => {
       // The live count off the loaded diff, not the zero this session was created with: a
       // persisted denominator is only useful if it tracks the review it is counting.
       readTotal: 6,
+      resolvedComments: {},
     });
   });
 
@@ -2001,6 +2004,76 @@ describe("comment curation", () => {
     await vi.advanceTimersByTimeAsync(WRITE_BACK_DEBOUNCE_MS);
     expect(bridge.updateSession).toHaveBeenCalledWith(
       expect.objectContaining({ comments: [added] }),
+    );
+  });
+
+  it("setCommentResolution marks a finding by fingerprint and persists it as reader state", async () => {
+    vi.useFakeTimers();
+    const bridge = makeBridge({});
+    await openFixtureRepo(bridge);
+    store.getState().addComment(ANCHOR, "needs a guard");
+    const comment = active().comments[0];
+
+    store.getState().setCommentResolution(comment?.id ?? "", "addressed");
+
+    expect(resolutionOf(active().resolvedComments, comment!)).toBe("addressed");
+    await vi.advanceTimersByTimeAsync(WRITE_BACK_DEBOUNCE_MS);
+    // It travels as a record keyed by fingerprint, beside the read marks — never as a field
+    // on the comment, which is what would put reader state into the exported artifact.
+    expect(bridge.updateSession).toHaveBeenCalledWith(
+      expect.objectContaining({
+        resolvedComments: { [commentFingerprint(comment!)]: "addressed" },
+        comments: [comment],
+      }),
+    );
+  });
+
+  it("re-picking the word already on a comment writes nothing at all", async () => {
+    vi.useFakeTimers();
+    const bridge = makeBridge({});
+    await openFixtureRepo(bridge);
+    store.getState().addComment(ANCHOR, "needs a guard");
+    const id = active().comments[0]?.id ?? "";
+    store.getState().setCommentResolution(id, "skipped");
+    await vi.advanceTimersByTimeAsync(WRITE_BACK_DEBOUNCE_MS);
+    const writes = vi.mocked(bridge.updateSession).mock.calls.length;
+
+    store.getState().setCommentResolution(id, "skipped");
+
+    await vi.advanceTimersByTimeAsync(WRITE_BACK_DEBOUNCE_MS);
+    expect(vi.mocked(bridge.updateSession).mock.calls.length).toBe(writes);
+  });
+
+  it("a mark on a comment this session does not carry is a no-op", async () => {
+    const bridge = makeBridge({});
+    await openFixtureRepo(bridge);
+
+    store.getState().setCommentResolution("00000000-0000-4000-8000-00000000dead", "addressed");
+
+    expect(active().resolvedComments.size).toBe(0);
+    store.getState().flushWriteBacks();
+    expect(bridge.updateSession).not.toHaveBeenCalled();
+  });
+
+  it("editing a comment's body drops its mark, and the dropped mark is not persisted", async () => {
+    // 008's stated consequence, end to end: the fingerprint is over the claim, so a rewritten
+    // claim is a different finding. The mark goes quiet in the app immediately (the lookup
+    // misses) and leaves the record on the next write-back (`pruneResolutions`), so it cannot
+    // come back later.
+    vi.useFakeTimers();
+    const bridge = makeBridge({});
+    await openFixtureRepo(bridge);
+    store.getState().addComment(ANCHOR, "first");
+    const before = active().comments[0];
+    store.getState().setCommentResolution(before?.id ?? "", "addressed");
+
+    store.getState().editComment(before?.id ?? "", "second");
+
+    const after = active().comments[0];
+    expect(resolutionOf(active().resolvedComments, after!)).toBeNull();
+    await vi.advanceTimersByTimeAsync(WRITE_BACK_DEBOUNCE_MS);
+    expect(bridge.updateSession).toHaveBeenLastCalledWith(
+      expect.objectContaining({ resolvedComments: {} }),
     );
   });
 
@@ -3256,6 +3329,40 @@ describe("copying comments as a prompt", () => {
     await store.getState().copyAllCommentsPrompt();
 
     expect(writeText.mock.calls[0]?.[0]).toContain("1 comment from a code review of `repo`.");
+  });
+
+  it("copies the open comments, and the whole review when asked", async () => {
+    const writeText = stubClipboard();
+    const bridge = makeBridge({});
+    await openFixtureRepo(bridge);
+    store.getState().addComment(GREET_ANCHOR, "still open");
+    store.getState().addComment(NOTES_ANCHOR, "already fixed");
+    const done = active().comments[1];
+    store.getState().setCommentResolution(done?.id ?? "", "addressed");
+
+    await expect(store.getState().copyAllCommentsPrompt()).resolves.toBe(true);
+    const open = writeText.mock.calls[0]?.[0];
+    expect(open).toContain("still open");
+    expect(open).not.toContain("already fixed");
+    expect(open).toContain("1 further comment the reader has already marked");
+
+    await expect(store.getState().copyAllCommentsPrompt({ includeResolved: true })).resolves.toBe(
+      true,
+    );
+    expect(writeText.mock.calls[1]?.[0]).toContain("already fixed");
+  });
+
+  it("copies nothing from a review whose every comment is marked", async () => {
+    // A heading over no blocks reads as a review with no findings, which is the one thing
+    // this payload must never say. Nothing copied, so nothing flashes.
+    const writeText = stubClipboard();
+    const bridge = makeBridge({});
+    await openFixtureRepo(bridge);
+    store.getState().addComment(GREET_ANCHOR, "only one");
+    store.getState().setCommentResolution(active().comments[0]?.id ?? "", "disagree");
+
+    await expect(store.getState().copyAllCommentsPrompt()).resolves.toBe(false);
+    expect(writeText).not.toHaveBeenCalled();
   });
 
   it("copies nothing from a review with no comments", async () => {

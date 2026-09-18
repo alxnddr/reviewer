@@ -74,6 +74,7 @@ export function registerIpcHandlers(
         readFiles: session.readFiles,
         collapsedFiles: session.collapsedFiles,
         readTotal: session.readTotal,
+        resolvedComments: session.resolvedComments,
       });
     }
   });

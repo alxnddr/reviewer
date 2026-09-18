@@ -2,6 +2,7 @@ import type { CommitSha, RepoInfo } from "../../../shared/git";
 import type { Session } from "../../../shared/session";
 import type { DiffState, LogState } from "./load-state";
 import type { ReadFiles } from "./read-progress";
+import { pruneResolutions, type CommentResolutions } from "../../../shared/comment-resolution";
 
 // A session slice projected back out: what main persists, and the two small readings of it
 // the export path needs.
@@ -35,9 +36,9 @@ export function headShaOf(log: LogState | null): CommitSha | null {
   return null;
 }
 
-/** The slice fields the write-back carries, stated as the wire shape minus the three fields
+/** The slice fields the write-back carries, stated as the wire shape minus the four fields
  * the slice holds differently: `repo` (the slice keeps the repo, `Session` wraps it in a
- * source), and the two progress collections the app works in as a `Map` and a `Set`. Plus
+ * source), and the three progress collections the app works in as `Map`s and a `Set`. Plus
  * `diff`, which is never persisted and is read only for the file count below.
  *
  * Derived from `Session` rather than written out, so the drift this could have runs the safe
@@ -45,10 +46,14 @@ export function headShaOf(log: LogState | null): CommitSha | null {
  * which is a typecheck failure at the call site rather than a value quietly dropped from
  * every write-back. `SessionSlice` satisfies it structurally, so nothing here imports the
  * store. */
-export type PersistedSlice = Omit<Session, "source" | "readFiles" | "collapsedFiles"> & {
+export type PersistedSlice = Omit<
+  Session,
+  "source" | "readFiles" | "collapsedFiles" | "resolvedComments"
+> & {
   repo: RepoInfo;
   readFiles: ReadFiles;
   collapsedFiles: ReadonlySet<string>;
+  resolvedComments: CommentResolutions;
   diff: DiffState;
 };
 
@@ -74,6 +79,14 @@ export function persistedSession(slice: PersistedSlice): Session {
     // downstream has to know the wire shape.
     readFiles: Object.fromEntries(slice.readFiles),
     collapsedFiles: [...slice.collapsedFiles],
+    // Pruned on the way out, at the one seam that has both the marks and the comments in
+    // hand. A mark is keyed by what its comment *says* (`commentFingerprint`), so editing a
+    // body drops the mark — and without this the dropped mark would sit in the record
+    // forever, invisible, ready to come back the moment a body was edited back to what it
+    // said before. Persisting only the live keys is what makes that consequence real rather
+    // than merely unobservable. `pruneResolutions` answers its input when every key is still
+    // live, so the common write-back allocates nothing.
+    resolvedComments: Object.fromEntries(pruneResolutions(slice.resolvedComments, slice.comments)),
     // Refreshed from the diff on screen whenever there is one, so the cached denominator
     // tracks the review as it is now; a session persisting before its diff has loaded keeps
     // the count it was restored with rather than publishing a zero the start screen would
