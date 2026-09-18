@@ -2,14 +2,42 @@ import type { ReactElement } from "react";
 import { Columns2, Rows3 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { TooltipHint } from "@/components/ui/tooltip";
-import { selectActiveSlice, useReviewStore } from "@/stores/review";
+import {
+  activeTabStop,
+  selectActiveSlice,
+  useReviewStore,
+  type ReviewState,
+  type SessionsView,
+} from "@/stores/review";
 import { useUiPrefsStore } from "@/stores/ui-prefs";
 
 // The layout switch only has meaning against a diff, so it appears with one
 // (loading or loaded) and is absent at every dead end — nothing to lay out.
 type DiffPresence = "absent" | "loading" | "present";
 
-function selectDiffPresence(state: ReturnType<typeof useReviewStore.getState>): DiffPresence {
+/** What the question is asked of: the strip's focus *and* the sessions behind it, because
+ * both halves are needed — see below for why neither alone answers it. */
+export type DiffPresenceView = SessionsView & Pick<ReviewState, "activeStartTabId">;
+
+/** Whether the reader is looking at a diff, asked of the active **tab** rather than of the
+ * active slice.
+ *
+ * The distinction is the whole of this function. A focused start tab is drawn *over* the
+ * session it was opened from rather than instead of it (`activeTabStop`, `tab-strip.ts`), so
+ * `activeSessionId` still names that session and its slice still holds a loaded diff. Reading
+ * the slice alone therefore offered the split ⇄ unified switch on the start screen — a
+ * control over a diff that is not on screen, contradicting both the rule above and the one
+ * `TitleBar.tsx` states beside it. Reading the tab alone is no better: a start tab is not the
+ * only dead end, and a session tab whose diff has not been asked for yet has nothing to lay
+ * out either. So: the tab decides whether a diff is on screen at all, the slice decides which
+ * of the two live answers it is.
+ *
+ * `loading` is kept distinct from `present` so the control does not flicker in mid-load — it
+ * appears disabled with the first load and settles, rather than arriving when the diff does. */
+export function selectDiffPresence(state: DiffPresenceView): DiffPresence {
+  if (activeTabStop(state)?.kind !== "session") {
+    return "absent";
+  }
   const phase = selectActiveSlice(state)?.diff?.phase ?? null;
   if (phase === "loading") {
     return "loading";
