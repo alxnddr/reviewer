@@ -99,7 +99,7 @@ function useReviewShortcuts(): void {
             comments: slice.comments,
           });
           if (target !== null) {
-            void openInEditor({ sessionId: slice.id, ...target });
+            void openInEditor({ kind: "file", sessionId: slice.id, ...target });
           }
           break;
         }
@@ -252,6 +252,27 @@ function useSidebarCommand(): void {
   useEffect(() => window.reviewer?.onToggleSidebarCommand(toggleRail), [toggleRail]);
 }
 
+/** The checkout, on the File menu's Open Repository in Editor command — the same request the
+ * title bar's button sends, so the two cannot open different things.
+ *
+ * The session is read at the click rather than subscribed to, the way `e` reads its target:
+ * this fires far less often than the active tab changes, and a subscription would re-bind the
+ * listener on every tab switch. With no session there is nothing to open and nothing to say
+ * about it — unlike the refusals main answers with, which the banner explains. */
+function useOpenRepoInEditorCommand(): void {
+  const open = useEditorStore((state) => state.open);
+  useEffect(
+    () =>
+      window.reviewer?.onOpenRepoInEditorCommand(() => {
+        const sessionId = useReviewStore.getState().activeSessionId;
+        if (sessionId !== null) {
+          void open({ kind: "repo", sessionId });
+        }
+      }),
+    [open],
+  );
+}
+
 export function App(): ReactElement {
   const activeSessionId = useReviewStore((state) => state.activeSessionId);
   // The start screen is the shell's content either because there is no review to show, or
@@ -291,6 +312,7 @@ export function App(): ReactElement {
   useRecentReviewsCommand();
   useSettingsCommand();
   useSidebarCommand();
+  useOpenRepoInEditorCommand();
 
   useEffect(() => {
     const bridge = window.reviewer;

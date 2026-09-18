@@ -1,6 +1,7 @@
 import type { ReactElement } from "react";
 import { TabBar } from "@/components/TabBar";
 import { DiffStyleToggle } from "@/components/DiffStyleToggle";
+import { OpenRepoInEditorButton } from "@/components/OpenRepoInEditorButton";
 import { SettingsButton } from "@/components/SettingsButton";
 import { SidebarToggle } from "@/components/SidebarToggle";
 import { useReviewStore } from "@/stores/review";
@@ -31,9 +32,15 @@ export function TitleBar({ hasSidebar }: TitleBarProps): ReactElement {
       {/* Draggable filler: the window must keep dragging right of the tab strip. */}
       <div className="min-w-6 flex-1" />
       {/* The header's gap-3 is sized for the tab strip; the trailing icon buttons
-          already carry their own padding, so they group tighter than that. */}
+          already carry their own padding, so they group tighter than that.
+
+          Left to right, each about a wider thing than the last: the diff on screen, the
+          repository that diff came from, the app. The middle one is absent at the same dead
+          ends the rail is — there is no repository to open when the shell is framing the start
+          screen. */}
       <div className="flex items-center gap-0.5">
         <DiffStyleToggle />
+        {hasSidebar && <OpenRepoInEditorButton />}
         <SettingsButton />
       </div>
     </header>

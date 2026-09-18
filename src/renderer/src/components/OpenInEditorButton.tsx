@@ -9,8 +9,10 @@ import { useEditorStore } from "@/stores/editor";
 import { selectActiveSlice, useReviewStore } from "@/stores/review";
 import { useSettingsStore } from "@/stores/settings";
 
-// The one Open in Editor control, drawn after a file's name on its header band — the whole
-// file, at its first line in the diff. It used to be drawn on a comment's hover toolbar too,
+// The file-level Open in Editor control, drawn after a file's name on its header band — the
+// whole file, at its first line in the diff. (The repository-level one is
+// `OpenRepoInEditorButton`, in the title bar; the two share a channel and a store action and
+// nothing else.) It used to be drawn on a comment's hover toolbar too,
 // at that comment's line, and that is the reason it once took an anchor: the glyph's subject
 // there was the comment and its action was the file, and the two disagreed. The comment's line
 // is still reachable, on `E` (`App.tsx` → `lib/editor-target.ts`), which is the key the sheet
@@ -79,7 +81,7 @@ export const OpenInEditorButton = memo(function OpenInEditorButton({
           // per file *of* that list — and kept because `fileForPath` is a lookup, not a
           // promise, and a caller that hands over an authored path would land here.
           const target = file === null ? { path } : editorTargetFor(file, null);
-          void open({ sessionId, ...target });
+          void open({ kind: "file", sessionId, ...target });
         }}
       >
         <ExternalLink />

@@ -104,17 +104,30 @@ export function installApplicationMenu(): void {
           accelerator: "CmdOrCtrl+Shift+R",
           click: () => requestMenuCommand(IpcEvent.menuOpenRecentReviews),
         },
-        // The way out of the app and into the work. They sit in File rather than Edit
+        // The ways out of the app and into the work. They sit in File rather than Edit
         // because in this app File *is* the review-artifact menu — open one, list them,
         // export one — and a prompt is that same family of projection, one step shorter
         // than an export. Edit is the more orthodox home for a Copy variant, but it is a
         // stock role here, and claiming it would mean spelling out and then owning the
         // whole macOS template for the sake of these two lines.
         //
-        // Both go through the tab command (focused window only): unlike Open Repository
-        // there is nothing to copy in a window that does not exist, so nothing is created
-        // to receive them.
+        // All three go through the tab command (focused window only): unlike Open Repository
+        // there is nothing to copy — and no checkout to hand over — in a window that does not
+        // exist, so nothing is created to receive them.
         { type: "separator" },
+        // The repo-level door, above the comment-level ones: same journey out, widest scope
+        // first. No accelerator — every chord in this app is advertised through
+        // `lib/shortcuts.ts`, and this one has no surface that would want to name a key for
+        // it that the title bar's button does not already say in words. Not disabled on a
+        // frozen review either, which the *button* is: a menu item can only be greyed by
+        // rebuilding the whole template whenever the active tab changes, and the app already
+        // answers an impossible open with a sentence that says how to fix it
+        // (`lib/editor-open-failure-message.ts`) rather than with a control that has gone
+        // quiet. One of those two explains itself; the other does not.
+        {
+          label: "Open Repository in Editor",
+          click: () => requestTabCommand(IpcEvent.menuOpenRepoInEditor),
+        },
         {
           label: "Copy Comment as Prompt",
           accelerator: "Shift+CmdOrCtrl+C",

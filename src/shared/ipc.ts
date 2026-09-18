@@ -70,6 +70,10 @@ export const IpcEvent = {
   // worth putting away while the diff is being read *and written about*, and a window key
   // handler is deaf inside the comment editor and under a modal.
   menuToggleSidebar: "menu:toggle-sidebar",
+  // File ▸ Open Repository in Editor. Payload-free like the rest: which session is "the
+  // repository" is the renderer's own state, and the renderer answers by naming the session
+  // on `editor:open` — main never takes a directory off the wire.
+  menuOpenRepoInEditor: "menu:open-repo-in-editor",
   // Export commands: like the open commands they carry no data — the
   // renderer owns the serialize→save flow the same way it owns the open flow.
   menuExportReviewJson: "menu:export-review-json",
@@ -146,7 +150,8 @@ export type ReviewerBridge = {
   getOnboarded: () => Promise<IpcResponse<"onboarding:get">>;
   /** Records that it has — finished or skipped, which are the same thing to the reader. */
   completeOnboarding: () => Promise<IpcResponse<"onboarding:complete">>;
-  /** Opens a file of a live session in the chosen editor, at a new-file line when given one.
+  /** Opens a live session's file in the chosen editor, at a new-file line when given one — or
+   * its whole checkout, as a project, on the request's `repo` arm.
    * Refusals are typed (`shared/editor-ipc.ts`), never thrown. */
   openInEditor: (request: IpcRequest<"editor:open">) => Promise<IpcResponse<"editor:open">>;
   openRepo: () => Promise<IpcResponse<"repo:open">>;
@@ -211,6 +216,8 @@ export type ReviewerBridge = {
   onOpenSettingsCommand: (listener: () => void) => () => void;
   /** Subscribes to the View ▸ Toggle Sidebar command (⌘B); returns unsubscribe. */
   onToggleSidebarCommand: (listener: () => void) => () => void;
+  /** Subscribes to the File ▸ Open Repository in Editor command; returns unsubscribe. */
+  onOpenRepoInEditorCommand: (listener: () => void) => () => void;
   /** Subscribes to the File → Export Review (.reviewer.json) command; unsubscribe. */
   onExportReviewJsonCommand: (listener: () => void) => () => void;
   /** Subscribes to the File → Export Review as Markdown command; unsubscribe. */

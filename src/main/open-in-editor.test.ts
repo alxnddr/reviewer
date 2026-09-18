@@ -8,7 +8,8 @@ import { NO_PROGRESS } from "../shared/review-progress";
 const openExternal = vi.fn();
 vi.mock("electron", () => ({ shell: { openExternal: (url: string) => openExternal(url) } }));
 
-const { checkEditorFile, isEditorUrl, openInEditor } = await import("./open-in-editor");
+const { checkEditorFile, checkEditorRoot, isEditorUrl, openInEditor } =
+  await import("./open-in-editor");
 
 // The two decisions the seam makes that a type cannot: that a path is proven inside the
 // checkout on disk rather than on its spelling, and that only an editor scheme ever reaches
@@ -81,6 +82,26 @@ describe("checkEditorFile", () => {
   });
 });
 
+describe("checkEditorRoot", () => {
+  it("answers the checkout's own real path, following a symlinked root", async () => {
+    await expect(checkEditorRoot(repo)).resolves.toEqual({ ok: true, path: repo });
+    const linkedRoot = join(scratch, "linked");
+    symlinkSync(repo, linkedRoot);
+    await expect(checkEditorRoot(linkedRoot)).resolves.toEqual({ ok: true, path: repo });
+  });
+
+  it("reports a checkout that is gone, or is not a directory, as missing", async () => {
+    await expect(checkEditorRoot(join(scratch, "nope"))).resolves.toEqual({
+      ok: false,
+      code: "missing",
+    });
+    await expect(checkEditorRoot(join(scratch, "outside.ts"))).resolves.toEqual({
+      ok: false,
+      code: "missing",
+    });
+  });
+});
+
 describe("isEditorUrl", () => {
   it("admits every editor scheme", () => {
     for (const url of ["zed://file/a", "vscode://file/a", "cursor://file/a:1"]) {
@@ -122,14 +143,14 @@ describe("openInEditor", () => {
   it("hands the editor URL of a contained file to the OS", async () => {
     const response = await openInEditor(
       { findSession: () => session(), editor: () => "zed" },
-      { sessionId: SESSION_ID, path: "src/a.ts", line: 7 },
+      { kind: "file" as const, sessionId: SESSION_ID, path: "src/a.ts", line: 7 },
     );
     expect(response).toEqual({ ok: true });
     expect(openExternal).toHaveBeenCalledWith(`zed://file${join(repo, "src", "a.ts")}:7`);
   });
 
   it("refuses in order: no session, frozen, no editor, outside, missing", async () => {
-    const outside = { sessionId: SESSION_ID, path: "../outside.ts" };
+    const outside = { kind: "file" as const, sessionId: SESSION_ID, path: "../outside.ts" };
     const none = new Map<string, Session>();
     await expect(
       openInEditor({ findSession: (id) => none.get(id), editor: () => "zed" }, outside),
@@ -149,7 +170,7 @@ describe("openInEditor", () => {
     await expect(
       openInEditor(
         { findSession: () => session(), editor: () => "zed" },
-        { sessionId: SESSION_ID, path: "src/gone.ts" },
+        { kind: "file" as const, sessionId: SESSION_ID, path: "src/gone.ts" },
       ),
     ).resolves.toEqual({ ok: false, failure: { code: "missing" } });
     expect(openExternal).not.toHaveBeenCalled();
@@ -161,9 +182,44 @@ describe("openInEditor", () => {
         findSession: () => session({ kind: "refs", base: "main", head: "feature" }),
         editor: () => "cursor",
       },
-      { sessionId: SESSION_ID, path: "src/a.ts" },
+      { kind: "file" as const, sessionId: SESSION_ID, path: "src/a.ts" },
     );
     expect(response).toEqual({ ok: true });
     expect(openExternal).toHaveBeenCalledWith(`cursor://file${join(repo, "src", "a.ts")}`);
+  });
+
+  // The repo arm rides the same three session gates in the same order and then asks only
+  // whether the checkout is still there — so what is worth pinning is that it is gated at all
+  // (a frozen review's `source.repo.path` is an authored string and must never reach the OS),
+  // and that the URL it builds carries the root and no line.
+  it("hands the checkout's own URL over, with no line", async () => {
+    const response = await openInEditor(
+      { findSession: () => session(), editor: () => "zed" },
+      { kind: "repo", sessionId: SESSION_ID },
+    );
+    expect(response).toEqual({ ok: true });
+    expect(openExternal).toHaveBeenCalledWith(`zed://file${repo}`);
+  });
+
+  it("refuses the repository in the same order, and for a checkout that is gone", async () => {
+    const request = { kind: "repo" as const, sessionId: SESSION_ID };
+    const none = new Map<string, Session>();
+    await expect(
+      openInEditor({ findSession: (id) => none.get(id), editor: () => "zed" }, request),
+    ).resolves.toEqual({ ok: false, failure: { code: "noSession" } });
+    await expect(
+      openInEditor(
+        { findSession: () => session({ kind: "frozenPatch", patch: "diff" }), editor: () => "zed" },
+        request,
+      ),
+    ).resolves.toEqual({ ok: false, failure: { code: "notLive" } });
+    await expect(
+      openInEditor({ findSession: () => session(), editor: () => "none" }, request),
+    ).resolves.toEqual({ ok: false, failure: { code: "noEditor" } });
+    rmSync(repo, { recursive: true, force: true });
+    await expect(
+      openInEditor({ findSession: () => session(), editor: () => "zed" }, request),
+    ).resolves.toEqual({ ok: false, failure: { code: "missing" } });
+    expect(openExternal).not.toHaveBeenCalled();
   });
 });

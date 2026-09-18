@@ -2,7 +2,8 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { stubBridge } from "./__fixtures__/bridge";
 import { createEditorStore } from "./editor";
 
-const REQUEST = { sessionId: "11111111-1111-4111-8111-111111111111", path: "src/a.ts", line: 3 };
+const SESSION_ID = "11111111-1111-4111-8111-111111111111";
+const REQUEST = { kind: "file", sessionId: SESSION_ID, path: "src/a.ts", line: 3 } as const;
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -32,6 +33,13 @@ describe("editor store", () => {
     await store.getState().open(REQUEST);
     store.getState().clearFailure();
     expect(store.getState().failure).toBeNull();
+  });
+
+  it("sends the repository arm as it is given, with no path", async () => {
+    const bridge = stubBridge({ openInEditor: vi.fn().mockResolvedValue({ ok: true }) });
+    const store = createEditorStore();
+    await store.getState().open({ kind: "repo", sessionId: SESSION_ID });
+    expect(bridge.openInEditor).toHaveBeenCalledWith({ kind: "repo", sessionId: SESSION_ID });
   });
 
   it("is a no-op with no bridge", async () => {

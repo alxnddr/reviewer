@@ -4,8 +4,14 @@ import type { EditorOpenFailure, EditorOpenRequest } from "../../../shared/edito
 // Open in Editor, renderer side: one action that asks main, and the one refusal it is
 // showing. Its own store rather than a tenth review slice because nothing here belongs to a
 // session — the request names one, but the banner that reports a refusal is app-level, like
-// the open and export failures, and the two controls that fire it (the file header and the E
-// key) should not each have to thread a callback through DiffScreen to reach a session action.
+// the open and export failures, and the controls that fire it (the file header, the E key, the
+// title bar's repository button and the File-menu item beside it) should not each have to
+// thread a callback through DiffScreen to reach a session action.
+//
+// One action for both halves rather than an `open` and an `openRepository`: what is being
+// opened is a closed union on the request (`shared/editor-ipc.ts`), so a call site says which
+// arm it means in the object it already builds, and the refusal, the banner and the sentence
+// are the same for either. A second action would be a second place to forget the banner.
 // There were three: a comment's hover toolbar carried the button as well, until the glyph's
 // subject there (the comment) and its action (the file) were read as the disagreement they
 // are. `E` still opens the focused *comment's* line — `lib/editor-target.ts` is what makes

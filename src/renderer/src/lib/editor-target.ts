@@ -5,9 +5,10 @@ import { filesByAnchorPath, type PatchFile } from "../../../shared/diff/patch";
 import type { Comment, ReviewSide } from "../../../shared/review";
 
 // What Open in Editor opens, decided without a DOM: which file, and which line of the file *on
-// disk* — the new side of the diff, because that is the file the checkout has. Every host of the
-// control (the file header, the comment toolbar, the E key) reads its answer from here, so the
-// three cannot disagree about where a deletions-side anchor lands.
+// disk* — the new side of the diff, because that is the file the checkout has. Both hosts of the
+// control (the file header, the E key) read their answer from here, so the two cannot disagree
+// about where a deletions-side anchor lands. The third door, the title bar's repository button,
+// names no file at all and takes only `repoEditorAvailability` below.
 //
 // The deletions-side translation rides the one walk (`shared/diff/walk.ts`) rather than
 // re-deriving hunk arithmetic: the walk emits a context row once per side, deletions first, and a
@@ -80,24 +81,34 @@ export function fileForPath(files: readonly PatchFile[], path: string): PatchFil
 }
 
 /** Why a control cannot open right now, or `ready`. Decided here so the header button, the
- * comment button and the key all read one rule; the sentence for each is the control's. */
+ * repository button and the key all read one rule; the sentence for each is the control's. */
 export type EditorAvailability = "ready" | "frozen" | "noEditor" | "deleted";
+
+/** The two reasons that are about the *session* rather than about a file: no checkout behind
+ * this review, or no editor chosen. Split out because the repository control can only ever be
+ * refused for one of these — there is no fourth answer to invent a sentence for — and because
+ * it is main's own order (`open-in-editor.ts` asks live? then editor?), which the two halves
+ * must not come to disagree about. */
+export function repoEditorAvailability(input: {
+  editor: EditorChoice;
+  frozen: boolean;
+}): Exclude<EditorAvailability, "deleted"> {
+  if (input.frozen) {
+    return "frozen";
+  }
+  return input.editor === "none" ? "noEditor" : "ready";
+}
 
 export function editorAvailability(input: {
   editor: EditorChoice;
   frozen: boolean;
   file: PatchFile | null;
 }): EditorAvailability {
-  if (input.frozen) {
-    return "frozen";
+  const session = repoEditorAvailability(input);
+  if (session !== "ready") {
+    return session;
   }
-  if (input.editor === "none") {
-    return "noEditor";
-  }
-  if (input.file?.status === "deleted") {
-    return "deleted";
-  }
-  return "ready";
+  return input.file?.status === "deleted" ? "deleted" : "ready";
 }
 
 /** A repo-relative file and the new-file line to open it at. `line` is absent, never
