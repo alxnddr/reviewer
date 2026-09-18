@@ -81,6 +81,7 @@ export function OverviewScreen(): ReactElement | null {
   const setActiveLayer = useReviewStore((state) => state.setActiveLayer);
   const setLayerRead = useReviewStore((state) => state.setLayerRead);
   const selectFile = useReviewStore((state) => state.selectFile);
+  const focusReference = useReviewStore((state) => state.focusReference);
   const focusComment = useReviewStore((state) => state.focusComment);
 
   // Coming back from a layer lands on that layer's section, not at the top of a long
@@ -220,7 +221,7 @@ export function OverviewScreen(): ReactElement | null {
 
           <Markdown
             text={overview.body}
-            links={{ paths: filePaths, onSelect: selectFile }}
+            links={{ paths: filePaths, onSelect: focusReference }}
             className="mt-5 space-y-3 text-base leading-relaxed text-foreground"
           />
 
@@ -248,7 +249,7 @@ export function OverviewScreen(): ReactElement | null {
                   filePaths={filePaths}
                   onOpen={() => openLayer(chapter.layer.id)}
                   onOpenFile={(path) => openLayerFile(chapter.layer.id, path)}
-                  onSelectFile={(path) => selectFile(path)}
+                  onSelectReference={focusReference}
                   onToggleRead={() =>
                     setLayerRead(chapter.layer.id, chapter.read.read < chapter.read.total)
                   }

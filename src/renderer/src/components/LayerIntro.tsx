@@ -6,7 +6,7 @@ import { isFullyRead, type ReadTally } from "@/lib/read-progress";
 import { Button } from "@/components/ui/button";
 import { TooltipHint } from "@/components/ui/tooltip";
 import { ReadRing, readLabel } from "@/components/ReadRing";
-import { Markdown } from "@/components/Markdown";
+import { Markdown, type ProseLinks } from "@/components/Markdown";
 import { cn } from "@/lib/utils";
 
 // A layer's long-form description read at reading width above the diff, not
@@ -43,8 +43,9 @@ type LayerIntroProps = {
   /** The files currently rendered in the diff (the soloed subset): both the link
    * resolution set and the navigation targets. */
   filePaths: string[];
-  /** Where a file link in the prose goes: the same focus move the tree's own rows make. */
-  onSelectFile: (path: string) => void;
+  /** Where a reference in the prose goes: the same focus move the tree's own rows make, at
+   * the line when the author named one. */
+  onSelectReference: ProseLinks["onSelect"];
   /** Whether the long-form prose is hidden; owned by the parent so it can drop the
    * resize panel when there is nothing to resize. */
   collapsed: boolean;
@@ -68,7 +69,7 @@ export function LayerIntro({
   readTally,
   onToggleRead,
   filePaths,
-  onSelectFile,
+  onSelectReference,
   collapsed,
   onToggleCollapsed,
   fill,
@@ -210,7 +211,7 @@ export function LayerIntro({
             <Markdown
               ref={fit?.contentRef}
               text={content}
-              links={{ paths: filePaths, onSelect: onSelectFile }}
+              links={{ paths: filePaths, onSelect: onSelectReference }}
               className="max-w-3xl space-y-2 px-6 text-base leading-relaxed text-foreground select-text"
             />
           </div>

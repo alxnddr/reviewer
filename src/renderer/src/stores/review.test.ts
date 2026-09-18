@@ -2481,22 +2481,22 @@ describe("useReviewStore comment navigation", () => {
     // The request is the half that survives the diff pane not being mounted: clicking a
     // finding in the tour doc focuses it in the very commit the pane mounts, where "did
     // the focus change" has nothing to compare against (`lib/diff/use-diff-scroll.ts`).
-    expect(active().pendingCommentScroll).toBe(ID_B);
+    expect(active().pendingScroll).toEqual({ kind: "comment", commentId: ID_B });
 
     // A report naming an older request — the reader focused again while the surface was
     // scrolling — leaves the newer one standing rather than dropping their jump.
-    store.getState().commentScrolled(ID_A);
-    expect(active().pendingCommentScroll).toBe(ID_B);
+    store.getState().scrollServed({ kind: "comment", commentId: ID_A });
+    expect(active().pendingScroll).toEqual({ kind: "comment", commentId: ID_B });
 
-    store.getState().commentScrolled(ID_B);
-    expect(active().pendingCommentScroll).toBeNull();
+    store.getState().scrollServed({ kind: "comment", commentId: ID_B });
+    expect(active().pendingScroll).toBeNull();
     // Served, not dismissed: the ring and the counter still read the focus.
     expect(active().activeCommentId).toBe(ID_B);
 
     // Re-focusing what is already focused is a fresh request, so the panel's row
     // re-centres a comment the reader has scrolled away from.
     store.getState().focusComment(ID_B);
-    expect(active().pendingCommentScroll).toBe(ID_B);
+    expect(active().pendingScroll).toEqual({ kind: "comment", commentId: ID_B });
   });
 
   it("never leaves a scroll owed to a comment nothing is focused on", () => {
@@ -2514,7 +2514,7 @@ describe("useReviewStore comment navigation", () => {
       store.getState().focusComment(ID_B);
       dismiss();
       expect(active().activeCommentId).toBeNull();
-      expect(active().pendingCommentScroll).toBeNull();
+      expect(active().pendingScroll).toBeNull();
     }
   });
 
@@ -2528,6 +2528,48 @@ describe("useReviewStore comment navigation", () => {
     expect(active().activeCommentId).toBe(ID_A);
     expect(active().selectedFilePath).toBe("newname.txt");
     expect(active().collapsedFiles.has("newname.txt")).toBe(false);
+  });
+
+  // A prose reference's chip. The store's job is the placement: what reaches the surface is
+  // a line that exists, so the hook needs no fallback arm of its own.
+  it("follows a reference to a line: unfolds the file, asks for the line, focuses nothing", () => {
+    seedComments([C_GREET], {
+      collapsedFiles: new Set(["greet.ts"]),
+      overviewOpen: true,
+      activeCommentId: ID_B,
+    });
+    store.getState().focusReference("greet.ts", { side: "additions", startLine: 5, endLine: 6 });
+
+    expect(active().selectedFilePath).toBe("greet.ts");
+    expect(active().pendingScroll).toEqual({
+      kind: "line",
+      path: "greet.ts",
+      line: 5,
+      side: "additions",
+    });
+    // A folded file renders no lines, so there would be nothing to land on.
+    expect(active().collapsedFiles.has("greet.ts")).toBe(false);
+    // A reference is a place, not a finding: leaving the ring and counter up while the
+    // viewport moves elsewhere would be a lie about where the reader is.
+    expect(active().activeCommentId).toBeNull();
+    expect(active().overviewOpen).toBe(false);
+  });
+
+  it("falls back to the file when the line has drifted out of the diff", () => {
+    seedComments([C_GREET]);
+    // greet.ts's additions hunk covers 1..7; 50 is past everything the diff carries.
+    store.getState().focusReference("greet.ts", { side: "additions", startLine: 50, endLine: 50 });
+
+    expect(active().selectedFilePath).toBe("greet.ts");
+    expect(active().pendingScroll).toBeNull();
+  });
+
+  it("reads a reference with no line as plain file navigation", () => {
+    seedComments([C_GREET]);
+    store.getState().focusReference("greet.ts", null);
+
+    expect(active().selectedFilePath).toBe("greet.ts");
+    expect(active().pendingScroll).toBeNull();
   });
 
   it("steps in document order from nothing, forward lands on the first comment", () => {
@@ -2613,7 +2655,7 @@ describe("useReviewStore comment navigation", () => {
     store.getState().flushWriteBacks();
     const persisted = vi.mocked(bridge.updateSession).mock.calls.at(-1)?.[0];
     expect(persisted).not.toHaveProperty("activeCommentId");
-    expect(persisted).not.toHaveProperty("pendingCommentScroll");
+    expect(persisted).not.toHaveProperty("pendingScroll");
     // The file focus half of focusComment does persist.
     expect(persisted?.selectedFilePath).toBe("added.txt");
   });
@@ -3296,7 +3338,11 @@ describe("reading progress", () => {
   });
 
   it("moving is moving: it dismisses the comment walk and leaves the tour doc", () => {
-    patchActive({ overviewOpen: true, activeCommentId: ID_A, pendingCommentScroll: ID_A });
+    patchActive({
+      overviewOpen: true,
+      activeCommentId: ID_A,
+      pendingScroll: { kind: "comment", commentId: ID_A },
+    });
     store.getState().markFileReadAndAdvance();
 
     expect(active().selectedFilePath).toBe("img.png");

@@ -2,7 +2,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createScrollCapture,
   planScrollRestore,
+  samePendingScroll,
   SCROLL_CAPTURE_DEBOUNCE_MS,
+  type PendingScroll,
   type ScrollRestore,
 } from "./scroll";
 
@@ -10,8 +12,13 @@ describe("planScrollRestore", () => {
   it("serves an outstanding comment jump over everything below it", () => {
     // The mount that IS the click: opening a finding from the tour doc mounts the diff
     // pane, and the reader asked for that comment, not for wherever they last were.
-    const plan = planScrollRestore(1200, "src/app.ts", "c7");
+    const plan = planScrollRestore(1200, "src/app.ts", { kind: "comment", commentId: "c7" });
     expect(plan).toEqual<ScrollRestore>({ kind: "comment", commentId: "c7" });
+  });
+
+  it("serves an outstanding line jump the same way — a reference's chip is that click too", () => {
+    const line: PendingScroll = { kind: "line", path: "src/app.ts", line: 40, side: "additions" };
+    expect(planScrollRestore(1200, "src/other.ts", line)).toEqual<ScrollRestore>(line);
   });
 
   it("restores a recorded position, and it wins over a focused file (one owner)", () => {
@@ -32,6 +39,26 @@ describe("planScrollRestore", () => {
   it("never emits a position restore for a zero scrollTop (absence, not pixel 0)", () => {
     expect(planScrollRestore(0, null, null).kind).not.toBe("position");
     expect(planScrollRestore(0, "src/app.ts", null).kind).not.toBe("position");
+  });
+});
+
+// What the store's clear guard is made of: it clears only the request the surface reports
+// serving, so a jump the reader made in between survives.
+describe("samePendingScroll", () => {
+  const line: PendingScroll = { kind: "line", path: "src/app.ts", line: 40, side: "additions" };
+
+  it("compares by value, not identity", () => {
+    expect(samePendingScroll(line, { ...line })).toBe(true);
+    expect(
+      samePendingScroll({ kind: "comment", commentId: "c7" }, { kind: "comment", commentId: "c7" }),
+    ).toBe(true);
+  });
+
+  it("tells a newer request apart, down to the side of the line", () => {
+    expect(samePendingScroll(line, { ...line, line: 41 })).toBe(false);
+    expect(samePendingScroll(line, { ...line, side: "deletions" })).toBe(false);
+    expect(samePendingScroll(line, { ...line, path: "src/other.ts" })).toBe(false);
+    expect(samePendingScroll(line, { kind: "comment", commentId: "c7" })).toBe(false);
   });
 });
 

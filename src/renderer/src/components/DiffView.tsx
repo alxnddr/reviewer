@@ -19,6 +19,7 @@ import type { CommentResolution } from "../../../shared/review-progress";
 import type { PatchFile } from "../../../shared/diff/patch";
 import { useDiffOptions } from "@/lib/diff/use-diff-options";
 import { useDiffScroll } from "@/lib/diff/use-diff-scroll";
+import type { PendingScroll } from "@/lib/scroll";
 import type { DiffStyle } from "@/stores/ui-prefs";
 import type { Comment } from "../../../shared/review";
 
@@ -42,11 +43,12 @@ type DiffViewProps = {
    * null. Rings its card and positions the floating counter; the ring itself is driven
    * through `buildCommentItems`. */
   activeCommentId: string | null;
-  /** The focused comment this surface still owes a scroll to, or null. Separate from
-   * `activeCommentId` because it survives the surface being unmounted — which is how
-   * opening a finding from the tour doc, the commit that mounts this view, scrolls at
-   * all. `useDiffScroll` consumes it through `onCommentScrolled`. */
-  pendingCommentScroll: string | null;
+  /** The jump this surface still owes — a focused comment, or the line a prose reference's
+   * chip asked for — or null. Separate from `activeCommentId` because it survives the
+   * surface being unmounted, which is how opening a finding or a reference from the tour
+   * doc, the commit that mounts this view, scrolls at all. `useDiffScroll` consumes it and
+   * reports back through `onScrollServed`. */
+  pendingScroll: PendingScroll | null;
   /** What the reader decided about each finding, keyed by fingerprint. Handed down rather
    * than read by the card, because a comment card lives in a CodeView portal that only
    * re-renders when its item's `version` changes — so the mark has to reach the items
@@ -75,7 +77,7 @@ type DiffViewProps = {
   onStepComment: (direction: 1 | -1) => void;
   onClearActiveComment: () => void;
   /** Clears the pending scroll once this surface has served it. */
-  onCommentScrolled: (commentId: string) => void;
+  onScrollServed: (pending: PendingScroll) => void;
 };
 
 /** The Pierre diff surface, untouched: themes, gutters, and bands come from
@@ -101,7 +103,7 @@ export function DiffView({
   restoreScrollTop,
   activeLayerId,
   activeCommentId,
-  pendingCommentScroll,
+  pendingScroll,
   collapsedPaths,
   resolutions,
   onSetFileCollapsed,
@@ -113,7 +115,7 @@ export function DiffView({
   onSetCommentResolution,
   onStepComment,
   onClearActiveComment,
-  onCommentScrolled,
+  onScrollServed,
 }: DiffViewProps): ReactElement {
   const handleRef = useRef<CodeViewHandle<CommentSlot>>(null);
   const { editingId, draft, openDraft, renderAnnotation } = useCommentSlots({
@@ -186,11 +188,11 @@ export function DiffView({
   const { scrollToComment, onScroll } = useDiffScroll(handleRef, {
     restoreScrollTop,
     selectedFilePath,
-    pendingCommentScroll,
+    pendingScroll,
     activeLayerId,
     entries,
     onScrollTop,
-    onCommentScrolled,
+    onScrollServed,
   });
 
   // The diff is the largest thing on screen and, until this, the only region of the app a

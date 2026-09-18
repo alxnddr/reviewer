@@ -4,7 +4,7 @@ import type { CommentSlot } from "../../../../shared/diff/comment-annotations";
 import type { CommentNavEntry } from "./comment-navigation";
 import { assertNever } from "../../../../shared/assert";
 import { capturesScroll } from "../../../../shared/layers";
-import { createScrollCapture, planScrollRestore } from "@/lib/scroll";
+import { createScrollCapture, planScrollRestore, type PendingScroll } from "@/lib/scroll";
 
 // Everything that moves the diff surface, in one place, because the only thing that
 // matters about these five effects is how they *rank* against each other. They can all
@@ -24,10 +24,10 @@ import { createScrollCapture, planScrollRestore } from "@/lib/scroll";
 //
 // The two guards are not interchangeable. A ref-compare answers "did this change while I
 // was mounted", which is unanswerable about the commit that mounts you — and focusing a
-// comment from the tour doc is exactly that commit, since the doc replaces the diff pane
-// (App.tsx). So the focus scroll is a request the store holds (`pendingCommentScroll`)
-// and this hook consumes, and only the two that are genuinely about *change while
-// mounted* — the file jump and the layer reset — compare against a ref.
+// comment (or following a prose reference) from the tour doc is exactly that commit, since
+// the doc replaces the diff pane (App.tsx). So that scroll is a request the store holds
+// (`pendingScroll`) and this hook consumes, and only the two that are genuinely about
+// *change while mounted* — the file jump and the layer reset — compare against a ref.
 
 export type DiffScrollOptions = {
   /** The session's persisted scroll position, applied once on mount. Read
@@ -35,9 +35,10 @@ export type DiffScrollOptions = {
    * activation, and later updates to it are this hook's own captures. */
   restoreScrollTop: number;
   selectedFilePath: string | null;
-  /** The focused comment this surface still owes a scroll to (via `n`/`p` or the sidebar
-   * list), or null when there is none outstanding. Consumed, not watched — see above. */
-  pendingCommentScroll: string | null;
+  /** The jump this surface still owes: a focused comment (via `n`/`p` or the sidebar list)
+   * or the line a prose reference's chip asked for, or null when there is none
+   * outstanding. Consumed, not watched — see above. */
+  pendingScroll: PendingScroll | null;
   /** The soloed layer, or null for the full diff. Its *change* resets the diff to the top. */
   activeLayerId: string | null;
   /** Every comment resolved against the loaded diff, in reading order. Passed in rather
@@ -47,8 +48,9 @@ export type DiffScrollOptions = {
   entries: readonly CommentNavEntry[];
   /** Reports a debounced scroll position back to the owning session's slice. */
   onScrollTop: (scrollTop: number) => void;
-  /** Reports that the pending comment's scroll has been served, clearing the request. */
-  onCommentScrolled: (commentId: string) => void;
+  /** Reports that the pending jump has been served, clearing the request. Handed back what
+   * it served, not a bare acknowledgement, so a newer request made in between survives. */
+  onScrollServed: (pending: PendingScroll) => void;
 };
 
 export type DiffScroll = {
@@ -64,11 +66,11 @@ export function useDiffScroll(
   {
     restoreScrollTop,
     selectedFilePath,
-    pendingCommentScroll,
+    pendingScroll,
     activeLayerId,
     entries,
     onScrollTop,
-    onCommentScrolled,
+    onScrollServed,
   }: DiffScrollOptions,
 ): DiffScroll {
   // The one scroll owner on activation. The empty deps make this a mount-once
@@ -85,12 +87,13 @@ export function useDiffScroll(
     if (handle === null) {
       return;
     }
-    const restore = planScrollRestore(restoreScrollTop, selectedFilePath, pendingCommentScroll);
+    const restore = planScrollRestore(restoreScrollTop, selectedFilePath, pendingScroll);
     switch (restore.kind) {
       case "comment":
-        // The focus effect below owns it — it runs in this same commit and clears the
-        // request. Naming the arm here is what keeps the restore from *also* firing and
-        // stranding the reader at the top of the comment's file.
+      case "line":
+        // The request effect below owns both — it runs in this same commit and clears the
+        // request. Naming the arms here is what keeps the restore from *also* firing and
+        // stranding the reader at the top of the target's file.
         return;
       case "position":
         handle.scrollTo({ type: "position", position: restore.position, behavior: "instant" });
@@ -169,19 +172,43 @@ export function useDiffScroll(
   // this only runs with the diff loaded, so an entry that is absent now is absent for
   // good, and leaving the request standing would fire it at whatever mounts next.
   useLayoutEffect(() => {
-    if (pendingCommentScroll === null) {
+    if (pendingScroll === null) {
       return;
     }
-    onCommentScrolled(pendingCommentScroll);
-    const entry = entries.find((candidate) => candidate.comment.id === pendingCommentScroll);
-    if (entry === undefined) {
-      return;
+    onScrollServed(pendingScroll);
+    switch (pendingScroll.kind) {
+      case "comment": {
+        const entry = entries.find((candidate) => candidate.comment.id === pendingScroll.commentId);
+        if (entry === undefined) {
+          return;
+        }
+        // Claim the jump so the file-jump effect (next) doesn't also scroll to the file.
+        // The host path, matching what `focusComment` put in `selectedFilePath`.
+        lastJumpedPath.current = entry.path;
+        scrollToComment(entry);
+        return;
+      }
+      // A reference names its place outright: the store placed the span against this diff
+      // before asking, so there is nothing to resolve here and no fallback arm — a
+      // reference the diff drifted past never becomes a request at all. Centred and
+      // instant like a comment's, and through the same `type: "line"` target, which is what
+      // makes it land on the line in the split and unified layouts alike.
+      case "line": {
+        lastJumpedPath.current = pendingScroll.path;
+        handleRef.current?.scrollTo({
+          type: "line",
+          id: pendingScroll.path,
+          lineNumber: pendingScroll.line,
+          side: pendingScroll.side,
+          align: "center",
+          behavior: "instant",
+        });
+        return;
+      }
+      default:
+        return assertNever(pendingScroll);
     }
-    // Claim the jump so the file-jump effect (next) doesn't also scroll to the file.
-    // The host path, matching what `focusComment` put in `selectedFilePath`.
-    lastJumpedPath.current = entry.path;
-    scrollToComment(entry);
-  }, [pendingCommentScroll, entries, scrollToComment, onCommentScrolled]);
+  }, [pendingScroll, entries, scrollToComment, onScrollServed, handleRef]);
 
   useEffect(() => {
     if (selectedFilePath === lastJumpedPath.current) {

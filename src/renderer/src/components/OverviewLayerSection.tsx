@@ -9,7 +9,7 @@ import { Button } from "@/components/ui/button";
 import { TooltipHint } from "@/components/ui/tooltip";
 import { FileTypeIcon } from "@/components/FileTypeIcon";
 import { ReadRing } from "@/components/ReadRing";
-import { Markdown } from "@/components/Markdown";
+import { Markdown, type ProseLinks } from "@/components/Markdown";
 
 // One layer as a section of the overview document: its number and title, its own prose in
 // full, the files it covers, and the way into the diff. The doc is read top to bottom, so
@@ -263,10 +263,10 @@ type OverviewLayerSectionProps = {
   onOpen: () => void;
   /** Open this layer with the diff already on `path`. */
   onOpenFile: (path: string) => void;
-  /** Follow a file reference in the prose: the full diff at that file, like the doc's own
-   * body chips. A prose link may name a file this layer does not cover, which soloing
-   * would hide. */
-  onSelectFile: (path: string) => void;
+  /** Follow a reference in the prose: the full diff at that file — or at the line it named
+   * — like the doc's own body chips. A prose link may name a file this layer does not
+   * cover, which soloing would hide. */
+  onSelectReference: ProseLinks["onSelect"];
   /** Open this layer focused on its first comment; absent when it holds none. */
   onOpenComments: (() => void) | null;
   /** Flip the whole chapter's files between read and unread — the doc's own copy of the
@@ -279,7 +279,7 @@ export function OverviewLayerSection({
   filePaths,
   onOpen,
   onOpenFile,
-  onSelectFile,
+  onSelectReference,
   onOpenComments,
   onToggleRead,
 }: OverviewLayerSectionProps): ReactElement {
@@ -346,7 +346,7 @@ export function OverviewLayerSection({
       {layer.description !== undefined && (
         <Markdown
           text={layer.description}
-          links={{ paths: filePaths, onSelect: onSelectFile }}
+          links={{ paths: filePaths, onSelect: onSelectReference }}
           className="mt-3 space-y-3 text-base leading-relaxed text-foreground"
         />
       )}

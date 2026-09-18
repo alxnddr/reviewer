@@ -11,6 +11,7 @@ import { NO_FILES, soloedDiff, type SoloedDiff } from "../../lib/soloed-diff";
 import type { ReadFiles } from "../../lib/read-progress";
 import type { CommentResolutions } from "../../../../shared/comment-resolution";
 import type { BrushRange } from "../../lib/selection";
+import type { LineTarget, PendingScroll } from "../../lib/scroll";
 import type { BranchesState, DiffState, LogState } from "../../lib/load-state";
 import type { ReviewState } from "./state";
 
@@ -95,11 +96,11 @@ export type SessionSlice = {
    * The one source the sidebar list, the floating counter, and `DiffView`'s
    * scroll-to-comment all read. */
   activeCommentId: string | null;
-  /** The focused comment whose scroll the diff surface still owes, or null once it has
-   * been performed. Separate from `activeCommentId` because the two answer different
-   * questions — *which* comment is focused (the ring, the counter) versus whether
-   * focusing it is still an *unmet request to move the viewport* — and only the second
-   * survives the surface not being mounted.
+  /** The jump the diff surface still owes the reader, or null once it has been performed:
+   * a focused comment, or one line of one file that a prose reference's chip asked for.
+   * Separate from `activeCommentId` because the two answer different questions — *which*
+   * comment is focused (the ring, the counter) versus whether moving the viewport is still
+   * an *unmet request* — and only the second survives the surface not being mounted.
    *
    * That is the whole reason it exists: the tour doc replaces the diff pane, so clicking
    * a comment from the doc sets the focus in the same commit the surface *mounts*, where
@@ -107,9 +108,11 @@ export type SessionSlice = {
    * and stands down — the reader landed on the file's first line with the card far below.
    * A request that is consumed rather than diffed is true on that mount and false on a
    * bare remount (a tab bounce), which is exactly the distinction the old ref-compare was
-   * reaching for and could not make. Write it through `commentFocus` and clear it through
-   * `commentScrolled`; never persisted, like the focus itself. */
-  pendingCommentScroll: string | null;
+   * reaching for and could not make. A reference chip lives on that same doc, which is why
+   * it takes the same route rather than a second one (`lib/scroll.ts`'s `PendingScroll`
+   * says why the two are one field). Write it through `commentFocus` or `lineFocus` and
+   * clear it through `scrollServed`; never persisted, like the focus itself. */
+  pendingScroll: PendingScroll | null;
   /** How much of the diff the reader has been through: each read file's path against the
    * signature of the content they read (see `lib/read-progress.ts`).
    *
@@ -198,13 +201,27 @@ export function selectActiveSlice(state: SessionsView): SessionSlice | null {
  * focused — walkthrough's focus/clear, a discard that takes the focused one, plain file
  * navigation dismissing the step-through — writes this rather than the two fields, so the
  * surface can never be left owing a scroll to a comment nothing is focused on. Spelling
- * out `pendingCommentScroll` at a call site is the one thing that would reintroduce that
- * bug, so no call site does; the sole exception is `commentScrolled`, which clears the
+ * out `pendingScroll` at a call site is the one thing that would reintroduce that
+ * bug, so no call site does; the sole exception is `scrollServed`, which clears the
  * request *because* the scroll happened and must leave the focus standing. */
 export function commentFocus(
   commentId: string | null,
-): Pick<SessionSlice, "activeCommentId" | "pendingCommentScroll"> {
-  return { activeCommentId: commentId, pendingCommentScroll: commentId };
+): Pick<SessionSlice, "activeCommentId" | "pendingScroll"> {
+  return {
+    activeCommentId: commentId,
+    pendingScroll: commentId === null ? null : { kind: "comment", commentId },
+  };
+}
+
+/** The same pair from the other side: the surface owes a jump to a *place*, and nothing is
+ * focused — a prose reference is a location, not a finding, so leaving a comment's ring and
+ * counter up while the viewport moves somewhere else would be a lie about where the reader
+ * is. A helper for the same reason `commentFocus` is one: the two fields move together or
+ * the pair goes inconsistent, and this is the only other site that moves them. */
+export function lineFocus(
+  target: LineTarget,
+): Pick<SessionSlice, "activeCommentId" | "pendingScroll"> {
+  return { activeCommentId: null, pendingScroll: { kind: "line", ...target } };
 }
 
 /** The slice's soloed diff: the authored layers plus the inferred "not covered by layers"

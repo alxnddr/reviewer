@@ -8,8 +8,13 @@ import {
   type ReviewLayerInput,
 } from "../shared/review";
 import { resolveAnchor } from "../shared/diff/anchor";
-import { ANALYSIS_CACHE_KEY, filesByAnchorPath, parsePatch } from "../shared/diff/patch";
-import { fileReferences } from "../shared/markdown";
+import {
+  ANALYSIS_CACHE_KEY,
+  filesByAnchorPath,
+  parsePatch,
+  type PatchFile,
+} from "../shared/diff/patch";
+import { proseReferences } from "../shared/markdown";
 import { MAX_LAYER_DEPTH } from "../shared/layers";
 
 // The pre-handoff check an agent runs on a `.reviewer.json` before giving it over. It reuses
@@ -23,6 +28,16 @@ import { MAX_LAYER_DEPTH } from "../shared/layers";
 // afterward, so the same check runs whether the diff is embedded/frozen or freshly derived.
 // Pure and I/O-free: the CLI shell owns the filesystem read, the git spawn, and
 // `process.exit`; this module only decides.
+
+/** Which prose a reference problem was found in: the overview's body, which sits under no
+ * layer to name, or one layer's description, named by the same ordinal path every other
+ * layer problem uses.
+ *
+ * A closed union rather than a nullable `layer`, so neither locator can be built empty —
+ * the reason the two link problems used to be two variants. One `site` on three rules is
+ * three variants instead of six, and every new rule about prose inherits both tiers rather
+ * than choosing to support one. */
+export type ProseSite = { at: "overview" } | { at: "layer"; layer: string };
 
 /** One reason an artifact is not ready to hand over. Each variant carries enough
  * locator for the authoring agent to find and fix the offending anchor, range, or
@@ -44,11 +59,17 @@ export type ValidationProblem =
    * layer there is to unnest — so `depth` is always exactly one past the cap. */
   | { kind: "nestingTooDeep"; layer: string; depth: number }
   | { kind: "layerWalksNothing"; layer: string }
-  | { kind: "unresolvedLink"; layer: string; label: string; path: string }
-  /** The same dead-link rule applied to the overview's prose, which sits under no layer to
-   * name — a separate variant rather than a nullable `layer`, so neither locator can
-   * be built empty. */
-  | { kind: "overviewUnresolvedLink"; label: string; path: string };
+  /** A reference naming a file this diff does not carry: the app renders it muted and
+   * dead, so the gate refuses it. */
+  | { kind: "unresolvedLink"; site: ProseSite; label: string; path: string }
+  /** A reference whose *line* range no hunk covers. The file is here; the lines are not —
+   * a distinct fix from the above, and the one thing no interchange format's "related
+   * location" is: a second place in the change, proven to exist in it. */
+  | { kind: "referenceOutdated"; site: ProseSite; anchor: AnchorSpan }
+  /** A target that reached for the line grammar and missed (`src/app.ts:abc`). Reported
+   * with the target as written, because the thing to fix is those characters — reading the
+   * suffix as part of the filename instead would report a file the author never named. */
+  | { kind: "malformedReference"; site: ProseSite; label: string; url: string };
 
 export type ValidationReport = { ok: true } | { ok: false; problems: ValidationProblem[] };
 
@@ -172,22 +193,13 @@ export function validatePlacement(artifact: ReviewArtifact, patch: string): Vali
   }
 
   const byPath = new Map(files.map((file) => [file.path, file]));
-  const diffFiles = new Set(files.map((file) => file.path));
   const problems: ValidationProblem[] = [];
 
-  // The overview's prose runs through the same parser and the same dead-link rule as a
+  // The overview's prose runs through the same parser and the same reference rules as a
   // layer description — it is the same markdown tier, rendered by the same
   // component, so a link the app would render dead fails the gate here too.
   if (artifact.overview !== undefined) {
-    for (const reference of fileReferences(artifact.overview.body)) {
-      if (!diffFiles.has(reference.path)) {
-        problems.push({
-          kind: "overviewUnresolvedLink",
-          label: reference.label,
-          path: reference.path,
-        });
-      }
-    }
+    collectReferenceProblems({ at: "overview" }, artifact.overview.body, byPath, problems);
   }
 
   // A comment places the way the app's comment surface places it, and there a file
@@ -220,7 +232,14 @@ export function validatePlacement(artifact: ReviewArtifact, patch: string): Vali
         problems.push({ kind: "layerRangeOutdated", layer: ordinal, anchor: pickAnchor(range) });
       }
     }
-    collectUnresolvedLinks(ordinal, layer.description, diffFiles, problems);
+    if (layer.description !== undefined) {
+      collectReferenceProblems(
+        { at: "layer", layer: ordinal },
+        layer.description,
+        byPath,
+        problems,
+      );
+    }
   }
 
   return problems;
@@ -231,24 +250,43 @@ export function validatePlacement(artifact: ReviewArtifact, patch: string): Vali
  * web link is not a file reference and is left alone — it opens in the browser. A
  * `` `code` `` span is *not* checked either: inline code is ordinarily prose (a symbol
  * name), and its file-chip promotion is an opt-in nicety — flagging every non-file
- * span would reject legitimate descriptions, breaking the "zero manual fixing" bar. */
-function collectUnresolvedLinks(
-  layer: string,
-  description: string | undefined,
-  diffFiles: ReadonlySet<string>,
+ * span would reject legitimate descriptions, breaking the "zero manual fixing" bar.
+ *
+ * A `path:12` reference is held to one rule more: the line range is placed by the *same*
+ * `resolveAnchor` a comment anchor is, against the same file, in derived mode — so a
+ * reference that survives this is a second location the reader can actually be sent to,
+ * and the drift that strands a comment strands a reference identically rather than
+ * scrolling the reader to a line that moved. The path is looked up by its current name
+ * only, exactly as a layer range is: the reference chip navigates through the same
+ * path-keyed item the layer scroll does, and a gate that passed what the app cannot show
+ * would be worse than one that fails what it can. */
+function collectReferenceProblems(
+  site: ProseSite,
+  prose: string,
+  byPath: ReadonlyMap<string, PatchFile>,
   problems: ValidationProblem[],
 ): void {
-  if (description === undefined) {
-    return;
+  const { references, malformed } = proseReferences(prose);
+  for (const reference of malformed) {
+    problems.push({ kind: "malformedReference", site, label: reference.label, url: reference.url });
   }
-  for (const reference of fileReferences(description)) {
-    if (!diffFiles.has(reference.path)) {
+  for (const reference of references) {
+    const file = byPath.get(reference.path);
+    if (file === undefined) {
       problems.push({
         kind: "unresolvedLink",
-        layer,
+        site,
         label: reference.label,
         path: reference.path,
       });
+      continue;
+    }
+    if (reference.span === null) {
+      continue;
+    }
+    const anchor = { file: reference.path, ...reference.span };
+    if (resolveAnchor(anchor, { kind: "derived", file: file.fileDiff }).status === "outdated") {
+      problems.push({ kind: "referenceOutdated", site, anchor: pickAnchor(anchor) });
     }
   }
 }
@@ -287,9 +325,22 @@ export function describeProblem(problem: ValidationProblem): string {
     case "layerWalksNothing":
       return `layer ${problem.layer} walks no code: it has no ranges, and nothing under it has any`;
     case "unresolvedLink":
-      return `layer ${problem.layer} description links [${problem.label}](${problem.path}) — path is not in the diff`;
-    case "overviewUnresolvedLink":
-      return `overview body links [${problem.label}](${problem.path}) — path is not in the diff`;
+      return `${proseAt(problem.site)} links [${problem.label}](${problem.path}) — path is not in the diff`;
+    case "referenceOutdated":
+      return `${proseAt(problem.site)} references a line range that does not place in the diff: ${locator(problem.anchor)}`;
+    case "malformedReference":
+      return `${proseAt(problem.site)} links [${problem.label}](${problem.url}) — a line reference reads path:12, path:12-20 or path:12-20@deletions`;
+  }
+}
+
+/** The prose a reference problem was found in, as the report names it — the phrase the two
+ * link problems used to spell out in a message each. */
+function proseAt(site: ProseSite): string {
+  switch (site.at) {
+    case "overview":
+      return "overview body";
+    case "layer":
+      return `layer ${site.layer} description`;
   }
 }
 

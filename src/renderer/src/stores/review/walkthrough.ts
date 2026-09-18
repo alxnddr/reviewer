@@ -1,6 +1,8 @@
 import type { StateCreator } from "zustand";
+import { resolveAnchor } from "../../../../shared/diff/anchor";
 import { filesByAnchorPath } from "../../../../shared/diff/patch";
 import { stepLayer as stepLayerId } from "../../../../shared/layers";
+import type { ReferenceSpan } from "../../../../shared/markdown";
 import type { SessionId } from "../../../../shared/session";
 import {
   indexOfComment,
@@ -8,15 +10,16 @@ import {
   orderedComments,
 } from "../../lib/diff/comment-navigation";
 import { withCollapsed } from "../../lib/read-progress";
-import { commentFocus, setSlice, sliceSolo, withSlice } from "./slice";
+import { samePendingScroll, type PendingScroll } from "../../lib/scroll";
+import { commentFocus, lineFocus, setSlice, sliceSolo, withSlice } from "./slice";
 import type { ReviewState } from "./state";
 
 // The reader's way through an authored review: the tour doc as stop zero, the layer order
 // after it, and the comments inside whatever is on screen. Almost all of it is derived view
 // state — `overviewOpen`, `activeLayerId`, `activeCommentId` are absent from
 // `persistedSession` — so these actions schedule no write-back and a relaunch always starts
-// the walk over. The one exception is `focusComment`, which also moves the file focus, and
-// that half persists like any other navigation.
+// the walk over. The two exceptions are `focusComment` and `focusReference`, which also move
+// the file focus, and that half persists like any other navigation.
 
 export type WalkthroughSlice = {
   /** Solo a layer by id, or pass null to clear back to the full diff.
@@ -41,7 +44,7 @@ export type WalkthroughSlice = {
    * surface to scroll to it, and move the file focus onto its file so the tree and j/k
    * stay in sync. The scroll is a *request* the surface consumes rather than a change it
    * watches, so it is honoured even when the click is what mounts the surface — the
-   * click-from-the-tour-doc case, which the watch could not see (`pendingCommentScroll`). Clears an active solo that would hide the target so its annotation is
+   * click-from-the-tour-doc case, which the watch could not see (`pendingScroll`). Clears an active solo that would hide the target so its annotation is
    * actually mounted. The active id is ephemeral (no write-back); the file focus
    * persists like any other navigation. */
   focusComment: (commentId: string, sessionId?: SessionId) => void;
@@ -51,10 +54,22 @@ export type WalkthroughSlice = {
   stepComment: (direction: 1 | -1, sessionId?: SessionId) => void;
   /** Drop the focused comment back to none — dismisses the counter and the ring. */
   clearActiveComment: (sessionId?: SessionId) => void;
-  /** The diff surface reporting that it has put the focused comment under the reader's
-   * eye: clears the scroll request and leaves the focus (ring, counter) standing. The one
-   * writer of `pendingCommentScroll` on its own — see `commentFocus`. */
-  commentScrolled: (commentId: string, sessionId?: SessionId) => void;
+  /** Go where a prose reference points — `[the caller](src/worker.ts:40-44)`, and the
+   * bare-path form beside it. With no span this *is* `selectFile` and delegates to it: one
+   * behaviour, one owner. With one, the span is placed against the loaded diff here rather
+   * than on the surface, because a reference has no annotation for the surface to look up —
+   * so what reaches it is a line that exists, and a reference the diff has drifted past
+   * falls back to its file exactly as a stranded comment does.
+   *
+   * Unfolds the target file for the same reason `focusComment` does: a folded file renders
+   * no lines, so there would be nothing to land on, and the reader asked for this line. It
+   * does *not* clear a soloed layer, which `focusComment` has to — a chip is only live for
+   * a path in the surface's own `paths` set, and on a chapter band that set is the solo. */
+  focusReference: (path: string, span: ReferenceSpan | null, sessionId?: SessionId) => void;
+  /** The diff surface reporting that it has put the jump it owed under the reader's eye:
+   * clears the request and leaves any focus (ring, counter) standing. The one writer of
+   * `pendingScroll` on its own — see `commentFocus`. */
+  scrollServed: (pending: PendingScroll, sessionId?: SessionId) => void;
 };
 
 export const createWalkthroughSlice: StateCreator<ReviewState, [], [], WalkthroughSlice> = (
@@ -210,15 +225,51 @@ export const createWalkthroughSlice: StateCreator<ReviewState, [], [], Walkthrou
     withSlice(get, sessionId, (_slice, id) => setSlice(set, get, id, commentFocus(null)));
   },
 
-  commentScrolled: (commentId, sessionId) => {
+  focusReference: (path, span, sessionId) => {
     withSlice(get, sessionId, (slice, id) => {
-      // Only the request it actually served: a focus that landed between the surface's
-      // scroll and this report is a newer request, and clearing it would drop that
-      // reader's jump on the floor.
-      if (slice.pendingCommentScroll !== commentId) {
+      // A reference to the whole file is plain file navigation, and that already exists.
+      if (span === null) {
+        get().selectFile(path, id);
         return;
       }
-      setSlice(set, get, id, { pendingCommentScroll: null });
+      const file =
+        slice.diff.phase === "loaded"
+          ? (slice.diff.files.find((candidate) => candidate.path === path) ?? null)
+          : null;
+      // The layer scroll's own reading of the same question: a frozen embedded patch places
+      // every anchor, but only for a file the patch actually carries, so the two surfaces
+      // agree about what has drifted.
+      const frozen = slice.reviewDiff?.kind === "frozenPatch";
+      const anchor = { file: path, ...span };
+      const resolution =
+        frozen && file !== null
+          ? resolveAnchor(anchor, { kind: "frozen" })
+          : resolveAnchor(anchor, { kind: "derived", file: file?.fileDiff ?? null });
+      if (resolution.status === "outdated") {
+        get().selectFile(path, id);
+        return;
+      }
+      const collapsedFiles = withCollapsed(slice.collapsedFiles, [path], false);
+      setSlice(set, get, id, {
+        ...lineFocus({ path, line: resolution.line, side: span.side }),
+        selectedFilePath: path,
+        ...(collapsedFiles === slice.collapsedFiles ? {} : { collapsedFiles }),
+        // Following a reference is diff navigation, so it leaves the doc the chip was on.
+        overviewOpen: false,
+      });
+      get().scheduleSessionWriteBack(id);
+    });
+  },
+
+  scrollServed: (pending, sessionId) => {
+    withSlice(get, sessionId, (slice, id) => {
+      // Only the request it actually served: a jump the reader made between the surface's
+      // scroll and this report is a newer request, and clearing it would drop that
+      // reader's jump on the floor.
+      if (slice.pendingScroll === null || !samePendingScroll(slice.pendingScroll, pending)) {
+        return;
+      }
+      setSlice(set, get, id, { pendingScroll: null });
     });
   },
 });

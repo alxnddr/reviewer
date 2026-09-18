@@ -6,9 +6,14 @@ import {
   type ReactNode,
   type RefObject,
 } from "react";
-import ReactMarkdown, { type Components } from "react-markdown";
+import ReactMarkdown, { defaultUrlTransform, type Components } from "react-markdown";
 import type { PluggableList } from "unified";
-import { MARKDOWN_PLUGINS, isExternalUrl, remarkFileReferences } from "../../../shared/markdown";
+import {
+  MARKDOWN_PLUGINS,
+  readLinkTarget,
+  remarkFileReferences,
+  type ReferenceSpan,
+} from "../../../shared/markdown";
 import { Button } from "@/components/ui/button";
 import { TooltipHint } from "@/components/ui/tooltip";
 import { FileTypeIcon } from "@/components/FileTypeIcon";
@@ -37,9 +42,12 @@ import { cn } from "@/lib/utils";
  * that can disagree. */
 export type ProseLinks = {
   /** The files a reference may resolve to — the soloed subset in a chapter band, the
-   * whole diff in the tour doc. */
+   * whole diff in the tour doc. Paths only: whether the *line* a reference names still
+   * places is the store's question to answer, since it holds the diff's hunks — so a
+   * reference into a file that is here is live, and one whose line has drifted lands on
+   * the file the way a stranded comment does. The gate is what makes that rare. */
   paths: readonly string[];
-  onSelect: (path: string) => void;
+  onSelect: (path: string, span: ReferenceSpan | null) => void;
 };
 
 /** Set inside a fenced block, where the `code` element is quoted source rather than an
@@ -53,8 +61,21 @@ type FileChipProps = {
   /** What it resolves to, which is what the icon is drawn from: a chip may be labelled
    * anything, but it always stands for one real file in the diff. */
   path: string;
+  /** The line range it points at, or null for the whole file. */
+  span: ReferenceSpan | null;
   onSelect: () => void;
 };
+
+/** The line marker a chip wears: `:12`, `:12-20` — the grammar's own spelling, so what the
+ * reader sees is what the author typed and what an editor or a shell would take. The side is
+ * deliberately not printed: it steers where the chip lands, and `@deletions` in the middle of
+ * a sentence spends four words' worth of room on a distinction the destination shows for
+ * itself. */
+function lineMarker(span: ReferenceSpan): string {
+  return span.startLine === span.endLine
+    ? `:${span.startLine}`
+    : `:${span.startLine}-${span.endLine}`;
+}
 
 /** A resolved file reference: a chip that jumps the diff to the file. Set in the prose's
  * own face, not mono — it names a file, it does not quote code, and a mono run inside a
@@ -69,7 +90,7 @@ type FileChipProps = {
  * either side of it do. Height then follows from the line box (no fixed `h-*`, which an
  * inline block would honour and force the text off-centre inside its own border), and the
  * icon goes back to being an inline glyph nudged onto the text's optical middle. */
-function FileChip({ label, path, onSelect }: FileChipProps): ReactElement {
+function FileChip({ label, path, span, onSelect }: FileChipProps): ReactElement {
   return (
     <Button
       type="button"
@@ -82,6 +103,11 @@ function FileChip({ label, path, onSelect }: FileChipProps): ReactElement {
           a file looks like itself wherever the app names it, mid-sentence included. */}
       <FileTypeIcon path={path} className="mr-1 inline size-3.5 align-[-0.2em]" />
       {label}
+      {/* Mono and quiet, and no space before it: a line number is a coordinate, not a word,
+          and set in the prose face at full contrast it read as part of the label. */}
+      {span !== null && (
+        <span className="font-mono text-xs text-text-muted">{lineMarker(span)}</span>
+      )}
     </Button>
   );
 }
@@ -178,7 +204,7 @@ function proseComponents(links: ProseLinks | undefined): Components {
     em: ({ children }) => <em className="italic">{children}</em>,
     del: ({ children }) => <del className="text-text-muted line-through">{children}</del>,
     a: ({ children, href }) => (
-      <ProseLink href={href ?? ""} links={links} resolved={diffFiles.has(href ?? "")}>
+      <ProseLink href={href ?? ""} links={links} files={diffFiles}>
         {children}
       </ProseLink>
     ),
@@ -204,6 +230,17 @@ function proseComponents(links: ProseLinks | undefined): Components {
   };
 }
 
+/** react-markdown's own href sanitizer, minus the one case it gets wrong for this app: it
+ * blanks any target whose first colon precedes a `/` and is not a known protocol, which is
+ * `index.ts:12` — a line reference to a file at the repo root. A reference is handed through
+ * untouched (`ProseLink` renders it as a chip or a dead label, never as an `<a href>`, so
+ * nothing it returns can become a navigation), and everything else keeps the library's
+ * default, which is what keeps `javascript:` and `data:` out of an href in prose the app did
+ * not write. */
+function referenceAwareUrlTransform(url: string): string {
+  return readLinkTarget(url).kind === "external" ? defaultUrlTransform(url) : url;
+}
+
 /** A `code` element, which hast spells the same inside a fence and inside a sentence: in a
  * fence it is the block's own text and takes the block's face, inline it is the chip. */
 function CodeSpan({ children }: { children: ReactNode }): ReactElement {
@@ -213,29 +250,45 @@ function CodeSpan({ children }: { children: ReactNode }): ReactElement {
 type ProseLinkProps = {
   href: string;
   links: ProseLinks | undefined;
-  /** The href names a file the surface can navigate to. */
-  resolved: boolean;
+  /** The files the surface can navigate to, which a reference's *path* is matched against. */
+  files: ReadonlySet<string>;
   children: ReactNode;
 };
 
-/** A link, read the app's way: the web opens in the browser (the main process routes an
- * outbound navigation and refuses anything but https), and a path is a file reference —
- * a chip when the surface can go there, inert when it cannot. */
-function ProseLink({ href, links, resolved, children }: ProseLinkProps): ReactElement {
-  if (isExternalUrl(href)) {
+/** A link, read the app's way (`readLinkTarget`, shared with the gate): the web opens in the
+ * browser (the main process routes an outbound navigation and refuses anything but https),
+ * and a path — with or without a line suffix — is a file reference: a chip when the surface
+ * can go there, inert when it cannot.
+ *
+ * A malformed target takes the dead-reference path rather than one of its own, which is
+ * exactly what it is: a reference to a place that is not in this diff, because no such place
+ * exists. It is also the one arm the artifact's own prose cannot reach — the gate refuses a
+ * draft carrying one — so what it really serves is a comment body, which nothing gates. */
+function ProseLink({ href, links, files, children }: ProseLinkProps): ReactElement {
+  const target = readLinkTarget(href);
+  if (target.kind === "external") {
     return (
       <a href={href} className="underline decoration-text-faint underline-offset-2">
         {children}
       </a>
     );
   }
+  const path = target.kind === "reference" ? target.path : href;
+  const span = target.kind === "reference" ? target.span : null;
   if (links === undefined) {
     return <InertRef label={children} path={href} />;
   }
-  if (!resolved) {
+  if (!files.has(path)) {
     return <DeadRef label={children} />;
   }
-  return <FileChip label={children} path={href} onSelect={() => links.onSelect(href)} />;
+  return (
+    <FileChip
+      label={children}
+      path={path}
+      span={span}
+      onSelect={() => links.onSelect(path, span)}
+    />
+  );
 }
 
 type MarkdownProps = {
@@ -276,7 +329,11 @@ export function Markdown({ text, links, className, ref }: MarkdownProps): ReactE
   // parent scrolled.
   const rendered = useMemo(
     () => (
-      <ReactMarkdown remarkPlugins={plugins} components={components}>
+      <ReactMarkdown
+        remarkPlugins={plugins}
+        components={components}
+        urlTransform={referenceAwareUrlTransform}
+      >
         {text}
       </ReactMarkdown>
     ),

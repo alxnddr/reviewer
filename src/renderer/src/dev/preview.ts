@@ -222,7 +222,7 @@ function fixtureLayers(): ReviewLayer[] {
       label: "Add greeting API",
       summary: "New shout() built on greet()",
       description:
-        "This layer introduces the public greeting surface. `greet.ts` gains a `shout()` helper that composes over the existing `greet()`, so the two share one formatting path rather than drifting apart.\n\nThe fixture file [added.txt](added.txt) ships alongside as the smoke test — open it to confirm the new entry point reads cleanly. Callers still reach the API through `greet.ts`; nothing downstream changes shape.",
+        "This layer introduces the public greeting surface. `greet.ts` gains a [`shout()` helper](greet.ts:5-7) that composes over the existing `greet()`, so the two share one formatting path rather than drifting apart.\n\nThe fixture file [added.txt](added.txt) ships alongside as the smoke test — open it to confirm the new entry point reads cleanly. Callers still reach the API through `greet.ts`; nothing downstream changes shape.",
       ranges: [
         { file: "greet.ts", side: "additions", startLine: 4, endLine: 6 },
         { file: "added.txt", side: "additions", startLine: 1, endLine: 2 },
@@ -278,7 +278,7 @@ function fixtureOverview(): ReviewOverview {
   return {
     title: "Add a shout() greeting and refresh the notes",
     body: [
-      "The greeting API grows a second entry point. `greet.ts` keeps its existing `greet()` and gains `shout()` on top of it, so both share **one formatting path** instead of drifting apart as callers pick sides.",
+      "The greeting API grows a second entry point. `greet.ts` keeps its existing `greet()` and gains [shout()](greet.ts:5-7) on top of it, so both share **one formatting path** instead of drifting apart as callers pick sides — the template [it used to build inline](greet.ts:2@deletions) is gone.",
       "Everything else in the range is bookkeeping: [notes.txt](notes.txt) gets a copy pass, `added.txt` lands as the smoke test for the new entry point, and a dead file goes away. Read the greeting layer first — the rest only makes sense once the shape of the API is in your head.",
       "## Reading order",
       "- `greet.ts` first — the API is the argument of the change\n- [notes.txt](notes.txt) after, *only* if you own the docs\n- the deletion last; it explains itself",

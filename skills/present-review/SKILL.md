@@ -59,6 +59,13 @@ field — the overview body, a layer description, a comment body — is markdown
 A link to a path is read as a file reference and must name a file present in the diff, or the gate
 refuses the draft; a `https://` link is left alone and opens in the browser.
 
+A reference can name a line as well as a file: `[the caller](src/worker.ts:88)`, a range with
+`[…](src/worker.ts:88-91)`, and the pre-change side with `[…](src/worker.ts:88-91@deletions)`
+(additions is the default). The gate places that range against the diff the same way it places a
+comment anchor, so a line reference is checked rather than claimed — and the chip lands the reader
+on the line instead of on the file header. The suffix must be exactly that form; anything else in
+its place is refused rather than read as part of the filename.
+
 ## Writing the overview
 
 - Title the review with the change, not a category: "Replace the polling loop with a socket subscription", not "Networking changes".
@@ -101,7 +108,8 @@ beside the code, and a card that turns into a document stops being a comment.
 
 - Open the body with a bold three-to-seven-word claim on its own line — what is wrong, not where — and put the why in the paragraph under it. The rail previews that line as plain words, so spend it on the conclusion, not the approach to it.
 - Say what breaks and on what: the input, state, or sequence that reaches this code, and the wrong result it produces. If you cannot name one, you have a question and not a finding — say which.
-- One comment per issue. Anchor it to the clearest instance and name the other sites as file references (`[the same check in the worker](src/worker.ts)`), which the gate resolves against the diff. Do not repeat the paragraph at each one.
+- One comment per issue. Anchor it to the clearest instance and name the other sites as references (`[the same check in the worker](src/worker.ts:88-91)`), which the gate resolves against the diff. Do not repeat the paragraph at each one.
+- Name the second place with a line reference when the finding spans a path through the code: where a value is produced and where it is misused, the contract and the caller that breaks it. One end is the anchor and the other is the reference — a finding about two places is one comment that names both, not two comments.
 - A finding in code this change did not touch is still a finding, and the reader must not blame the change for it: anchor it to the nearest changed or context line in the same file and tag it `pre-existing`. A line inside a hunk's context places, which is why `rvw diff --json`'s spans are the floor and not the ceiling of what you can anchor to.
 
 Three optional fields sharpen a comment. All three default to absent, and absent is a real answer — a review that sets none of them reads exactly as it always did.

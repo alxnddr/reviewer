@@ -173,7 +173,12 @@ describe("parseReviewArtifact + validatePlacement", () => {
     expect(report.ok).toBe(false);
     if (report.ok) return;
     expect(report.problems).toEqual([
-      { kind: "unresolvedLink", layer: "1.1", label: "ghost", path: "does/not/exist.ts" },
+      {
+        kind: "unresolvedLink",
+        site: { at: "layer", layer: "1.1" },
+        label: "ghost",
+        path: "does/not/exist.ts",
+      },
     ]);
   });
 
@@ -191,7 +196,7 @@ describe("parseReviewArtifact + validatePlacement", () => {
     // Only the unresolved one is a problem: the link that names a file in the diff
     // renders as a live chip and passes.
     expect(report.problems).toEqual([
-      { kind: "overviewUnresolvedLink", label: "nowhere", path: "src/gone.ts" },
+      { kind: "unresolvedLink", site: { at: "overview" }, label: "nowhere", path: "src/gone.ts" },
     ]);
   });
 
@@ -201,6 +206,63 @@ describe("parseReviewArtifact + validatePlacement", () => {
     });
 
     expect(validate(JSON.stringify(artifact)).ok).toBe(true);
+  });
+
+  // The whole point of gating a line reference: it is the one "related location" that is
+  // proven to exist in the change, on both sides, by the same resolver a comment uses.
+  it("passes a line reference that places, on either side", () => {
+    const artifact = validArtifact({
+      overview: {
+        title: "Tour",
+        body: "Produced in [one](src/foo.ts:11-13), was [there](src/foo.ts:11@deletions).",
+      },
+    });
+
+    expect(validate(JSON.stringify(artifact)).ok).toBe(true);
+  });
+
+  it("flags a line reference whose range no hunk covers, with a comment's own locator", () => {
+    const artifact = validArtifact({
+      overview: { title: "Tour", body: "The caller in [foo](src/foo.ts:50-51) never awaits it." },
+    });
+
+    const report = validate(JSON.stringify(artifact));
+    expect(report.ok).toBe(false);
+    if (report.ok) return;
+    expect(report.problems).toEqual([
+      {
+        kind: "referenceOutdated",
+        site: { at: "overview" },
+        anchor: { file: "src/foo.ts", side: "additions", startLine: 50, endLine: 51 },
+      },
+    ]);
+  });
+
+  // The file is in the diff, so the old reading — the suffix as part of the filename —
+  // would have reported a missing file the author never named.
+  it("flags a suffix that is not a line range as malformed, naming it as written", () => {
+    const artifact = validArtifact({
+      layers: [
+        {
+          label: "Leaf",
+          summary: "child",
+          description: "See [the caller](src/bar.ts:forty).",
+          ranges: [{ file: "src/bar.ts", side: "additions", startLine: 2, endLine: 2 }],
+        },
+      ],
+    });
+
+    const report = validate(JSON.stringify(artifact));
+    expect(report.ok).toBe(false);
+    if (report.ok) return;
+    expect(report.problems).toEqual([
+      {
+        kind: "malformedReference",
+        site: { at: "layer", layer: "1" },
+        label: "the caller",
+        url: "src/bar.ts:forty",
+      },
+    ]);
   });
 
   it("flags a layer range outside any hunk and a layer range on an absent file as layerRangeOutdated", () => {

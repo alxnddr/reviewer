@@ -1,11 +1,49 @@
 import { createDebouncer } from "../../../shared/debounce";
+import type { ReviewSide } from "../../../shared/review";
+
+/** A scroll the reader asked for that the diff surface has not performed yet — the one
+ * kind that survives the surface not being mounted, because the click that asks for it is
+ * routinely the click that mounts it (both of these are reachable from the tour doc, which
+ * replaces the diff pane). The store holds one of these at a time and the hook consumes it;
+ * `slice.ts`'s `pendingScroll` is where the rest of that reasoning lives.
+ *
+ * One union rather than a field per kind: at most one of these can be outstanding, and two
+ * nullable fields would let a served comment jump leave a line jump standing to fire at
+ * whatever mounts next — the exact failure the request-not-a-flag design exists to prevent.
+ *
+ * `comment` names a finding and lets the hook resolve where it hosts (a placed one centres
+ * on its line, a stranded one lands on its file header). `line` names the place directly,
+ * already placed against the loaded diff by the action that asked — a prose reference has
+ * no annotation to look up, so the store resolves it and asks for nothing when it drifted. */
+export type PendingScroll =
+  | { kind: "comment"; commentId: string }
+  | ({ kind: "line" } & LineTarget);
+
+/** One line of one file, on one side: where a reference's chip lands. The line is the
+ * *placed* one, not the authored `startLine` — the action that builds this resolves the
+ * reference against the loaded diff first, so a target that exists is the only kind that
+ * ever reaches the surface. */
+export type LineTarget = { path: string; line: number; side: ReviewSide };
+
+/** Whether two requests are the same one. The hook reports back what it served and the
+ * store clears only that, so a jump the reader made in between is never dropped on the
+ * floor; a value compare rather than identity, because the request travels store → props →
+ * effect and nothing on that path promises to hand back the same object. */
+export function samePendingScroll(a: PendingScroll, b: PendingScroll): boolean {
+  switch (a.kind) {
+    case "comment":
+      return b.kind === "comment" && a.commentId === b.commentId;
+    case "line":
+      return b.kind === "line" && a.path === b.path && a.line === b.line && a.side === b.side;
+  }
+}
 
 /** What a session activation asks of the diff surface. The single scroll owner:
- * exactly one of these drives the one `scrollTo` per mount, so a pending comment, a
+ * exactly one of these drives the one `scrollTo` per mount, so a pending jump, a
  * persisted scroll position and a file-jump can never two-of-them fire. Absence is a
  * distinct arm — never `0`-as-maybe. */
 export type ScrollRestore =
-  | { kind: "comment"; commentId: string }
+  | PendingScroll
   | { kind: "position"; position: number }
   | { kind: "item"; filePath: string }
   | { kind: "none" };
@@ -13,21 +51,21 @@ export type ScrollRestore =
 /** The mount half of `use-diff-scroll`'s ranking — focus beats file-jump beats the
  * activation restore — as a value, since a mount is where all three can be true at once.
  *
- * A comment the reader focused whose scroll has not been performed yet wins outright:
- * that mount *is* the click (the tour doc unmounts the diff pane, so opening a finding
- * from it mounts the surface), and it names a line, which every arm below is a coarser
- * approximation of. Then position: a recorded scroll is the exact spot the reader left,
- * so it outranks the coarser file-jump. With no scroll but a focused file, jump to it;
- * with neither, the view starts at the top. A `scrollTop` of `0` is "top", which needs no
- * position restore, so it falls through to the file-jump / top arms — both
- * indistinguishable from a pixel-`0` scroll, so nothing is lost. */
+ * An outstanding request wins outright: that mount *is* the click (the tour doc unmounts
+ * the diff pane, so opening a finding or a reference from it mounts the surface), and it
+ * names a line, which every arm below is a coarser approximation of. Then position: a
+ * recorded scroll is the exact spot the reader left, so it outranks the coarser file-jump.
+ * With no scroll but a focused file, jump to it; with neither, the view starts at the top.
+ * A `scrollTop` of `0` is "top", which needs no position restore, so it falls through to
+ * the file-jump / top arms — both indistinguishable from a pixel-`0` scroll, so nothing is
+ * lost. */
 export function planScrollRestore(
   scrollTop: number,
   selectedFilePath: string | null,
-  pendingCommentScroll: string | null,
+  pending: PendingScroll | null,
 ): ScrollRestore {
-  if (pendingCommentScroll !== null) {
-    return { kind: "comment", commentId: pendingCommentScroll };
+  if (pending !== null) {
+    return pending;
   }
   if (scrollTop > 0) {
     return { kind: "position", position: scrollTop };

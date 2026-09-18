@@ -198,7 +198,7 @@ describe("emitReviewArtifact", () => {
     if (result.ok) return;
     expect(result.problems).toContainEqual({
       kind: "unresolvedLink",
-      layer: "1",
+      site: { at: "layer", layer: "1" },
       label: "ghost",
       path: "does/not/exist.ts",
     });
