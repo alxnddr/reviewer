@@ -35,12 +35,12 @@ async function launch(
   return { prefs: await import("./ui-prefs"), cells };
 }
 
-function storedDiffStyle(cells: Map<string, string>, key: string): unknown {
+function storedField(cells: Map<string, string>, key: string, field: string): unknown {
   const raw = cells.get(key);
   if (raw === undefined) {
     return undefined;
   }
-  return (JSON.parse(raw) as { state?: { diffStyle?: unknown } }).state?.diffStyle;
+  return (JSON.parse(raw) as { state?: Record<string, unknown> }).state?.[field];
 }
 
 afterEach(() => {
@@ -63,7 +63,7 @@ describe("the diff-layout preference", () => {
     prefs.useUiPrefsStore.getState().setDiffStyle("unified");
 
     expect(prefs.useUiPrefsStore.getState().diffStyle).toBe("unified");
-    expect(storedDiffStyle(cells, prefs.UI_PREFS_STORAGE_KEY)).toBe("unified");
+    expect(storedField(cells, prefs.UI_PREFS_STORAGE_KEY, "diffStyle")).toBe("unified");
     expect([...cells.keys()]).toEqual([prefs.UI_PREFS_STORAGE_KEY]);
   });
 
@@ -86,6 +86,7 @@ describe("the diff-layout preference", () => {
     expect(raw).toBeDefined();
     expect(Object.keys((JSON.parse(raw ?? "{}") as { state: object }).state)).toEqual([
       "diffStyle",
+      "railCollapsed",
     ]);
   });
 
@@ -115,5 +116,55 @@ describe("the diff-layout preference", () => {
     expect(prefs.useUiPrefsStore.getState().diffStyle).toBe("unified");
 
     warn.mockRestore();
+  });
+});
+
+describe("the rail-collapsed preference", () => {
+  it("starts with the rail showing, and writes nothing until it is flipped", async () => {
+    const { prefs, cells } = await launch();
+
+    expect(prefs.useUiPrefsStore.getState().railCollapsed).toBe(false);
+    expect(cells.has(prefs.UI_PREFS_STORAGE_KEY)).toBe(false);
+  });
+
+  it("comes back put away after a relaunch — a rail is not a per-session thing", async () => {
+    const first = await launch();
+    first.prefs.useUiPrefsStore.getState().toggleRail();
+    expect(first.prefs.useUiPrefsStore.getState().railCollapsed).toBe(true);
+
+    const second = await launch(Object.fromEntries(first.cells));
+
+    expect(second.prefs.useUiPrefsStore.getState().railCollapsed).toBe(true);
+  });
+
+  it("shares the one key with the layout choice", async () => {
+    const { prefs, cells } = await launch();
+
+    prefs.useUiPrefsStore.getState().setRailCollapsed(true);
+
+    expect(storedField(cells, prefs.UI_PREFS_STORAGE_KEY, "railCollapsed")).toBe(true);
+    expect([...cells.keys()]).toEqual([prefs.UI_PREFS_STORAGE_KEY]);
+  });
+
+  it.each([
+    ["a string that looks like one", '{"state":{"railCollapsed":"true"},"version":0}'],
+    ["a number", '{"state":{"railCollapsed":1},"version":0}'],
+    ["a key written without the field", '{"state":{"diffStyle":"unified"},"version":0}'],
+  ])("falls back to showing the rail on %s", async (_label, raw) => {
+    const { prefs, cells } = await launch({ "reviewer:ui": raw });
+
+    expect(prefs.useUiPrefsStore.getState().railCollapsed).toBe(false);
+    expect(cells.get("reviewer:ui")).toBe(raw);
+  });
+
+  // The salvage is per key, not per file: the reader edited one field into nonsense and keeps
+  // the other choice they made. `shared/settings.ts` states the same rule for settings on disk.
+  it("keeps a readable layout choice beside an unreadable rail flag", async () => {
+    const { prefs } = await launch({
+      "reviewer:ui": '{"state":{"diffStyle":"unified","railCollapsed":"yes"},"version":0}',
+    });
+
+    expect(prefs.useUiPrefsStore.getState().diffStyle).toBe("unified");
+    expect(prefs.useUiPrefsStore.getState().railCollapsed).toBe(false);
   });
 });

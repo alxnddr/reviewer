@@ -119,6 +119,7 @@ export function makeBridge(overrides: Partial<ReviewerBridge> = {}): ReviewerBri
     onOpenReviewCommand: vi.fn().mockReturnValue(() => {}),
     onOpenRecentReviewsCommand: vi.fn().mockReturnValue(() => {}),
     onOpenSettingsCommand: vi.fn().mockReturnValue(() => {}),
+    onToggleSidebarCommand: vi.fn().mockReturnValue(() => {}),
     onExportReviewJsonCommand: vi.fn().mockReturnValue(() => {}),
     onExportReviewMarkdownCommand: vi.fn().mockReturnValue(() => {}),
     onCopyCommentPromptCommand: vi.fn().mockReturnValue(() => {}),

@@ -66,6 +66,10 @@ export const IpcEvent = {
   // ⌘, — the app menu's Settings… item. A menu command like the rest so the chord fires from
   // inside a text field and under a modal, where the window handlers stand down.
   menuOpenSettings: "menu:open-settings",
+  // ⌘B — View ▸ Toggle Sidebar. A menu command for the reason ⌘, is one: the rail is most
+  // worth putting away while the diff is being read *and written about*, and a window key
+  // handler is deaf inside the comment editor and under a modal.
+  menuToggleSidebar: "menu:toggle-sidebar",
   // Export commands: like the open commands they carry no data — the
   // renderer owns the serialize→save flow the same way it owns the open flow.
   menuExportReviewJson: "menu:export-review-json",
@@ -205,6 +209,8 @@ export type ReviewerBridge = {
   onOpenRecentReviewsCommand: (listener: () => void) => () => void;
   /** Subscribes to the Settings… command (⌘,); returns unsubscribe. */
   onOpenSettingsCommand: (listener: () => void) => () => void;
+  /** Subscribes to the View ▸ Toggle Sidebar command (⌘B); returns unsubscribe. */
+  onToggleSidebarCommand: (listener: () => void) => () => void;
   /** Subscribes to the File → Export Review (.reviewer.json) command; unsubscribe. */
   onExportReviewJsonCommand: (listener: () => void) => () => void;
   /** Subscribes to the File → Export Review as Markdown command; unsubscribe. */

@@ -172,15 +172,25 @@ export function installApplicationMenu(): void {
       ],
     },
     { role: "editMenu" },
-    // Spelled out rather than `role: "viewMenu"`, for one item: the stock View menu binds
-    // Force Reload to ⇧⌘R, which is Recent Reviews above. Two items on one accelerator is
+    // Spelled out rather than `role: "viewMenu"`, originally for one item: the stock View menu
+    // binds Force Reload to ⇧⌘R, which is Recent Reviews above. Two items on one accelerator is
     // resolved by menu order — File comes first, so the picker did win — but that is a
     // coincidence of template order holding up an advertised shortcut, and the View menu
     // sat there naming ⇧⌘R as something else. Force Reload is a devtools affordance nobody
-    // reviewing a diff reaches for; plain Reload keeps ⌘R and the collision goes away.
+    // reviewing a diff reaches for; plain Reload keeps ⌘R and the collision goes away. The
+    // sidebar toggle then needed somewhere to live, and this is already that menu.
     {
       label: "View",
       submenu: [
+        // First, above the stock roles, where macOS keeps an app's own view toggles. Through
+        // the tab command (focused window only): with no window there is no rail to put away,
+        // and unlike ⌘T nothing should be created to receive this.
+        {
+          label: "Toggle Sidebar",
+          accelerator: "CmdOrCtrl+B",
+          click: () => requestTabCommand(IpcEvent.menuToggleSidebar),
+        },
+        { type: "separator" },
         { role: "reload" },
         { role: "toggleDevTools" },
         { type: "separator" },

@@ -74,7 +74,18 @@ describe("SHORTCUT_SHEET", () => {
     expect(keysOf("editor")).toEqual(["⌘⏎", "Esc"]);
     // And nothing under Windows needs a surface focused to fire: every one of them is a menu
     // accelerator.
-    expect(keysOf("windows")).toEqual(["⌘O", "⇧⌘O", "⇧⌘R", "⌘,", "⌘T", "⌘1", "⌘9", "⌃⇥", "⌘W"]);
+    expect(keysOf("windows")).toEqual([
+      "⌘O",
+      "⇧⌘O",
+      "⇧⌘R",
+      "⌘,",
+      "⌘B",
+      "⌘T",
+      "⌘1",
+      "⌘9",
+      "⌃⇥",
+      "⌘W",
+    ]);
   });
 });
 

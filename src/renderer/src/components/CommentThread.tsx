@@ -9,7 +9,6 @@ import { CommentEvidence } from "@/components/CommentEvidence";
 import { CommentMeta } from "@/components/CommentMeta";
 import { CommentMark, CommentMarkMenu } from "@/components/CommentMark";
 import { CopyCommentPromptButton } from "@/components/CopyPromptButton";
-import { OpenInEditorButton } from "@/components/OpenInEditorButton";
 import { commentLocation } from "@/lib/comment-location";
 import { cn } from "@/lib/utils";
 
@@ -122,25 +121,22 @@ export function CommentThread({
       {/* Its own popover surface, so it reads as hovering above the diff rather than
           printed on it — the same treatment the stepper and the find bar take. */}
       <div className="absolute right-2 bottom-full mb-1 flex items-center gap-0.5 rounded-lg bg-popover p-0.5 opacity-0 shadow-md ring-1 ring-foreground/10 transition-opacity duration-(--duration-fast) group-hover/comment:opacity-100 focus-within:opacity-100">
-        {/* Five glyphs on a surface that only appears on hover: whichever one the reader is
+        {/* Four glyphs on a surface that only appears on hover: whichever one the reader is
             reaching for, they arrived without a label. `top`, so the popup opens away from
             the card it is about rather than over the comment body.
 
-            The mark leads, then open in editor, then Copy, and Discard trails — the order of how often they
-            are wanted and the reverse of how much they cost. It is also the only order that
-            takes a new glyph without moving the rest: the strip is right-anchored and grows
-            leftward, so an insertion at this end leaves Copy, Edit and Discard under the
-            hand that already knows where they are. The open lands on the comment's first
-            line, translated to the file on disk (`lib/editor-target.ts`). */}
+            The mark leads, then Copy, then Edit, and Discard trails — the order of how often
+            they are wanted and the reverse of how much they cost. Every one of them is about
+            *this comment*, which is the set's rule and the reason there were five: an open-in-
+            editor glyph sat second, and an external-link arrow inside a card whose subject is
+            the comment reads as a link to the comment while doing something else entirely.
+            `E` opens the focused comment's line (`App.tsx`, through `lib/editor-target.ts`),
+            so the capability is where it was advertised and the card no longer claims it.
+
+            The order is also the only one that takes a new glyph without moving the rest: the
+            strip is right-anchored and grows leftward, so an insertion at this end leaves
+            Copy, Edit and Discard under the hand that already knows where they are. */}
         <CommentMarkMenu resolution={resolution} onSetResolution={onSetResolution} />
-        <OpenInEditorButton
-          path={comment.file}
-          anchorSide={comment.side}
-          anchorLine={comment.startLine}
-          hintSide="top"
-          hintAlign="start"
-          className="hover:bg-foreground/10 hover:text-foreground dark:hover:bg-foreground/10"
-        />
         <CopyCommentPromptButton commentId={comment.id} />
         <TooltipHint content="Edit comment" side="top" align="center">
           <Button

@@ -4,13 +4,16 @@ import type { EditorOpenFailure, EditorOpenRequest } from "../../../shared/edito
 // Open in Editor, renderer side: one action that asks main, and the one refusal it is
 // showing. Its own store rather than a tenth review slice because nothing here belongs to a
 // session — the request names one, but the banner that reports a refusal is app-level, like
-// the open and export failures, and the three controls that fire it (the file header, the
-// comment toolbar, the E key) should not each have to thread a callback through DiffScreen
-// to reach a session action.
+// the open and export failures, and the two controls that fire it (the file header and the E
+// key) should not each have to thread a callback through DiffScreen to reach a session action.
+// There were three: a comment's hover toolbar carried the button as well, until the glyph's
+// subject there (the comment) and its action (the file) were read as the disagreement they
+// are. `E` still opens the focused *comment's* line — `lib/editor-target.ts` is what makes
+// one key mean both — so the store's callers shrank and its reach did not.
 //
 // Every pre-check the renderer could make — frozen session, no editor chosen — is left to
-// main, which has to make it anyway and answers with the same typed code. The buttons still
-// read those two facts to disable themselves with a hint (`OpenInEditorButton`), but the E
+// main, which has to make it anyway and answers with the same typed code. The button still
+// reads those two facts to disable itself with a hint (`OpenInEditorButton`), but the E
 // key does not, and a press that cannot be honoured is explained on the banner rather than
 // swallowed.
 

@@ -67,6 +67,7 @@ const bridge: ReviewerBridge = {
   onOpenRecentReviewsCommand: (listener) =>
     subscribeCommand(IpcEvent.menuOpenRecentReviews, listener),
   onOpenSettingsCommand: (listener) => subscribeCommand(IpcEvent.menuOpenSettings, listener),
+  onToggleSidebarCommand: (listener) => subscribeCommand(IpcEvent.menuToggleSidebar, listener),
   onExportReviewJsonCommand: (listener) =>
     subscribeCommand(IpcEvent.menuExportReviewJson, listener),
   onExportReviewMarkdownCommand: (listener) =>

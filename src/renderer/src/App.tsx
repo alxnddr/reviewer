@@ -25,6 +25,7 @@ import { useOnboardingStore } from "@/stores/onboarding";
 import { useRecentReviewsStore } from "@/stores/recent-reviews";
 import { useSettingsStore } from "@/stores/settings";
 import { selectActiveSlice, useReviewStore } from "@/stores/review";
+import { useUiPrefsStore } from "@/stores/ui-prefs";
 
 /** `o` toggles the tour doc from anywhere in a review — into it from the diff, and back
  * out to the full diff from inside it. Mounted at the app level (not in either screen)
@@ -243,6 +244,14 @@ function useSettingsCommand(): void {
   useEffect(() => window.reviewer?.onOpenSettingsCommand(toggleDialog), [toggleDialog]);
 }
 
+/** The rail, on the View menu's ⌘B command. Mounted here rather than in AppShell, beside the
+ * other menu subscriptions, because the preference it flips is app-wide and outlives the shell
+ * branch that happens to be rendering: a chord pressed on a start tab still answers. */
+function useSidebarCommand(): void {
+  const toggleRail = useUiPrefsStore((state) => state.toggleRail);
+  useEffect(() => window.reviewer?.onToggleSidebarCommand(toggleRail), [toggleRail]);
+}
+
 export function App(): ReactElement {
   const activeSessionId = useReviewStore((state) => state.activeSessionId);
   // The start screen is the shell's content either because there is no review to show, or
@@ -281,6 +290,7 @@ export function App(): ReactElement {
   useOnboardingLifecycle();
   useRecentReviewsCommand();
   useSettingsCommand();
+  useSidebarCommand();
 
   useEffect(() => {
     const bridge = window.reviewer;
