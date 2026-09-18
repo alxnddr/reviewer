@@ -8,6 +8,7 @@ import {
   isFullyRead,
   layerTally,
   markFilesRead,
+  nextUnreadFile,
   nextUnreadLayer,
   NO_COLLAPSED_FILES,
   NO_READ_FILES,
@@ -215,6 +216,42 @@ describe("nextUnreadLayer", () => {
   it("resumes into a group before the section inside it, matching document order", () => {
     const nested = [layer("group", []), layer("group-bar", [BAR_RANGE], "group")];
     expect(nextUnreadLayer(files, nested, NO_READ_FILES)).toBe("group");
+  });
+});
+
+describe("nextUnreadFile", () => {
+  const files = parse(PATCH);
+  const foo = fileAt(files, "src/foo.ts");
+  const bar = fileAt(files, "src/bar.ts");
+
+  it("walks forward from the file the reader is on", () => {
+    expect(nextUnreadFile(files, NO_READ_FILES, "src/foo.ts")).toBe("src/bar.ts");
+  });
+
+  it("skips what is already read rather than offering it again", () => {
+    const marks = markFilesRead(NO_READ_FILES, [bar], true);
+    expect(nextUnreadFile(files, marks, "src/foo.ts")).toBeNull();
+  });
+
+  it("stays put rather than wrapping back to a file behind the reader", () => {
+    // foo is unread and *before* bar: a wrap would answer it, which is the surface sending
+    // a reader who just finished the last file back to the top of the review.
+    expect(nextUnreadFile(files, NO_READ_FILES, "src/bar.ts")).toBeNull();
+  });
+
+  it("starts at the top when nothing is focused, or when the focus is outside the set", () => {
+    expect(nextUnreadFile(files, NO_READ_FILES, null)).toBe("src/foo.ts");
+    expect(nextUnreadFile(files, NO_READ_FILES, "src/elsewhere.ts")).toBe("src/foo.ts");
+    expect(nextUnreadFile(files, markFilesRead(NO_READ_FILES, [foo], true), null)).toBe(
+      "src/bar.ts",
+    );
+  });
+
+  it("reads honestly unread again once a file's content moved under its mark", () => {
+    // The mark was made against the old blob, so the re-derived file is unread and ⇧R
+    // offers it — the same rule `isFileRead` applies everywhere else.
+    const marks = markFilesRead(NO_READ_FILES, [foo], true);
+    expect(nextUnreadFile(parse(PATCH_FOO_CHANGED), marks, null)).toBe("src/foo.ts");
   });
 });
 

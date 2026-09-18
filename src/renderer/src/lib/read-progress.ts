@@ -210,3 +210,28 @@ export function nextUnreadLayer(
   }
   return null;
 }
+
+/** The file-level twin of the above: the next file *after* `from` that is still unread, in
+ * the order given — which is the soloed order, the one the surface is showing. This is where
+ * `⇧R` lands after it marks.
+ *
+ * Forward only, and null rather than a wrap. A reader who marks the last unread file has
+ * just finished the thing they were reading, and sending them back to its top would be the
+ * surface undoing the gesture: null is the stay-put answer, not a failure to find one.
+ *
+ * A `from` that names no file in the set — nothing focused yet, or a focus left outside the
+ * solo — starts the walk at the top, the same fallback `selectAdjacentFile` makes. */
+export function nextUnreadFile(
+  files: readonly PatchFile[],
+  readFiles: ReadFiles,
+  from: string | null,
+): string | null {
+  const start = files.findIndex((file) => file.path === from);
+  for (let index = start + 1; index < files.length; index += 1) {
+    const file = files[index];
+    if (file !== undefined && !isFileRead(readFiles, file)) {
+      return file.path;
+    }
+  }
+  return null;
+}

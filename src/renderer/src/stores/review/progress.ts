@@ -4,9 +4,17 @@ import type { PatchFile } from "../../../../shared/diff/patch";
 import { findLayer, soloFiles } from "../../../../shared/layers";
 import type { SessionId } from "../../../../shared/session";
 import type { CommentResolution } from "../../../../shared/review-progress";
-import { isFileRead, markFilesRead, withCollapsed } from "../../lib/read-progress";
+import { isFileRead, markFilesRead, nextUnreadFile, withCollapsed } from "../../lib/read-progress";
 import { withResolution } from "../../../../shared/comment-resolution";
-import { commentFocus, setSlice, sliceSolo, withSlice, type Getter, type Setter } from "./slice";
+import {
+  commentFocus,
+  setSlice,
+  sliceSolo,
+  withSlice,
+  type Getter,
+  type SessionSlice,
+  type Setter,
+} from "./slice";
 import type { ReviewState } from "./state";
 
 // Where the reader is in the diff, and how much of it they have been through: the focused
@@ -30,6 +38,16 @@ export type ProgressSlice = {
   /** The `r` gesture: flip the focused file (or a named one). Pure — it moves nothing,
    * so the reader stays exactly where they were reading. */
   toggleFileRead: (path?: string | null, sessionId?: SessionId) => void;
+  /** The `⇧R` gesture: mark the focused file read and land on the next file that still
+   * is not — `r` and a search for the next unread file, as one press, since that is the
+   * pair a reader repeats a few dozen times a review.
+   *
+   * Deliberately a mark rather than a flip: a gesture that carries the reader onward cannot
+   * also be the one that takes a mark back, since the file it un-marked would be off screen
+   * by the time they saw what happened. With nothing left unread ahead it marks and stays,
+   * which is `r` exactly — see `nextUnreadFile` for why it does not wrap. No focused file is
+   * nothing to mark and so nothing to do, the same silence `r` answers with. */
+  markFileReadAndAdvance: (sessionId?: SessionId) => void;
   /** Mark a whole chapter read or unread: every file in the layer's *extent* — itself
    * plus everything nested under it, the same subset soloing shows — so completing a
    * group and completing its sections are the same act. The synthetic "not covered by
@@ -71,13 +89,20 @@ export type ProgressSlice = {
  * their input on a no-op) never reaches the store, so a redundant click costs no render and
  * — since the write-back rides on the change — no disk write either; and what did change is
  * persisted, through the same debounced write-back as every other session input, so a reader
- * who quits mid-review comes back to the review mid-read. */
+ * who quits mid-review comes back to the review mid-read.
+ *
+ * `also` is for the one gesture that marks *and* moves (`⇧R`): it rides in the same patch so
+ * the mark, the fold and the new focus are one store write and one render rather than three
+ * — and so the write-back that carries them is one too. Whether anything moved is `setSlice`'s
+ * answer, not a comparison repeated here, because a patch this function does not know the
+ * shape of is exactly what a hand-written guard would go stale against. */
 function applyRead(
   set: Setter,
   get: Getter,
   sessionId: SessionId,
   files: readonly PatchFile[],
   read: boolean,
+  also?: Partial<SessionSlice>,
 ): void {
   const slice = get().sessions[sessionId];
   if (slice === undefined) {
@@ -89,11 +114,9 @@ function applyRead(
     files.map((file) => file.path),
     read,
   );
-  if (readFiles === slice.readFiles && collapsedFiles === slice.collapsedFiles) {
-    return;
+  if (setSlice(set, get, sessionId, { readFiles, collapsedFiles, ...also })) {
+    get().scheduleSessionWriteBack(sessionId);
   }
-  setSlice(set, get, sessionId, { readFiles, collapsedFiles });
-  get().scheduleSessionWriteBack(sessionId);
 }
 
 export const createProgressSlice: StateCreator<ReviewState, [], [], ProgressSlice> = (
@@ -183,6 +206,38 @@ export const createProgressSlice: StateCreator<ReviewState, [], [], ProgressSlic
         return;
       }
       applyRead(set, get, id, [file], !isFileRead(slice.readFiles, file));
+    });
+  },
+
+  markFileReadAndAdvance: (sessionId) => {
+    withSlice(get, sessionId, (slice, id) => {
+      if (slice.diff.phase !== "loaded") {
+        return;
+      }
+      const file = slice.diff.files.find((candidate) => candidate.path === slice.selectedFilePath);
+      if (file === undefined) {
+        return;
+      }
+      // The target is read off the marks as they stand rather than after the mark lands,
+      // and the two answers are the same one: the walk starts strictly *after* the file
+      // being marked, so the mark about to be made is never the mark it would stop on.
+      //
+      // The soloed order, not the whole diff, for the reason `selectAdjacentFile` walks it
+      // too — with a chapter soloed, the files off screen are not files the reader is being
+      // asked to read, and advancing into one is the selection leaving the surface.
+      const next = nextUnreadFile(sliceSolo(slice).files, slice.readFiles, file.path);
+      applyRead(
+        set,
+        get,
+        id,
+        [file],
+        true,
+        // Moving is moving: it dismisses the comment walk and leaves the tour doc, exactly
+        // as j/k do, since a reader who asked for the next file is asking to see it.
+        next === null
+          ? undefined
+          : { selectedFilePath: next, ...commentFocus(null), overviewOpen: false },
+      );
     });
   },
 

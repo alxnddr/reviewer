@@ -58,9 +58,9 @@ function useOverviewShortcut(): void {
 }
 
 /** j/k step the focused file, n/p walk the comments, Escape ends the walk, r marks the focused
- * file read, e opens the focused file (or the focused comment's line) in the chosen editor —
- * the review's whole letter vocabulary, all of it acting on the session rather than on
- * whatever is painted.
+ * file read and ⇧R marks it and moves on to the next unread one, e opens the focused file (or
+ * the focused comment's line) in the chosen editor — the review's whole letter vocabulary, all
+ * of it acting on the session rather than on whatever is painted.
  *
  * They live here, beside `o` and F6, rather than in DiffScreen, which is where they used to be
  * and where they were only half true: DiffScreen is unmounted the whole time the tour doc is up,
@@ -73,6 +73,7 @@ function useReviewShortcuts(): void {
   const stepComment = useReviewStore((state) => state.stepComment);
   const clearActiveComment = useReviewStore((state) => state.clearActiveComment);
   const toggleFileRead = useReviewStore((state) => state.toggleFileRead);
+  const markFileReadAndAdvance = useReviewStore((state) => state.markFileReadAndAdvance);
   const openInEditor = useEditorStore((state) => state.open);
 
   useEffect(() => {
@@ -118,6 +119,17 @@ function useReviewShortcuts(): void {
           event.preventDefault();
           toggleFileRead();
           break;
+        // ⇧R is that same mark asked for *with* the move — r then j, which is the pair a
+        // reader repeats a few dozen times a review, except that it lands on the next file
+        // they still owe rather than the next one along. Shift is what keeps both gestures:
+        // moving stays something you ask for, so `r` above can go on not moving.
+        //
+        // Not guarded on `event.shiftKey`: `R` *is* the shifted key, and the switch above
+        // reads `r`, so the two cases cannot take each other's press.
+        case "R":
+          event.preventDefault();
+          markFileReadAndAdvance();
+          break;
         // No preventDefault — Escape is shared (the layer tree clears its solo with it, a
         // field clears its filter), and this handler only ever ends the comment walk.
         case "Escape":
@@ -129,7 +141,14 @@ function useReviewShortcuts(): void {
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [selectAdjacentFile, stepComment, clearActiveComment, toggleFileRead, openInEditor]);
+  }, [
+    selectAdjacentFile,
+    stepComment,
+    clearActiveComment,
+    toggleFileRead,
+    markFileReadAndAdvance,
+    openInEditor,
+  ]);
 }
 
 /** F6 (⇧F6 backwards) steps focus between the shell's big regions — the layer tree, the

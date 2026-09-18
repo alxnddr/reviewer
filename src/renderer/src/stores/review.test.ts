@@ -3141,6 +3141,61 @@ describe("reading progress", () => {
     expect(active().readFiles.size).toBe(0);
   });
 
+  it("`⇧R` marks the focused file and lands on the next one still unread", () => {
+    store.getState().setFileRead("img.png", true);
+    store.getState().markFileReadAndAdvance();
+
+    expect([...active().readFiles.keys()].toSorted()).toEqual(["greet.ts", "img.png"]);
+    // img.png is the next file along and is read, so it is not the next file *owed*: the
+    // whole difference between this key and `r` then `j`.
+    expect(active().selectedFilePath).toBe("newname.txt");
+  });
+
+  it("marks and stays put with nothing unread ahead, rather than wrapping to the top", () => {
+    // notes.txt is the diff's last file.
+    store.getState().selectFile("notes.txt");
+    store.getState().markFileReadAndAdvance();
+
+    // added.txt and everything between it and here is unread, and the reader is not sent
+    // back to it: they just finished the review.
+    expect(active().selectedFilePath).toBe("notes.txt");
+    expect([...active().readFiles.keys()]).toEqual(["notes.txt"]);
+  });
+
+  it("advances in the soloed order, so the selection never leaves the surface", () => {
+    store.getState().selectFile("added.txt");
+    store.getState().setActiveLayer("greeting");
+    store.getState().markFileReadAndAdvance();
+
+    // doomed.txt sits between the two in the diff and is unread, but the soloed chapter
+    // does not carry it — advancing into it would be the selection leaving the screen.
+    expect(active().selectedFilePath).toBe("greet.ts");
+  });
+
+  it("moving is moving: it dismisses the comment walk and leaves the tour doc", () => {
+    patchActive({ overviewOpen: true, activeCommentId: ID_A, pendingCommentScroll: ID_A });
+    store.getState().markFileReadAndAdvance();
+
+    expect(active().selectedFilePath).toBe("img.png");
+    expect(active().overviewOpen).toBe(false);
+    expect(active().activeCommentId).toBeNull();
+  });
+
+  it("costs no write-back once there is nothing left to mark and nowhere left to go", () => {
+    const bridge = makeBridge({});
+    vi.stubGlobal("window", { reviewer: bridge });
+    store.getState().selectFile("notes.txt");
+    store.getState().setFileRead("notes.txt", true);
+    store.getState().flushWriteBacks();
+    vi.mocked(bridge.updateSession).mockClear();
+
+    // Read already, and the last file: the patch moves nothing, so `setSlice` declines the
+    // write and the write-back that rides on it never happens.
+    store.getState().markFileReadAndAdvance();
+    store.getState().flushWriteBacks();
+    expect(bridge.updateSession).not.toHaveBeenCalled();
+  });
+
   it("marks a whole layer's extent, and only the files the diff carries", () => {
     store.getState().setLayerRead("greeting", true);
     expect([...active().readFiles.keys()].toSorted()).toEqual(["added.txt", "greet.ts"]);

@@ -73,6 +73,14 @@ const SHORTCUTS = {
   // The sheet says which file; the hint on the checkbox says which way it is about to go
   // ("Mark read" / "Mark unread"), so that one passes its own label.
   "file.read": { group: "reading", keys: ["R"], label: "Mark the focused file read" },
+  // Named for both halves, and for "unread" rather than "next", because the two keys above
+  // are what a reader would otherwise reach for: this is not R and it is not J, and a row
+  // that said "Mark read and move on" would leave which of the two it moves like unanswered.
+  "file.readNext": {
+    group: "reading",
+    keys: ["⇧R"],
+    label: "Mark the focused file read and go to the next unread one",
+  },
   "overview.toggle": { group: "reading", keys: ["O"], label: "Open or close the overview" },
   // "the focused file" is the file j/k stand on — or, while a comment is focused, that
   // comment's line — which is why this sits with the reading keys and not the app's windows.

@@ -226,23 +226,30 @@ export type Getter = () => ReviewState;
  * `selectFile`, which write unconditionally — reallocated the whole `sessions` record,
  * which is what turned a `j`/`k` at the end of a file list, or a brush drag's 60 Hz of
  * `previewBrush` calls, into a `sessions` identity change on every tick and re-rendered
- * every subscriber of the whole record (see `TabBar`). */
+ * every subscriber of the whole record (see `TabBar`).
+ *
+ * It answers whether it wrote, which is what a caller whose *follow-up* work rides on the
+ * write needs — `applyRead` schedules the session write-back only when something moved, and
+ * asking here is how it avoids keeping a second copy of this comparison that a later field
+ * added to its patch would silently fall out of. Callers with nothing to do afterwards
+ * ignore it. */
 export function setSlice(
   set: Setter,
   get: Getter,
   sessionId: SessionId,
   partial: Partial<SessionSlice>,
-): void {
+): boolean {
   const sessions = get().sessions;
   const slice = sessions[sessionId];
   if (slice === undefined) {
-    return;
+    return false;
   }
   const keys = Object.keys(partial) as (keyof SessionSlice)[];
   if (keys.every((key) => Object.is(slice[key], partial[key]))) {
-    return;
+    return false;
   }
   set({ sessions: { ...sessions, [sessionId]: { ...slice, ...partial } } });
+  return true;
 }
 
 /** The resolve-and-guard every session action opens with, stated once: default to the session
