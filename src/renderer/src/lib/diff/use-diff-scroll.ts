@@ -23,11 +23,18 @@ import { createScrollCapture, planScrollRestore, type PendingScroll } from "@/li
 // scroll.
 //
 // The two guards are not interchangeable. A ref-compare answers "did this change while I
-// was mounted", which is unanswerable about the commit that mounts you — and focusing a
-// comment (or following a prose reference) from the tour doc is exactly that commit, since
-// the doc replaces the diff pane (App.tsx). So that scroll is a request the store holds
-// (`pendingScroll`) and this hook consumes, and only the two that are genuinely about
-// *change while mounted* — the file jump and the layer reset — compare against a ref.
+// was mounted", which is unanswerable about the commit that mounts you — and every way into
+// the diff from the tour doc is exactly that commit, since the doc replaces the diff pane
+// (App.tsx). So a scroll the reader *asked* for is a request the store holds
+// (`pendingScroll`) and this hook consumes, whichever of the three it is.
+//
+// The file jump is the one served both ways, and the split is what the two guards are for.
+// A file the reader picked arrives as a request (`fileFocus`), because that pick is
+// routinely the mount. A file focus that changes for a reason the reader did not ask for —
+// a reload whose fresh diff no longer carries the focused path, so the store moves it
+// (`effects.ts`) — has no request and no reader to disappoint, and the ref-compare below
+// still catches it. They meet at `lastJumpedPath`, which the request claims, so the two can
+// never both scroll. The layer reset is a pure ref-compare for the same reason.
 
 export type DiffScrollOptions = {
   /** The session's persisted scroll position, applied once on mount. Read
@@ -35,9 +42,9 @@ export type DiffScrollOptions = {
    * activation, and later updates to it are this hook's own captures. */
   restoreScrollTop: number;
   selectedFilePath: string | null;
-  /** The jump this surface still owes: a focused comment (via `n`/`p` or the sidebar list)
-   * or the line a prose reference's chip asked for, or null when there is none
-   * outstanding. Consumed, not watched — see above. */
+  /** The jump this surface still owes: a focused comment (via `n`/`p` or the sidebar list),
+   * the line a prose reference's chip asked for, or the file the reader picked, or null when
+   * there is none outstanding. Consumed, not watched — see above. */
   pendingScroll: PendingScroll | null;
   /** The soloed layer, or null for the full diff. Its *change* resets the diff to the top. */
   activeLayerId: string | null;
@@ -76,8 +83,8 @@ export function useDiffScroll(
   // The one scroll owner on activation. The empty deps make this a mount-once
   // snapshot of the persisted position — a mount IS an activation (the view is
   // keyed per session), and later changes to those props are this view's own
-  // captures, not new activations. A recorded position wins over the file-jump, and an
-  // outstanding comment jump over both, so only one scrollTo ever fires. Instant — a tab
+  // captures, not new activations. A recorded position wins over the restored file focus,
+  // and an outstanding request over both, so only one scrollTo ever fires. Instant — a tab
   // switch is a keyboard/click action, never animated. Position restore stays correct
   // through virtualized measurement: CodeView re-anchors the settled scroll as item
   // heights resolve, so no second call is needed.
@@ -90,9 +97,10 @@ export function useDiffScroll(
     const restore = planScrollRestore(restoreScrollTop, selectedFilePath, pendingScroll);
     switch (restore.kind) {
       case "comment":
+      case "file":
       case "line":
-        // The request effect below owns both — it runs in this same commit and clears the
-        // request. Naming the arms here is what keeps the restore from *also* firing and
+        // The request effect below owns all three — it runs in this same commit and clears
+        // the request. Naming the arms here is what keeps the restore from *also* firing and
         // stranding the reader at the top of the target's file.
         return;
       case "position":
@@ -114,11 +122,15 @@ export function useDiffScroll(
   }, []);
   // oxlint-enable react-hooks/exhaustive-deps
 
-  // Post-activation file jumps (tree click, j/k). Gated on an actual change of the
-  // focused file from the last one jumped to — seeded with the activation snapshot,
-  // so the mount (owned by the restore above) is a no-op and the two never both
-  // fire. A value-compare, not a fire-once flag: a StrictMode remount replays with
-  // the same value and stays inert, where a boolean guard would flip and jump.
+  // A focused file that moved without anyone asking: a reload whose fresh diff no longer
+  // carries the old path re-points the focus (`effects.ts`), and the reader should be
+  // looking at what they are now focused on. Gated on an actual change of the focused file
+  // from the last one jumped to — seeded with the activation snapshot, so the mount (owned
+  // by the restore above) is a no-op and the two never both fire. A value-compare, not a
+  // fire-once flag: a StrictMode remount replays with the same value and stays inert, where
+  // a boolean guard would flip and jump. The reader's own picks (tree click, j/k, a file row
+  // in the doc) come through the request effect instead and claim this ref on their way, so
+  // this never serves them twice.
   const lastJumpedPath = useRef(selectedFilePath);
 
   // Put a comment's host row under the reader's eye. A placed comment centres on its
@@ -193,6 +205,21 @@ export function useDiffScroll(
       // reference the diff drifted past never becomes a request at all. Centred and
       // instant like a comment's, and through the same `type: "line"` target, which is what
       // makes it land on the line in the split and unified layouts alike.
+      // The plainest of the three, and the one the ref-compare effect below would also
+      // make — same target, same alignment, so which of the two serves it is invisible.
+      // What the request buys is the mount the compare cannot see: from the tour doc this
+      // is the whole of the jump, and without it the restore took the commit and left the
+      // reader wherever the session's recorded scroll was.
+      case "file": {
+        lastJumpedPath.current = pendingScroll.path;
+        handleRef.current?.scrollTo({
+          type: "item",
+          id: pendingScroll.path,
+          align: "start",
+          behavior: "instant",
+        });
+        return;
+      }
       case "line": {
         lastJumpedPath.current = pendingScroll.path;
         handleRef.current?.scrollTo({

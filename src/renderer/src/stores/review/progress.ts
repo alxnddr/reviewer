@@ -7,7 +7,7 @@ import type { CommentResolution } from "../../../../shared/review-progress";
 import { isFileRead, markFilesRead, nextUnreadFile, withCollapsed } from "../../lib/read-progress";
 import { withResolution } from "../../../../shared/comment-resolution";
 import {
-  commentFocus,
+  fileFocus,
   setSlice,
   sliceSolo,
   withSlice,
@@ -128,9 +128,13 @@ export const createProgressSlice: StateCreator<ReviewState, [], [], ProgressSlic
       // Plain file navigation dismisses the comment step-through: the reader is
       // browsing files now, not walking comments — and it leaves the tour doc, since a
       // picked file is a request to see the diff (the doc's own file chips route here).
+      //
+      // And it asks the surface for the scroll rather than leaving it to notice: leaving
+      // the doc *mounts* the diff pane, so the only sites that can see this jump coming are
+      // the ones on this side of it (`fileFocus`).
       setSlice(set, get, id, {
         selectedFilePath: path,
-        ...commentFocus(null),
+        ...fileFocus(path),
         overviewOpen: false,
       });
       get().scheduleSessionWriteBack(id);
@@ -159,10 +163,13 @@ export const createProgressSlice: StateCreator<ReviewState, [], [], ProgressSlic
           : clamp(currentIndex + direction, 0, files.length - 1);
       const next = files[nextIndex];
       if (next && next.path !== slice.selectedFilePath) {
-        // j/k is plain file navigation — it dismisses the comment step-through.
+        // j/k is plain file navigation — it dismisses the comment step-through. It is also
+        // live on the tour doc (nothing in `App.tsx`'s switch stands down there), so it
+        // leaves the doc and mounts the diff pane, and asks for its scroll the same way
+        // `selectFile` does rather than trusting the surface to notice.
         setSlice(set, get, id, {
           selectedFilePath: next.path,
-          ...commentFocus(null),
+          ...fileFocus(next.path),
           overviewOpen: false,
         });
         get().scheduleSessionWriteBack(id);
@@ -236,7 +243,7 @@ export const createProgressSlice: StateCreator<ReviewState, [], [], ProgressSlic
         // as j/k do, since a reader who asked for the next file is asking to see it.
         next === null
           ? undefined
-          : { selectedFilePath: next, ...commentFocus(null), overviewOpen: false },
+          : { selectedFilePath: next, ...fileFocus(next), overviewOpen: false },
       );
     });
   },

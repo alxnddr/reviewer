@@ -21,6 +21,15 @@ describe("planScrollRestore", () => {
     expect(planScrollRestore(1200, "src/other.ts", line)).toEqual<ScrollRestore>(line);
   });
 
+  it("serves an outstanding file jump over the recorded position — the row the reader clicked", () => {
+    // The ranking this file exists to get right. A chapter's file row and a bare-path
+    // reference both leave the doc, which mounts the diff pane, so the recorded position is
+    // live on the very commit the reader asked to be taken somewhere else. It is the file
+    // focus the *session* carried in that the position outranks, not the one just picked.
+    const file: PendingScroll = { kind: "file", path: "src/app.ts" };
+    expect(planScrollRestore(1200, "src/app.ts", file)).toEqual<ScrollRestore>(file);
+  });
+
   it("restores a recorded position, and it wins over a focused file (one owner)", () => {
     const plan = planScrollRestore(1200, "src/app.ts", null);
     // Exactly one owner: position, never also the file jump.
@@ -59,6 +68,16 @@ describe("samePendingScroll", () => {
     expect(samePendingScroll(line, { ...line, side: "deletions" })).toBe(false);
     expect(samePendingScroll(line, { ...line, path: "src/other.ts" })).toBe(false);
     expect(samePendingScroll(line, { kind: "comment", commentId: "c7" })).toBe(false);
+  });
+
+  it("never reads a file request as the line request on the same path", () => {
+    const file: PendingScroll = { kind: "file", path: "src/app.ts" };
+    expect(samePendingScroll(file, { kind: "file", path: "src/app.ts" })).toBe(true);
+    expect(samePendingScroll(file, { kind: "file", path: "src/other.ts" })).toBe(false);
+    // Same path, different jump: clearing the coarse one on the precise one's report would
+    // drop a reader's jump, which is the whole reason the clear compares by value.
+    expect(samePendingScroll(file, line)).toBe(false);
+    expect(samePendingScroll(line, file)).toBe(false);
   });
 });
 

@@ -110,8 +110,10 @@ export type SessionSlice = {
    * bare remount (a tab bounce), which is exactly the distinction the old ref-compare was
    * reaching for and could not make. A reference chip lives on that same doc, which is why
    * it takes the same route rather than a second one (`lib/scroll.ts`'s `PendingScroll`
-   * says why the two are one field). Write it through `commentFocus` or `lineFocus` and
-   * clear it through `scrollServed`; never persisted, like the focus itself. */
+   * says why the three are one field), and so does the plainest jump of all — picking a
+   * file, which reaches the doc as a chapter's file row and a bare-path reference. Write it
+   * through `commentFocus`, `fileFocus` or `lineFocus` and clear it through `scrollServed`;
+   * never persisted, like the focus itself. */
   pendingScroll: PendingScroll | null;
   /** How much of the diff the reader has been through: each read file's path against the
    * signature of the content they read (see `lib/read-progress.ts`).
@@ -222,6 +224,22 @@ export function lineFocus(
   target: LineTarget,
 ): Pick<SessionSlice, "activeCommentId" | "pendingScroll"> {
   return { activeCommentId: null, pendingScroll: { kind: "line", ...target } };
+}
+
+/** The third mover of the pair, and the coarsest: the reader picked a whole *file* — a rail
+ * row, a chapter's file row, a bare-path reference, j/k, ⇧R. Nothing is focused, for
+ * `lineFocus`'s reason, and the scroll is a *request* rather than something the surface
+ * watches for, because from the tour doc the click that picks the file is the click that
+ * mounts the surface — where a watch has nothing to compare against, and the session's
+ * recorded scroll position used to win the mount instead.
+ *
+ * Every gesture above writes this, including the ones that would also work through the
+ * surface's own compare: one spelling for "the reader picked a file", so the doc's rows and
+ * the rail's rows cannot come to differ about whether picking one scrolls. A fresh object
+ * each time is deliberate — re-picking the file already selected is a request to go back to
+ * it, exactly as re-focusing the focused comment re-centres it. */
+export function fileFocus(path: string): Pick<SessionSlice, "activeCommentId" | "pendingScroll"> {
+  return { activeCommentId: null, pendingScroll: { kind: "file", path } };
 }
 
 /** The slice's soloed diff: the authored layers plus the inferred "not covered by layers"

@@ -840,16 +840,21 @@ describe("setSlice's structural no-op guard", () => {
     });
   });
 
-  // `selectFile` and `setScrollTop` write unconditionally -- neither checks its argument
-  // against the slice's current value the way `previewBrush`/`setFileCollapsed` do. The
-  // guard lives in `setSlice` itself instead, so it protects every action funnelled through
-  // it, including these two: a redundant call never reallocates the `sessions` record, which
-  // is what a subscriber like `TabBar` (keyed off the record) would otherwise re-render on.
+  // `setScrollTop` writes unconditionally -- it does not check its argument against the
+  // slice's current value the way `previewBrush`/`setFileCollapsed` do. The guard lives in
+  // `setSlice` itself instead, so it protects every action funnelled through it: a redundant
+  // call never reallocates the `sessions` record, which is what a subscriber like `TabBar`
+  // (keyed off the record) would otherwise re-render on.
 
-  it("re-selecting the already-selected file leaves the sessions record untouched", () => {
+  it("re-selecting the already-selected file is a fresh scroll request, not a no-op", () => {
     const before = store.getState().sessions;
     store.getState().selectFile("greet.ts");
-    expect(store.getState().sessions).toBe(before);
+    // The one action here the guard deliberately cannot absorb: `fileFocus` mints a new
+    // request object, so picking the file you are already on asks to be taken back to it --
+    // exactly as re-focusing the focused comment re-centres it. Not a hot path: the tree's
+    // own echo filter drops the programmatic selections, so this only happens on a click.
+    expect(store.getState().sessions).not.toBe(before);
+    expect(active().pendingScroll).toEqual({ kind: "file", path: "greet.ts" });
   });
 
   it("selecting a different file still writes", () => {
@@ -2514,7 +2519,9 @@ describe("useReviewStore comment navigation", () => {
       store.getState().focusComment(ID_B);
       dismiss();
       expect(active().activeCommentId).toBeNull();
-      expect(active().pendingScroll).toBeNull();
+      // Navigating to a file leaves a request of its own (`fileFocus`) -- what must never
+      // survive is a jump owed to a *comment*, which is the one this could fire at nothing.
+      expect(active().pendingScroll?.kind).not.toBe("comment");
     }
   });
 
@@ -2561,15 +2568,20 @@ describe("useReviewStore comment navigation", () => {
     store.getState().focusReference("greet.ts", { side: "additions", startLine: 50, endLine: 50 });
 
     expect(active().selectedFilePath).toBe("greet.ts");
-    expect(active().pendingScroll).toBeNull();
+    // The file, asked for outright: a drifted reference still has to *arrive* somewhere, and
+    // the chip is routinely clicked from the doc, which is the commit the diff pane mounts.
+    expect(active().pendingScroll).toEqual({ kind: "file", path: "greet.ts" });
   });
 
-  it("reads a reference with no line as plain file navigation", () => {
-    seedComments([C_GREET]);
+  it("reads a reference with no line as plain file navigation -- and that navigates", () => {
+    seedComments([C_GREET], { overviewOpen: true });
     store.getState().focusReference("greet.ts", null);
 
     expect(active().selectedFilePath).toBe("greet.ts");
-    expect(active().pendingScroll).toBeNull();
+    // The bug this arm used to have: it set the focus and asked for no scroll, so the rail
+    // moved onto the file and the diff pane stayed on the session's recorded position.
+    expect(active().pendingScroll).toEqual({ kind: "file", path: "greet.ts" });
+    expect(active().overviewOpen).toBe(false);
   });
 
   it("steps in document order from nothing, forward lands on the first comment", () => {
@@ -2645,6 +2657,26 @@ describe("useReviewStore comment navigation", () => {
     store.getState().focusComment(ID_B);
     store.getState().selectAdjacentFile(1);
     expect(active().activeCommentId).toBeNull();
+  });
+
+  it("asks for the file's own scroll however the reader picked it — click, j/k or ⇧R", () => {
+    // One spelling for "the reader picked a file" (`fileFocus`), so the doc's rows and the
+    // rail's rows cannot come to differ about whether picking one moves the diff. j/k and ⇧R
+    // are in it because they are live on the doc too — nothing in `App.tsx`'s switch stands
+    // down there — so they are equally the gesture that mounts the pane it has to scroll.
+    seedComments([C_GREET]);
+    store.getState().selectFile("greet.ts");
+    expect(active().pendingScroll).toEqual({ kind: "file", path: "greet.ts" });
+
+    store.getState().selectAdjacentFile(1);
+    const afterStep = active().selectedFilePath;
+    expect(afterStep).not.toBe("greet.ts");
+    expect(active().pendingScroll).toEqual({ kind: "file", path: afterStep });
+
+    store.getState().markFileReadAndAdvance();
+    const afterMark = active().selectedFilePath;
+    expect(afterMark).not.toBe(afterStep);
+    expect(active().pendingScroll).toEqual({ kind: "file", path: afterMark });
   });
 
   it("never persists the active comment id", () => {

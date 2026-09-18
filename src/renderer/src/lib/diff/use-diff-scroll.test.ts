@@ -245,6 +245,28 @@ describe("useDiffScroll", () => {
     expect(onScrollServed.mock.calls).toEqual([[focus("c2")]]);
   });
 
+  // The bug 024 was: a file picked from the tour doc — a chapter's file row, a bare-path
+  // reference — set the focus and asked for nothing, so the mount's restore took the commit
+  // and the reader stayed on the position the session had recorded, with the rail claiming
+  // they had arrived. The request is what the compare below cannot make on its own mount.
+  it("serves a file picked on the mount that is the click, over the recorded position", () => {
+    const file: PendingScroll = { kind: "file", path: "b.ts" };
+    commit({ pendingScroll: file, selectedFilePath: "b.ts", restoreScrollTop: 320 });
+
+    expect(targets).toEqual([{ type: "item", id: "b.ts", align: "start", ...INSTANT }]);
+    expect(onScrollServed.mock.calls).toEqual([[file]]);
+  });
+
+  it("claims the file jump, so a file request scrolls once and not twice", () => {
+    commit({ selectedFilePath: "a.ts" });
+    targets = [];
+    // The store writes the request and the focus together, so both props change in one
+    // commit and both effects are live. The request runs first and claims `lastJumpedPath`.
+    commit({ pendingScroll: { kind: "file", path: "b.ts" }, selectedFilePath: "b.ts" });
+
+    expect(targets).toEqual([{ type: "item", id: "b.ts", align: "start", ...INSTANT }]);
+  });
+
   // A prose reference's chip, from the tour doc: the same request route, and the same one
   // scroll — but the place arrives already resolved, so the hook looks nothing up.
   it("serves a line request outright, and claims the file jump so only it fires", () => {
