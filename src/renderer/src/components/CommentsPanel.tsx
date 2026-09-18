@@ -9,6 +9,7 @@ import { CopyAllCommentsPromptButton } from "@/components/CopyPromptButton";
 import { FileTypeIcon } from "@/components/FileTypeIcon";
 import { TooltipHint } from "@/components/ui/tooltip";
 import { commentLocation } from "@/lib/comment-location";
+import { commentMetaLabel, SeverityPill } from "@/components/CommentMeta";
 import { useScrollIntoViewById } from "@/lib/use-scroll-into-view";
 import { flattenMarkdown } from "../../../shared/markdown";
 import {
@@ -326,6 +327,7 @@ const CommentRow = memo(function CommentRow({
   onFocus,
 }: CommentRowProps): ReactElement {
   const { comment, status } = entry;
+  const meta = commentMetaLabel(comment);
   // The placed line — where the comment actually renders on the current diff, which
   // is what a reader jumping there will see in the gutter, not the authored line it
   // may have drifted from. A stranded comment never placed, so it keeps its own.
@@ -342,6 +344,21 @@ const CommentRow = memo(function CommentRow({
       indent={COMMENT_INDENT_PX}
       className="group gap-2"
     >
+      {/* The severity, and *only* the severity — the card shows the tag as well. The rail
+          is 256px: two pills ahead of a preview leave it four or five words, and looking at
+          that is what settled the split. Severity is the axis a reader scans the column by
+          ("which of these block?"), so it earns the space; a tag is a label read on the
+          finding itself, which is where the card and the hover hint both carry it.
+
+          Outside the hint rather than inside it: the hint is about the body, and the row's
+          own flex gap already spaces these. The preview is what gives way (`min-w-0` +
+          `truncate` against the pill's `shrink-0`).
+
+          The rows are *not* re-ordered by severity. `orderedComments` is the single order
+          the panel, the `i/N` counter and the `n`/`p` walk all read, and it is diff order:
+          what makes this column navigable is that it matches what scrolling past the cards
+          shows. A pill the reader can scan buys the same triage without moving anything. */}
+      {comment.severity !== undefined && <SeverityPill severity={comment.severity} />}
       {/* The hint hangs off the preview, not the row: the row is the hit target and a
           hint on it would repeat what the row already shows. This one says what the
           line cannot hold — the body in full, and the anchor it was authored against. */}
@@ -364,6 +381,11 @@ const CommentRow = memo(function CommentRow({
                 <span className="break-all tabular-nums">{commentLocation(comment)}</span>
               </span>
             )}
+            {/* The same two values the row draws as pills, spelled out: at 256px the pills
+                are what survive the narrowing and the preview is what gets cut, so the hint
+                — which already carries the body in full — is where the reader checks what a
+                truncated tag actually said. */}
+            {meta !== null && <span className="text-background/70">{meta}</span>}
           </div>
         }
       >

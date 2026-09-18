@@ -3,6 +3,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 import type { Comment } from "../../../shared/review";
 import { CommentsPanel } from "@/components/CommentsPanel";
+import { commentMetaLabel } from "@/components/CommentMeta";
 import { createSessionSlice, type ReviewState, type SessionSlice } from "@/stores/review";
 import { MULTI_STATUS_PATCH } from "../../../shared/diff/fixtures";
 import { parsePatch } from "../../../shared/diff/patch";
@@ -101,5 +102,40 @@ describe("CommentsPanel", () => {
     expect(render([first, second], second.id)).toContain(
       `id="comment-row-${second.id}" aria-current="true"`,
     );
+  });
+
+  // The vocabulary fields are optional and most reviews will carry none, so the claim
+  // worth pinning is the *absence*: a row for a comment with neither renders exactly the
+  // markup it rendered before the pills existed — no empty span, no reserved gap.
+  it("draws no pill for a comment that carries neither severity nor tag", () => {
+    const html = render([comment({ body: "plain" })]);
+    expect(html).not.toContain("blocking");
+    expect(html).not.toContain("text-destructive");
+  });
+
+  it("draws the severity ahead of the preview, and leaves the tag to the card", () => {
+    // The 256px split: the axis the column is scanned by gets the room, the label that is
+    // read on the finding does not. The hint still names both, so nothing is lost.
+    const html = render([comment({ body: "plain", severity: "blocking", tag: "perf" })]);
+    const severity = html.indexOf(">blocking<");
+    expect(severity).toBeGreaterThan(-1);
+    expect(html.indexOf("plain")).toBeGreaterThan(severity);
+    expect(html.indexOf(">perf<")).toBe(-1);
+    // The hint the row arms carries both, so the tag is displaced rather than dropped.
+    // Asserted on the label itself: Base UI renders a tooltip's content on open, so it is
+    // not in a static render to look for.
+    expect(commentMetaLabel({ severity: "blocking", tag: "perf" })).toBe("blocking · perf");
+    expect(commentMetaLabel({ severity: undefined, tag: undefined })).toBeNull();
+  });
+
+  it("keeps diff order: a blocking comment does not jump its file's list", () => {
+    // `orderedComments` is the one order the panel, the `i/N` counter and the `n`/`p` walk
+    // all read, and it is the order a reader meets the cards scrolling. A severity sort
+    // here would put the column and the surface into disagreement; the pill is what buys
+    // the triage instead.
+    const early = comment({ body: "early", startLine: 4, endLine: 4 });
+    const late = comment({ body: "late", startLine: 5, endLine: 5, severity: "blocking" });
+    const html = render([late, early]);
+    expect(html.indexOf("early")).toBeLessThan(html.indexOf("late"));
   });
 });

@@ -76,6 +76,8 @@ function fixtureComments(): Comment[] {
       startLine: 4,
       endLine: 6,
       body: "Extract this into a `formatGreeting` helper — `shout` and `greet` will both want it.",
+      severity: "minor",
+      tag: "refactor",
       id: "c0000000-0000-4000-8000-000000000001",
     },
     {
@@ -94,6 +96,17 @@ function fixtureComments(): Comment[] {
         "await handle.write(HEADER);",
         "```",
       ].join("\n"),
+      severity: "blocking",
+      // A free label beside a closed level, and a folded receipt under the body: between
+      // this comment and the two around it the scene carries all three severity tones, a
+      // reserved tag and an invented one, so the pills can be compared in one screenshot.
+      tag: "data loss",
+      evidence: [
+        "```",
+        "$ bun test writer",
+        "1 failed: leaves no file behind on a failed open",
+        "```",
+      ].join("\n"),
       id: "c0000000-0000-4000-8000-000000000002",
     },
     {
@@ -102,6 +115,7 @@ function fixtureComments(): Comment[] {
       startLine: 80,
       endLine: 82,
       body: "This block moved since the review was written — check it still holds.",
+      tag: "pre-existing",
       id: "c0000000-0000-4000-8000-000000000003",
     },
   ];

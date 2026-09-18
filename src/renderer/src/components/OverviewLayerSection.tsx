@@ -2,7 +2,7 @@ import { useState, type ReactElement } from "react";
 import { AlertTriangle, MessageSquare } from "lucide-react";
 import { clamp } from "../../../shared/clamp";
 import { countLabel } from "../../../shared/plural";
-import type { OverviewChapter, OverviewFileEntry } from "@/lib/overview";
+import { chapterCommentLabel, type OverviewChapter, type OverviewFileEntry } from "@/lib/overview";
 import type { ReadTally } from "@/lib/read-progress";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -62,8 +62,12 @@ function headingTag(depth: number): (typeof HEADING_TAGS)[number] {
 /** Added/removed line counts, in the diff's own signal colours. A zero side is dropped
  * rather than printed as `+0` — the noise would outweigh the fact. Tabular, not mono: the
  * digits only need to align in a column, and the doc's headline stat row sets the
- * precedent — mono is for code, not for counting. */
-function LineCounts({
+ * precedent — mono is for code, not for counting.
+ *
+ * Exported for the chapter index, which prints the same fact one line per chapter: two
+ * copies of this recipe would be two places for the signal colours, the dropped zero and
+ * the `−` (a minus sign, not a hyphen) to drift apart. */
+export function LineCounts({
   additions,
   deletions,
 }: {
@@ -319,7 +323,11 @@ export function OverviewLayerSection({
               className="ml-auto flex shrink-0 items-center gap-1 rounded px-1 text-xs text-text-muted tabular-nums hover:bg-border/50 hover:text-foreground"
             >
               <MessageSquare aria-hidden="true" className="size-3.5" />
-              {countLabel(chapter.comments, "comment")}
+              {/* Broken down only when something in here blocks (`chapterCommentLabel`):
+                  the figure a reader choosing a starting chapter acts on is "can I defer
+                  this one", and a chapter with no blocking findings answers it by saying
+                  nothing new. */}
+              {chapterCommentLabel(chapter.comments, chapter.blocking)}
             </button>
           </TooltipHint>
         )}

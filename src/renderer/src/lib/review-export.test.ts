@@ -114,6 +114,12 @@ function authored(comment: Comment): ReviewComment {
     startLine: comment.startLine,
     endLine: comment.endLine,
     body: comment.body,
+    // The optional three ride along on the absent-key rule, so a round-trip comparison
+    // through this helper fails when `serializeReview` stops copying one of them — which is
+    // the exact way a hand-copied projection loses a field.
+    ...(comment.tag === undefined ? {} : { tag: comment.tag }),
+    ...(comment.severity === undefined ? {} : { severity: comment.severity }),
+    ...(comment.evidence === undefined ? {} : { evidence: comment.evidence }),
   };
 }
 
@@ -1025,5 +1031,175 @@ describe("commentsToPrompt", () => {
       "path:line",
       "src/a.ts:10-12",
     ]);
+  });
+});
+
+// ── The comment vocabulary through the three projections ───────────────────────
+//
+// `tag`, `severity` and `evidence` are hand-copied by name at four sites (the re-emit, the
+// Markdown projection's resolve, and the two exports' rendering), which is the shape of
+// bug this file exists to catch: a field added to the schema alone round-trips through
+// import and vanishes on the way back out, with nothing failing.
+
+describe("the comment vocabulary", () => {
+  const VOCAB: ReviewArtifactDraft = {
+    ...FIXTURE,
+    comments: [
+      {
+        file: "src/a.ts",
+        side: "additions",
+        startLine: 10,
+        endLine: 12,
+        body: "The loop is quadratic.",
+        tag: "perf",
+        severity: "blocking",
+        evidence: "```\n$ node bench.js\n4.2s\n```",
+      },
+      { file: "src/b.ts", side: "deletions", startLine: 3, endLine: 3, body: "second" },
+    ],
+  };
+
+  it("round-trips all three through export and re-import, and writes no key for an absent one", () => {
+    const review = importFixture(VOCAB, "v1");
+    const emitted = serializeReview(review);
+    expect(emitted.comments).toEqual(review.comments.map(authored));
+    expect(emitted.comments?.[0]).toMatchObject({
+      tag: "perf",
+      severity: "blocking",
+      evidence: "```\n$ node bench.js\n4.2s\n```",
+    });
+    const plain = emitted.comments?.[1] ?? {};
+    expect("tag" in plain).toBe(false);
+    expect("severity" in plain).toBe(false);
+    expect("evidence" in plain).toBe(false);
+    // And again, because an export a reader re-opens has to be the same file.
+    expect(serializeReview(importFixture(emitted, "v2")).comments).toEqual(emitted.comments);
+  });
+
+  it("carries the three onto the Markdown projection, which both exports read", () => {
+    const review = importFixture(VOCAB, "v3");
+    const projected = markdownCommentsFrom(review.comments, [], true);
+    expect(projected[0]).toMatchObject({ tag: "perf", severity: "blocking" });
+    expect(projected[1]?.tag).toBeUndefined();
+  });
+
+  it("prints the labels in the Markdown bullet's header, severity first", () => {
+    const markdown = reviewToMarkdown({
+      repo: { path: "/repos/app", name: "app" },
+      base: "main",
+      head: "a".repeat(40),
+      overview: null,
+      layers: [],
+      comments: [
+        {
+          file: "src/a.ts",
+          side: "additions",
+          startLine: 10,
+          endLine: 12,
+          body: "The loop is quadratic.",
+          tag: "perf",
+          severity: "blocking",
+          outdated: false,
+        },
+      ],
+    });
+    expect(markdown).toContain("- `src/a.ts` L10–12 · blocking · `perf` — The loop is quadratic.");
+  });
+
+  it("folds evidence into the same list item, indented, with its own fences intact", () => {
+    const markdown = reviewToMarkdown({
+      repo: { path: "/repos/app", name: "app" },
+      base: "main",
+      head: "a".repeat(40),
+      overview: null,
+      layers: [],
+      comments: [
+        {
+          file: "src/a.ts",
+          side: "additions",
+          startLine: 10,
+          endLine: 10,
+          body: "The loop is quadratic.",
+          evidence: "```\n$ node bench.js\n4.2s\n```",
+          outdated: false,
+        },
+      ],
+    });
+    expect(markdown).toContain(
+      [
+        "- `src/a.ts` L10 — The loop is quadratic.",
+        "",
+        "  Evidence:",
+        "",
+        "  ```",
+        "  $ node bench.js",
+        "  4.2s",
+        "  ```",
+      ].join("\n"),
+    );
+    // Inside the item, not after it: the whole point of the indent is that a reader's
+    // parser keeps the receipts attached to the finding they belong to.
+    const list = parseMarkdown(markdown).children.find((node) => node.type === "list");
+    expect(list?.type === "list" ? list.children[0]?.children.length : 0).toBe(3);
+  });
+
+  it("puts the labels in the prompt heading, ahead of the range qualifiers", () => {
+    const prompt = commentToPrompt(
+      promptComment({ tag: "perf", severity: "blocking", side: "deletions" }),
+    );
+    expect(prompt).toContain("### `src/a.ts:1` (blocking; `perf`; deletions side —");
+  });
+
+  it("gives the prompt the evidence between the claim and the code", () => {
+    const prompt = commentToPrompt(
+      promptComment({ body: "The loop is quadratic.", evidence: "$ node bench.js\n4.2s" }),
+    );
+    expect(prompt).toContain(
+      [
+        "The loop is quadratic.",
+        "",
+        "Evidence the review recorded:",
+        "",
+        "$ node bench.js",
+        "4.2s",
+      ].join("\n"),
+    );
+  });
+
+  it("leaves a payload with no vocabulary byte-identical to what it was", () => {
+    // The compatibility claim, asserted rather than assumed: a review that sets none of
+    // the three exports exactly the bytes it did before they existed.
+    expect(commentToPrompt(promptComment({ startLine: 10, endLine: 10, body: "why" }))).toMatch(
+      /### `src\/a\.ts:10`\n\nwhy\n$/u,
+    );
+  });
+
+  it("cannot let a free-text tag restructure the heading it sits in", () => {
+    // `tag` is the one value here an author writes freely, so it goes through the same
+    // code-span escaping every other value in this file does.
+    const prompt = commentToPrompt(promptComment({ tag: "a`b\nc" }));
+    expect(prompt.split("\n").find((line) => line.startsWith("### "))).toBe(
+      "### `src/a.ts:1` (``a`b c``)",
+    );
+    const markdown = reviewToMarkdown({
+      repo: { path: "/repos/app", name: "app" },
+      base: "main",
+      head: "a".repeat(40),
+      overview: null,
+      layers: [],
+      comments: [
+        {
+          file: "src/a.ts",
+          side: "additions",
+          startLine: 1,
+          endLine: 1,
+          body: "why",
+          tag: "# not a heading",
+          outdated: false,
+        },
+      ],
+    });
+    expect(codeSpansOf(markdown)).toContain("# not a heading");
+    expect(headingsOf(markdown).some((heading) => heading.includes("not a heading"))).toBe(false);
   });
 });

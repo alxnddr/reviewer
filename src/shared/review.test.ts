@@ -6,8 +6,10 @@ import {
   parseArtifactBytes,
   pinReview,
   repoDisplayName,
+  reservedTag,
   ReviewAnchor,
   ReviewArtifact,
+  ReviewComment,
   type ReviewStamp,
 } from "./review";
 
@@ -481,5 +483,69 @@ describe("repoDisplayName", () => {
   it("answers with the path itself when it has no segment to take", () => {
     expect(repoDisplayName("/")).toBe("/");
     expect(repoDisplayName("")).toBe("");
+  });
+});
+
+describe("the comment vocabulary", () => {
+  const anchor = { file: "src/a.ts", side: "additions", startLine: 10, endLine: 12 } as const;
+
+  it("admits a comment carrying none of the three — the shape every review before them had", () => {
+    expect(ReviewComment.safeParse({ ...anchor, body: "why" }).success).toBe(true);
+  });
+
+  it("parses all three and leaves an absent one absent rather than defaulted", () => {
+    const parsed = ReviewComment.parse({
+      ...anchor,
+      body: "why",
+      tag: "perf",
+      severity: "blocking",
+    });
+    expect(parsed.tag).toBe("perf");
+    expect(parsed.severity).toBe("blocking");
+    // Not "" and not "minor": an unset field is unset, which is what lets a renderer draw
+    // nothing rather than a pill the author never asked for.
+    expect(parsed.evidence).toBeUndefined();
+    expect("evidence" in parsed).toBe(false);
+  });
+
+  it("refuses an over-long tag at the tag, so `rvw emit` can name the field to fix", () => {
+    const parsed = ReviewComment.safeParse({ ...anchor, body: "why", tag: "x".repeat(25) });
+    expect(parsed.success).toBe(false);
+    expect(parsed.success ? [] : parsed.error.issues.map((issue) => issue.path)).toEqual([["tag"]]);
+  });
+
+  it("refuses a severity outside the closed three rather than dropping it", () => {
+    // The whole point of the closed axis: a review that writes `P0` is told so at emit,
+    // instead of shipping an artifact whose severity silently vanished.
+    const parsed = ReviewComment.safeParse({ ...anchor, body: "why", severity: "P0" });
+    expect(parsed.success).toBe(false);
+    expect(parsed.success ? [] : parsed.error.issues.map((issue) => issue.path)).toEqual([
+      ["severity"],
+    ]);
+  });
+
+  it("refuses an empty tag or evidence — an absent key is how you say you have none", () => {
+    expect(ReviewComment.safeParse({ ...anchor, body: "why", tag: "" }).success).toBe(false);
+    expect(ReviewComment.safeParse({ ...anchor, body: "why", evidence: "" }).success).toBe(false);
+  });
+
+  it("keeps the three off ReviewAnchor, which the validator and coverage report on", () => {
+    // `AnchorSpan` is four fields and must stay four: a layer range is an anchor too, and
+    // nothing in the gate or the coverage report should learn what a tag is.
+    expect(Object.keys(ReviewAnchor.parse(anchor))).toEqual([
+      "file",
+      "side",
+      "startLine",
+      "endLine",
+    ]);
+  });
+
+  it("matches the three reserved words case-insensitively, and nothing else", () => {
+    expect(reservedTag("pre-existing")).toBe("pre-existing");
+    expect(reservedTag("Decision")).toBe("decision");
+    expect(reservedTag("  QUESTION ")).toBe("question");
+    expect(reservedTag("perf")).toBeNull();
+    expect(reservedTag("pre existing")).toBeNull();
+    expect(reservedTag(undefined)).toBeNull();
   });
 });

@@ -67,11 +67,86 @@ export type ReviewAnchor = z.infer<typeof ReviewAnchor>;
  * type, and a `ReviewAnchor` is assignable straight into one. */
 export type AnchorSpan = LineSpan & { file: string; side: ReviewSide };
 
+/** How much a finding should block, on the one axis the app is allowed to act on.
+ *
+ * Three levels and words rather than P-numbers: every scale in the field (P0–P2,
+ * High/Medium/Low, critical/major/minor/trivial, P0–P3) collapses onto three without
+ * losing a distinction anyone acts on, and a reader meeting the artifact cold reads
+ * `blocking` where `P0` needs a legend. A fourth level is one authors would disagree
+ * about — `trivial`, `info` and P3 all land on `minor`.
+ *
+ * Closed, unlike `tag` beside it, and that is the entire difference between them: this
+ * is an axis the renderer sorts, colours and counts by, so its values have to mean the
+ * same thing in every review. Provenance and stance — pre-existing, a decision, a
+ * question — are *not* weight and live on `tag`. */
+export const CommentSeverity = z.enum(["blocking", "important", "minor"]);
+export type CommentSeverity = z.infer<typeof CommentSeverity>;
+
+/** The longest a `tag` may be. The same job `MAX_REASON_LENGTH` does further down: the
+ * field is free text on purpose, so the only thing worth enforcing is that a value cannot
+ * break the row it renders in. A pill is a word or two; 24 characters is well past every
+ * taxonomy in the field and well short of a sentence. */
+const MAX_TAG_LENGTH = 24;
+
+/** The three tag values the app knows, lower-cased. Every other tag is an opaque label it
+ * only displays, and this list is the whole extent of Reviewer's opinion about what a
+ * finding *is* — deliberately provenance and stance, never weight, which is `severity`.
+ *
+ * They are the three words `skills/present-review` asks authors to open a body with, moved
+ * off the body's first line and onto a field: a body that spends its title line on
+ * `**Pre-existing**` spends it on a label instead of the claim, and prose is a convention
+ * the app cannot see. Matched case-insensitively, because an author typing `Decision` and
+ * one typing `decision` mean the same thing and neither is wrong. */
+export const RESERVED_TAGS = ["pre-existing", "decision", "question"] as const;
+export type ReservedTag = (typeof RESERVED_TAGS)[number];
+
+/** Which reserved word a tag is, or null for a label the app has no opinion about. The one
+ * place the comparison is written, so the rail, the card and any later grouping cannot
+ * disagree about whether `Question ` is the reserved word. */
+export function reservedTag(tag: string | undefined): ReservedTag | null {
+  if (tag === undefined) {
+    return null;
+  }
+  const normalized = tag.trim().toLowerCase();
+  return RESERVED_TAGS.find((reserved) => reserved === normalized) ?? null;
+}
+
 /** A comment as written in the artifact — minimal on the wire; the app stamps
  * identity on import (mirrors `SessionId`, never renderer-chosen). `body` is prose in
  * the same markdown the overview and a layer description take — the app renders one
- * grammar everywhere — though a comment is usually a sentence, not a document. */
-export const ReviewComment = ReviewAnchor.extend({ body: z.string().min(1) }).meta({
+ * grammar everywhere — though a comment is usually a sentence, not a document.
+ *
+ * `body` is the only required half. The three optional fields beside it are the review
+ * vocabulary every shipping reviewer converged on, split by what the app may *do* with
+ * each: `severity` is closed and acted on, `tag` is free text and only displayed, and
+ * `evidence` is the receipts folded under the claim. Each carries its own
+ * `.meta({ description })` because `rvw schema` is derived from this object and the
+ * authoring skill names that output as the authority on field rules — an undescribed
+ * field is a field an agent guesses at.
+ *
+ * A plain `z.object`, like every `ReviewAnchor` descendant, so an artifact carrying these
+ * keys still opens in an older build: the unknown keys are dropped and the review reads as
+ * it did before. That is why they ship ahead of the `strictObject` additions (`skim`,
+ * `reviewedHead`), which make an older app refuse the file outright. */
+export const ReviewComment = ReviewAnchor.extend({
+  body: z.string().min(1),
+  tag: z
+    .string()
+    .min(1)
+    .max(MAX_TAG_LENGTH)
+    .optional()
+    .meta({
+      description: `A short free-form label, at most ${MAX_TAG_LENGTH} characters, shown as a pill beside the comment. Use your own vocabulary; tag a comment only when a one-word label helps the reader decide how to read it, never on every comment. The app treats ${RESERVED_TAGS.join(", ")} as known words and every other value as an opaque label.`,
+    }),
+  severity: CommentSeverity.optional().meta({
+    description:
+      "How much this finding should block, if your review already ranks findings: blocking (must be resolved before merge — P0, critical, must-fix), important (should be addressed — P1, major, High/Medium), minor (worth knowing, not worth blocking — P2, P3, nit, trivial, info). Leave it unset rather than guessing; unset is not minor.",
+  }),
+  evidence: z.string().min(1).optional().meta({
+    description:
+      "What you ran or read to confirm the finding — the command and the lines of output that show it — as markdown, rendered folded under the body. Put it here rather than in `body`, which stays the sentence.",
+  }),
+}).meta({
   description: `${anchorDescription} \`body\` says why, never what, and is markdown (CommonMark + GFM).`,
 });
 export type ReviewComment = z.infer<typeof ReviewComment>;

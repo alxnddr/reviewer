@@ -1,4 +1,5 @@
 import type { Comment, ReviewLayer } from "../../../shared/review";
+import { countLabel } from "../../../shared/plural";
 import { changedLines, type ChangedLines } from "../../../tools/review-coverage";
 import { effectiveLayers } from "./coverage";
 import type { FileChangeStatus, PatchFile } from "../../../shared/diff/patch";
@@ -46,8 +47,10 @@ export type OverviewFileEntry = {
  * the totals of what it contains and a leaf states its own, by one rule. */
 export type OverviewChapter = {
   layer: ReviewLayer;
-  /** 0-based nesting depth, which the doc renders as heading rank (§4, §4.2, §4.2.1)
-   * rather than as an indent: sections stay at one reading width whatever their depth. */
+  /** 0-based nesting depth. The doc's *sections* render it as heading rank (§4, §4.2,
+   * §4.2.1) and never as an indent — every section is read at one width, whatever its
+   * depth. The chapter index renders the same number as an indent, because it is a list
+   * and not prose: there the tree has to be visible in one pass. */
   depth: number;
   /** The section number — `"4"`, `"4.2"`, `"4.2.1"` — identical to the rail's and the
    * band's. Null for the inferred "not covered by layers" chapter, no authored step. */
@@ -62,6 +65,10 @@ export type OverviewChapter = {
   /** Comments inside this chapter's extent: those its own ranges own, plus every one
    * owned by a layer nested under it. */
   comments: number;
+  /** How many of those carry `severity: "blocking"` — the one level that changes what the
+   * reader does next, and therefore the only one the doc breaks the count down by. The
+   * other two are read on the finding, not counted on the way to it. */
+  blocking: number;
   /** The first of them, so the section's comment count is a door onto the finding itself
    * rather than a number. Null when the chapter holds none. */
   firstCommentId: string | null;
@@ -259,6 +266,7 @@ export function buildOverview({
       additions,
       deletions,
       comments: held.length,
+      blocking: held.filter((comment) => comment.severity === "blocking").length,
       firstCommentId: held[0]?.id ?? null,
       read: layerTally(files, layer, layers, readFiles),
       outdated: resolveLayerScroll(layer, layers, files, frozen).kind === "outdated",
@@ -285,4 +293,43 @@ export function buildOverview({
     // finished — the same list the rail offers as stops.
     resumeLayerId: nextUnreadLayer(files, effective, readFiles),
   };
+}
+
+/** The doc's chapter index: the same chapters, or none at all.
+ *
+ * Derived, like every other figure here, and that is the whole difference from an authored
+ * table of contents — the author cannot write an index that disagrees with the layers,
+ * because the author does not write one. A layer that moves, splits or vanishes moves,
+ * splits or vanishes here in the same render.
+ *
+ * Two shapes of review get no index, for one reason: there would be nothing to scan. A
+ * review with no layers has no chapters at all, and a review with one chapter *is* that
+ * chapter — a table of one row above a section that says everything the row would say is
+ * chrome. The threshold reads the *effective* chapters, so one authored layer that leaves
+ * part of the diff unwalked does get an index: "Not covered by layers" is the second row,
+ * and a reader learning at the top that half the change is unexplained is exactly what the
+ * index is for. */
+export function chapterIndex(chapters: readonly OverviewChapter[]): readonly OverviewChapter[] {
+  return chapters.length < 2 ? [] : chapters;
+}
+
+/** A chapter's comment count as the doc prints it: `5 comments`, or `2 blocking · 3 others`
+ * once one of them carries the level that changes what the reader does next.
+ *
+ * Only `blocking` breaks out. A three-way split would spend a row's remaining width
+ * restating the pills the findings already wear, and `important`/`minor` are read *on* a
+ * finding, not counted on the way to one — the count's job here is to tell a reader
+ * choosing where to start whether this chapter can be deferred. A review whose comments
+ * carry no severity at all renders exactly the count it did before this existed, which is
+ * the compatibility rule every one of these fields ships under.
+ *
+ * Pure, and beside the figures it labels, so it is tested without a document. */
+export function chapterCommentLabel(comments: number, blocking: number): string {
+  if (blocking === 0) {
+    return countLabel(comments, "comment");
+  }
+  const others = comments - blocking;
+  return others <= 0
+    ? `${blocking} blocking`
+    : `${blocking} blocking · ${countLabel(others, "other")}`;
 }

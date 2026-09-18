@@ -4,6 +4,8 @@ import type { Comment } from "../../../shared/review";
 import { Button } from "@/components/ui/button";
 import { TooltipHint } from "@/components/ui/tooltip";
 import { CommentBody } from "@/components/CommentBody";
+import { CommentEvidence } from "@/components/CommentEvidence";
+import { CommentMeta } from "@/components/CommentMeta";
 import { CopyCommentPromptButton } from "@/components/CopyPromptButton";
 import { OpenInEditorButton } from "@/components/OpenInEditorButton";
 import { commentLocation } from "@/lib/comment-location";
@@ -79,7 +81,14 @@ export function CommentThread({
             </TooltipHint>
           </div>
         )}
+        {/* Above the body, on its own line, and only when the author set something: the
+            pills are how the reader decides whether to read this card at all, so they come
+            before the sentence rather than trailing it. Sharing the outdated row was the
+            rejected alternative — drift is a warning about placement and these are the
+            author's own vocabulary, and a row that mixes them reads as one claim. */}
+        <CommentMeta comment={comment} className="mb-1.5 flex-wrap" />
         <CommentBody body={comment.body} />
+        {comment.evidence !== undefined && <CommentEvidence evidence={comment.evidence} />}
       </div>
       {/* Its own popover surface, so it reads as hovering above the diff rather than
           printed on it — the same treatment the stepper and the find bar take. */}

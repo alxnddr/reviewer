@@ -2,13 +2,14 @@ import { useMemo, type ReactElement } from "react";
 import { ArrowRight } from "lucide-react";
 import type { Comment, ReviewLayer } from "../../../shared/review";
 import { countLabel } from "../../../shared/plural";
-import { buildOverview } from "@/lib/overview";
+import { buildOverview, chapterIndex } from "@/lib/overview";
 import { NO_READ_FILES } from "@/lib/read-progress";
 import { useScrollIntoViewById } from "@/lib/use-scroll-into-view";
 import { Button } from "@/components/ui/button";
 import { GLASS_PRIMARY } from "@/components/Glass";
 import { ReadRing } from "@/components/ReadRing";
 import { OverviewLayerSection, layerSectionDomId } from "@/components/OverviewLayerSection";
+import { OverviewChapterIndex } from "@/components/OverviewChapterIndex";
 import { Markdown } from "@/components/Markdown";
 import { cn } from "@/lib/utils";
 import { selectActiveSlice, useReviewStore } from "@/stores/review";
@@ -99,6 +100,10 @@ export function OverviewScreen(): ReactElement | null {
   const loaded = files !== null;
   const firstLayerId = layers[0]?.id ?? null;
   const resumeLayerId = model.resumeLayerId;
+  // The chapters again, one line each, or none at all — the rule for which is in
+  // `chapterIndex`, not here. Derived from the same model the sections render, so the map
+  // and the document it maps cannot disagree.
+  const index = chapterIndex(model.chapters);
 
   // Just the file count, never the read tally. The rail's foot carries "3 of 11 files read"
   // permanently, one pane away and always on screen; growing this slot into the same
@@ -167,6 +172,13 @@ export function OverviewScreen(): ReactElement | null {
             links={{ paths: filePaths, onSelect: selectFile }}
             className="mt-5 space-y-3 text-base leading-relaxed text-foreground"
           />
+
+          {/* The whole review at a glance, between the author's answer and the sections
+              that argue it: prose was the only thing above the fold, and the shape of the
+              review had no compact form anywhere. It reads the same chapters the sections
+              below do (OverviewChapterIndex says why it is derived and why it sits here
+              rather than above the prose). */}
+          {index.length > 0 && <OverviewChapterIndex chapters={index} onOpen={openLayer} />}
 
           {/* The layers, in authored order, as the rest of the document — no section
               heading over them: they *are* the document past the opening prose, and each

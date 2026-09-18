@@ -27,7 +27,13 @@ supplies `repo`, `base` and `head`, so never hand-write them.
 {
   "overview": { "title": "Replace the polling loop with a socket subscription", "body": "..." },
   "comments": [
-    { "file": "src/client.ts", "side": "additions", "startLine": 42, "endLine": 47, "body": "Why." }
+    { "file": "src/client.ts", "side": "additions", "startLine": 42, "endLine": 47, "body": "Why." },
+    {
+      "file": "src/queue.ts", "side": "additions", "startLine": 88, "endLine": 91,
+      "body": "**Retry storms on a slow consumer**\n\nWhy.",
+      "severity": "blocking", "tag": "race condition",
+      "evidence": "```\n$ bun test queue\n1 failed: resumes from the last acked offset\n```"
+    }
   ],
   "layers": [
     {
@@ -52,11 +58,14 @@ refuses the draft; a `https://` link is left alone and opens in the browser.
 - Put the reason — the bug, limit, or pressure that forced the work — in that sentence or the next one. Do not build up to it.
 - Cut any warm-up: "This PR…", "In this change…", "As part of our work on…". Start at the point.
 - Follow the answer with two to four supporting points: the approach taken, the decision that mattered and what it displaced, the consequence for callers.
+- Set those points as a short markdown list when each is a separate claim. A paragraph holding four claims is four claims nobody can scan; one paragraph of answer, a short list of points, the list of what you checked, then the verdict, reads as a page rather than a wall.
 - Make each point stand alone. A reader should understand it without having read the others.
 - Hold one group at one level of abstraction. Don't set "moved retry logic behind an interface" beside "renamed a variable".
 - Make every point summarize something real underneath it. If a sentence summarizes nothing, delete it.
 - Order the support deliberately — dependency before dependent, cause before effect, or largest consequence first. Never arbitrary.
 - Give the reader what they need before line one: the assumption that changed, the invariant now enforced, the term you use that they may not know.
+- When the change alters behaviour in a way the diff does not make obvious, trace one small concrete input through the old path and the new one — a GFM table works well — and name the step where they diverge. A few lines of pseudocode, syntax and error handling stripped, do the same job for control flow that is hard to scan.
+- Reach for either only when the diff is genuinely hard to read, and put it on the layer that owns the code whenever one does. The body's version is for behaviour the change as a whole turns on.
 - Name the tradeoff you accepted and what you deliberately did not do. A reviewer cannot recover that from the diff.
 - Say what you checked and found sound, in one short list of three to six items, each one thing you actually did. A review with few comments needs this most: it is how the reader tells clean from unread.
 - Name the tests that pin the behavior and say whether you ran them. Link the ones the change touched, as file references — a path that is not in the diff fails the gate, so a linked name is checked rather than claimed; name an unchanged test in plain backticks.
@@ -83,8 +92,13 @@ beside the code, and a card that turns into a document stops being a comment.
 - Open the body with a bold three-to-seven-word claim on its own line — what is wrong, not where — and put the why in the paragraph under it. The rail previews that line as plain words, so spend it on the conclusion, not the approach to it.
 - Say what breaks and on what: the input, state, or sequence that reaches this code, and the wrong result it produces. If you cannot name one, you have a question and not a finding — say which.
 - One comment per issue. Anchor it to the clearest instance and name the other sites as file references (`[the same check in the worker](src/worker.ts)`), which the gate resolves against the diff. Do not repeat the paragraph at each one.
-- Open with **Decision** (or **Question**) when the comment is a call the reader has to make rather than a defect — a threshold, a default, a name, a dropped case. Nothing is broken yet, and the first word should say so.
-- Open with **Pre-existing** when the finding is in code this change did not touch, so the reader does not blame the change. It is still a finding: anchor it to the nearest changed or context line in the same file — a line inside a hunk's context places, which is why `rvw diff --json`'s spans are the floor and not the ceiling of what you can anchor to.
+- A finding in code this change did not touch is still a finding, and the reader must not blame the change for it: anchor it to the nearest changed or context line in the same file and tag it `pre-existing`. A line inside a hunk's context places, which is why `rvw diff --json`'s spans are the floor and not the ceiling of what you can anchor to.
+
+Three optional fields sharpen a comment. All three default to absent, and absent is a real answer — a review that sets none of them reads exactly as it always did.
+
+- **`tag`** — a short free-form label, shown as a pill. Tag a comment only when one word helps the reader decide how to read it; tags on every comment are noise the eye learns to skip. Three values the app knows: `pre-existing` (the finding predates this change), `decision` (a call the reader has to make — a threshold, a default, a name, a dropped case; nothing is broken yet), `question` (you could not tell from the diff, and the answer decides whether this is a finding at all). Everything else is your own vocabulary and the app just prints it. Put the label here rather than in bold at the head of the body: the body's first line is the rail's preview, and it should spend it on the claim.
+- **`severity`** — `blocking`, `important` or `minor`, and only if your review already ranks findings. Map your scale onto the three: P0 / critical / must-fix → `blocking`; P1 / major / High → `important`; P2, P3, nit, trivial, info → `minor`. An unset severity is honest; do not spray them, and never set them all to one level, which is the same as setting none and costs the reader a scan. Ranking is all it does — it never reorders the review, which is yours.
+- **`evidence`** — what you ran or read to confirm the finding, as markdown, rendered folded under the body. When a test, a build or a script is what proved the claim, put the command and the few lines of output that show it here. `body` stays the sentence; the receipts go underneath, where a reader opens them only if they doubt you.
 
 ## Organizing layers
 
