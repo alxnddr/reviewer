@@ -5,12 +5,13 @@ import { resolveAnchor } from "./anchor";
 import {
   anchorFromLine,
   anchorFromRange,
-  buildCommentItems,
+  buildDiffItems,
   pickAddAnchor,
   selectionRange,
   unplaceableComments,
   type CommentSlot,
   type CommentUiState,
+  type DiffSlot,
 } from "./comment-annotations";
 import { RENAMES_PATCH, TWO_HUNKS_PATCH } from "./fixtures";
 import { parsePatch } from "./patch";
@@ -55,19 +56,19 @@ function comment(overrides: Partial<Comment> = {}): Comment {
 
 /** The single diff item and its annotation list, for a one-file diff. */
 function annotationsOf(comments: Comment[], ui: CommentUiState = NO_UI) {
-  const [item] = buildCommentItems(FILES, comments, ui, false);
+  const [item] = buildDiffItems(FILES, comments, ui, false);
   return { item, annotations: item?.annotations ?? [] };
 }
 
 /** One named file's annotation list, for a diff with more than one file. */
 function annotationsOfFile(
-  items: ReturnType<typeof buildCommentItems>,
+  items: ReturnType<typeof buildDiffItems>,
   path: string,
-): DiffLineAnnotation<CommentSlot>[] {
+): DiffLineAnnotation<DiffSlot>[] {
   return items.find((item) => item.id === path)?.annotations ?? [];
 }
 
-describe("buildCommentItems", () => {
+describe("buildDiffItems", () => {
   it("places a covered comment on its resolved {side, lineNumber}", () => {
     const { annotations } = annotationsOf([comment()]);
     expect(annotations).toHaveLength(1);
@@ -93,7 +94,7 @@ describe("buildCommentItems", () => {
     // no re-derived hunk would cover still lands — the diff cannot have drifted. Same
     // comment that pins to the header under `derived`, placed here.
     const wouldDrift = comment({ startLine: 90, endLine: 90 });
-    const [item] = buildCommentItems(FILES, [wouldDrift], NO_UI, true);
+    const [item] = buildDiffItems(FILES, [wouldDrift], NO_UI, true);
     const annotations = item?.annotations ?? [];
     expect(annotations[0]?.lineNumber).toBe(90);
     const slot = annotations[0]?.metadata as Extract<CommentSlot, { kind: "comment" }>;
@@ -110,7 +111,7 @@ describe("buildCommentItems", () => {
   });
 
   it("emits no annotation for a comment whose file is absent from the diff", () => {
-    const items = buildCommentItems(FILES, [comment({ file: "src/gone.ts" })], NO_UI, false);
+    const items = buildDiffItems(FILES, [comment({ file: "src/gone.ts" })], NO_UI, false);
     expect(items).toHaveLength(1);
     expect(items[0]?.annotations).toHaveLength(0);
   });
@@ -124,7 +125,7 @@ describe("buildCommentItems", () => {
       startLine: 2,
       endLine: 2,
     });
-    const items = buildCommentItems(RENAMED, [authored], NO_UI, false);
+    const items = buildDiffItems(RENAMED, [authored], NO_UI, false);
     const edited = annotationsOfFile(items, "src/edit.txt");
     expect(edited).toHaveLength(1);
     expect(edited[0]?.lineNumber).toBe(2);
@@ -138,7 +139,7 @@ describe("buildCommentItems", () => {
     // A pure rename carries no hunks, so nothing can cover the range — but the file is
     // right there, so the comment pins to its header rather than vanishing.
     const authored = comment({ file: "src/old-pure.txt", startLine: 2, endLine: 2 });
-    const items = buildCommentItems(RENAMED, [authored], NO_UI, false);
+    const items = buildDiffItems(RENAMED, [authored], NO_UI, false);
     const renamed = annotationsOfFile(items, "src/pure.txt");
     expect(renamed).toHaveLength(1);
     expect(renamed[0]?.lineNumber).toBe(0);
@@ -153,7 +154,7 @@ describe("buildCommentItems", () => {
       startLine: 90,
       endLine: 90,
     });
-    const items = buildCommentItems(RENAMED, [moved], NO_UI, false);
+    const items = buildDiffItems(RENAMED, [moved], NO_UI, false);
     const edited = annotationsOfFile(items, "src/edit.txt");
     expect(edited).toHaveLength(1);
     const slot = edited[0]?.metadata as Extract<CommentSlot, { kind: "comment" }>;
@@ -179,7 +180,7 @@ describe("buildCommentItems", () => {
       "",
     ].join("\n");
     const authored = comment({ file: "src/shared.txt", startLine: 1, endLine: 1 });
-    const items = buildCommentItems(parsePatch(collision, "test"), [authored], NO_UI, false);
+    const items = buildDiffItems(parsePatch(collision, "test"), [authored], NO_UI, false);
     expect(annotationsOfFile(items, "src/moved.txt")).toHaveLength(0);
     expect(annotationsOfFile(items, "src/shared.txt")).toHaveLength(1);
   });

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, type RefObject } from "react";
 import type { CodeViewHandle } from "@pierre/diffs/react";
-import type { CommentSlot } from "../../../../shared/diff/comment-annotations";
+import type { DiffSlot } from "../../../../shared/diff/comment-annotations";
 import type { CommentNavEntry } from "./comment-navigation";
 import { assertNever } from "../../../../shared/assert";
 import { capturesScroll } from "../../../../shared/layers";
@@ -69,7 +69,7 @@ export type DiffScroll = {
 };
 
 export function useDiffScroll(
-  handleRef: RefObject<CodeViewHandle<CommentSlot> | null>,
+  handleRef: RefObject<CodeViewHandle<DiffSlot> | null>,
   {
     restoreScrollTop,
     selectedFilePath,

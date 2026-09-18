@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type RefObject } from "react";
 import type { CodeViewHandle } from "@pierre/diffs/react";
-import type { CommentSlot } from "../../../../shared/diff/comment-annotations";
+import type { DiffSlot } from "../../../../shared/diff/comment-annotations";
 import type { PatchFile } from "../../../../shared/diff/patch";
 import { clamp } from "../../../../shared/clamp";
 import {
@@ -43,7 +43,7 @@ export type DiffSearchState = {
 };
 
 export function useDiffSearch(
-  handleRef: RefObject<CodeViewHandle<CommentSlot> | null>,
+  handleRef: RefObject<CodeViewHandle<DiffSlot> | null>,
   files: readonly PatchFile[],
   /** Files whose body is folded away. A folded file's lines are still in the parsed
    * patch — and so still findable — but they are not on the surface, so navigating to

@@ -14,7 +14,7 @@ import {
   type ReviewOverview,
   type ReviewStamp,
 } from "../../../shared/review";
-import { buildCommentItems, type CommentSlot } from "../../../shared/diff/comment-annotations";
+import { buildDiffItems, type CommentSlot } from "../../../shared/diff/comment-annotations";
 import { MULTI_STATUS_PATCH } from "../../../shared/diff/fixtures";
 import { parsePatch } from "../../../shared/diff/patch";
 import { NO_PROGRESS } from "../../../shared/review-progress";
@@ -2967,12 +2967,19 @@ describe("exit gate", () => {
   }
 
   function commentAnnotationOn(
-    items: ReturnType<typeof buildCommentItems>,
+    items: ReturnType<typeof buildDiffItems>,
     filePath: string,
   ): { lineNumber: number; slot: CommentSlot } | null {
     const item = items.find((entry) => entry.id === filePath);
-    const annotation = (item?.annotations ?? []).find((entry) => entry.metadata.kind === "comment");
-    return annotation ? { lineNumber: annotation.lineNumber, slot: annotation.metadata } : null;
+    // Walked rather than `.find`ed, because the items now carry moved-block notes too and
+    // the narrowing has to reach the returned slot, not just the predicate.
+    for (const annotation of item?.annotations ?? []) {
+      const slot = annotation.metadata;
+      if (slot.kind === "comment") {
+        return { lineNumber: annotation.lineNumber, slot };
+      }
+    }
+    return null;
   }
 
   it("round-trips the real open→curate→export→reopen loop on the authored projection", async () => {
@@ -3057,12 +3064,7 @@ describe("exit gate", () => {
 
     // The comment on the surviving file keeps its authored range but pins to the
     // file header (lineNumber 0), flagged outdated — never misplaced, never dropped.
-    const items = buildCommentItems(
-      files,
-      current.comments,
-      { editingId: null, draft: null },
-      frozen,
-    );
+    const items = buildDiffItems(files, current.comments, { editingId: null, draft: null }, frozen);
     const keep = commentAnnotationOn(items, "src/keep.ts");
     expect(keep?.lineNumber).toBe(0);
     expect(keep?.slot).toMatchObject({ kind: "comment", outdated: true });
@@ -3106,12 +3108,7 @@ describe("exit gate", () => {
     expect(bridge.getDiff).not.toHaveBeenCalled();
 
     // Every comment places on its authored line, none outdated.
-    const items = buildCommentItems(
-      files,
-      current.comments,
-      { editingId: null, draft: null },
-      frozen,
-    );
+    const items = buildDiffItems(files, current.comments, { editingId: null, draft: null }, frozen);
     const keep = commentAnnotationOn(items, "src/keep.ts");
     const gone = commentAnnotationOn(items, "src/gone.ts");
     expect(keep).toMatchObject({ lineNumber: 5, slot: { outdated: false } });

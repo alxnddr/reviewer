@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { CodeViewHandle } from "@pierre/diffs/react";
 import type { CodeViewScrollTarget } from "@pierre/diffs";
-import type { CommentSlot } from "../../../../shared/diff/comment-annotations";
+import type { DiffSlot } from "../../../../shared/diff/comment-annotations";
 import type { Comment } from "../../../../shared/review";
 import type { CommentNavEntry } from "./comment-navigation";
 import type { PendingScroll } from "@/lib/scroll";
@@ -123,7 +123,7 @@ const INSTANT = { behavior: "instant" } as const;
 let targets: CodeViewScrollTarget[] = [];
 let onScrollTop = vi.fn<(scrollTop: number) => void>();
 let onScrollServed = vi.fn<(pending: PendingScroll) => void>();
-let handleRef: { current: CodeViewHandle<CommentSlot> | null };
+let handleRef: { current: CodeViewHandle<DiffSlot> | null };
 
 beforeEach(() => {
   react.unmount();
@@ -137,7 +137,7 @@ beforeEach(() => {
       scrollTo: (target: CodeViewScrollTarget): void => {
         targets.push(target);
       },
-    } as CodeViewHandle<CommentSlot>,
+    } as CodeViewHandle<DiffSlot>,
   };
 });
 

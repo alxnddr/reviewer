@@ -8,11 +8,11 @@ import {
 } from "../shared/review";
 import { TWO_FILE_PATCH } from "../shared/diff/fixtures";
 import { parsePatch } from "../shared/diff/patch";
-import { buildCommentItems, type CommentUiState } from "../shared/diff/comment-annotations";
+import { buildDiffItems, type CommentUiState } from "../shared/diff/comment-annotations";
 
 // The one claim about a **frozen** artifact nothing else composes: bytes that carry their own
 // diff, read through the app's whole open path (importReview → pinReview →
-// buildCommentItems), render with every anchor on its authored line. The CLI never emits one —
+// buildDiffItems), render with every anchor on its authored line. The CLI never emits one —
 // `rvw emit` writes refs-only unless asked — so the frozen pin is the path with no gate of its
 // own in front of it, and an artifact imported from elsewhere is exactly the case that would
 // otherwise go unproven end to end.
@@ -64,11 +64,11 @@ function stamp(): ReviewStamp {
 
 const UI: CommentUiState = { editingId: null, draft: null };
 
-/** The comment annotation the app's render path (buildCommentItems) produced for a
+/** The comment annotation the app's render path (buildDiffItems) produced for a
  * file+line: `lineNumber` is the placed line (0 = pinned to the file header), and
  * `outdated` is the resolver verdict CodeView renders. */
 function annotationFor(
-  items: ReturnType<typeof buildCommentItems>,
+  items: ReturnType<typeof buildDiffItems>,
   file: string,
 ): { lineNumber: number; outdated: boolean } {
   const item = items.find((candidate) => candidate.id === file);
@@ -101,7 +101,7 @@ describe("an imported frozen artifact", () => {
     expect(pin.ok && pin.reviewDiff.kind).toBe("frozenPatch");
 
     const files = parsePatch(imported.review.patch ?? "", "exit-gate");
-    const frozen = buildCommentItems(files, imported.review.comments, UI, true);
+    const frozen = buildDiffItems(files, imported.review.comments, UI, true);
     expect(annotationFor(frozen, "src/foo.ts")).toEqual({ lineNumber: 11, outdated: false });
     expect(annotationFor(frozen, "src/bar.ts")).toEqual({ lineNumber: 2, outdated: false });
   });

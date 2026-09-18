@@ -11,6 +11,8 @@ import type { CommentResolution } from "../review-progress";
 import { filesByAnchorPath, type PatchFile } from "./patch";
 import { resolveAnchor } from "./anchor";
 import { hunkSpan } from "./walk";
+import type { MovedBlock } from "./moved";
+import { movedAnnotationsByFile, movedSlotKey, type MovedSlot } from "./moved-annotations";
 
 // Comments as Pierre line annotations: each comment is our React subtree slotted
 // beneath its anchored diff line, never a restyle of Pierre's shadow DOM. The
@@ -46,6 +48,15 @@ export type CommentSlot =
       resolution: CommentResolution | null;
     }
   | { kind: "draft"; anchor: ReviewAnchor; twoColumn: boolean };
+
+/** Everything the diff surface can slot beneath a line, which is what `CodeView` is
+ * generic over. The comment kinds above are the bulk of it; a moved block's provenance
+ * note (`moved-annotations.ts`) is the one that is not about a comment at all, and it
+ * shares the union because Pierre takes exactly one `renderAnnotation` and exactly one
+ * metadata type per view — there is no second channel to put it on. Adding an arm here is
+ * deliberately a compile error in `DiffCommentSlots`' renderer, which has to say what it
+ * draws. */
+export type DiffSlot = CommentSlot | MovedSlot;
 
 /** Whether this file is actually painting two columns right now — which is not the
  * same question as "is split mode on". Pierre's own rule (`FileDiff`,
@@ -86,21 +97,34 @@ export type CommentUiState = { editingId: string | null; draft: CommentDraft | n
  * a file the switch cannot affect (a new or deleted one, always single-column) keeps
  * its version and is never needlessly re-rendered. */
 function annotationsVersion(
-  annotations: readonly DiffLineAnnotation<CommentSlot>[],
+  annotations: readonly DiffLineAnnotation<DiffSlot>[],
   /** Folding changes what the item renders more than any annotation can — the whole body
    * appears or goes away — and CodeView reconciles a reused item on this number alone, so
    * it has to be in here or a folded file would keep painting its code until something
    * else happened to bump the version. */
   collapsed: boolean,
 ): number {
-  const parts = annotations.map((annotation) => {
-    const slot = annotation.metadata;
-    const wide = slot.twoColumn ? 1 : 0;
-    return slot.kind === "comment"
-      ? `c|${annotation.side}|${annotation.lineNumber}|${slot.comment.id}|${slot.outdated ? 1 : 0}|${slot.editing ? 1 : 0}|${slot.active ? 1 : 0}|${wide}|${slot.resolution ?? ""}|${slot.comment.body}`
-      : `d|${annotation.side}|${annotation.lineNumber}|${slot.anchor.startLine}-${slot.anchor.endLine}|${wide}`;
-  });
-  return fnv1a(`${collapsed ? "1" : "0"}\n${parts.join("\n")}`);
+  return fnv1a(
+    `${collapsed ? "1" : "0"}\n${annotations.map((annotation) => slotKey(annotation)).join("\n")}`,
+  );
+}
+
+/** One annotation's contribution to the number above. A named function rather than the
+ * inline callback it used to be, so the switch can stay `default:`-less — a fourth slot kind
+ * is then a compile error under `noImplicitReturns` (and the failure it prevents is real: a
+ * slot that renders and never repaints, since CodeView reconciles on this number alone).
+ * Inline, the same switch trips `array-callback-return`, whose fix is the `default:` this
+ * codebase deliberately does not write. */
+function slotKey(annotation: DiffLineAnnotation<DiffSlot>): string {
+  const slot = annotation.metadata;
+  switch (slot.kind) {
+    case "comment":
+      return `c|${annotation.side}|${annotation.lineNumber}|${slot.comment.id}|${slot.outdated ? 1 : 0}|${slot.editing ? 1 : 0}|${slot.active ? 1 : 0}|${slot.twoColumn ? 1 : 0}|${slot.resolution ?? ""}|${slot.comment.body}`;
+    case "draft":
+      return `d|${annotation.side}|${annotation.lineNumber}|${slot.anchor.startLine}-${slot.anchor.endLine}|${slot.twoColumn ? 1 : 0}`;
+    case "moved":
+      return movedSlotKey({ ...annotation, metadata: slot });
+  }
 }
 
 /** Comments keyed by the *current* path of the file that carries them, so a caller
@@ -130,12 +154,12 @@ export function groupByFile(
   return byFile;
 }
 
-/** The diff items CodeView renders, each carrying its comments as annotations
- * placed by the resolver and a `version` that changes whenever its annotations
- * do. A comment whose file is not among `files` — under either of a renamed
- * file's names — produces no annotation: it is absent from the surface, not from
- * the review (kept in session state). */
-export function buildCommentItems(
+/** The diff items CodeView renders, each carrying its annotations — its comments, placed by
+ * the resolver, and the provenance notes of any moved block that ends in it — and a
+ * `version` that changes whenever those do. A comment whose file is not among `files` —
+ * under either of a renamed file's names — produces no annotation: it is absent from the
+ * surface, not from the review (kept in session state). */
+export function buildDiffItems(
   files: readonly PatchFile[],
   comments: readonly Comment[],
   ui: CommentUiState,
@@ -153,12 +177,21 @@ export function buildCommentItems(
    * `CommentSlot.resolution`, and folded into the version so marking a comment repaints its
    * card. Defaults to none, which is what every caller that predates marks wants. */
   resolutions: CommentResolutions = NO_RESOLUTIONS,
-): CodeViewDiffItem<CommentSlot>[] {
+  /** The moved blocks of this review, detected over the *whole* diff and memoised per load
+   * (`lib/diff/moved-blocks.ts`) — never per render, since the pass is ~7 ms on a real diff.
+   * Filtered to the blocks both of whose ends are among `files` and turned into the notes
+   * beneath them here; `moved-annotations.ts` holds the reasons for both. */
+  movedBlocks: readonly MovedBlock[] = [],
+): CodeViewDiffItem<DiffSlot>[] {
   const byFile = groupByFile(files, comments);
+  const movedByFile = movedAnnotationsByFile(movedBlocks, new Set(files.map((file) => file.path)));
   return files.map((file) => {
     const twoColumn = rendersTwoColumns(file, diffStyle);
     const collapsed = collapsedPaths.has(file.path);
-    const annotations: DiffLineAnnotation<CommentSlot>[] = [];
+    // Moved notes first, so they sit above any comment card on the same line: the note is a
+    // property of the line, the card is a discussion of it, and Pierre renders a slot's
+    // children in array order (`moved-annotations.ts`).
+    const annotations: DiffLineAnnotation<DiffSlot>[] = [...(movedByFile.get(file.path) ?? [])];
     for (const comment of byFile.get(file.path) ?? []) {
       const resolution = resolveAnchor(
         comment,
@@ -197,7 +230,7 @@ export function buildCommentItems(
 }
 
 /** Comments whose file is absent from the loaded diff: with no host file item to
- * anchor to they never reach `buildCommentItems`' annotation list, so they stay
+ * anchor to they never reach `buildDiffItems`' annotation list, so they stay
  * in session state (never dropped) but show nothing. Derived here so a surface
  * can list them. Resolved against the *full* loaded diff, never a soloed
  * subset — soloing a layer hides a file's comments from the surface but does not

@@ -1,6 +1,6 @@
 import { useMemo } from "react";
 import type { CodeViewOptions, FileDiffContentsLoader } from "@pierre/diffs";
-import type { CommentSlot } from "../../../../shared/diff/comment-annotations";
+import type { DiffSlot } from "../../../../shared/diff/comment-annotations";
 import { expansionOptions } from "./expand-context";
 import { activeDiffThemePair } from "./highlight-warmup";
 import { DIFF_LAYOUT, DIFF_UNSAFE_CSS } from "./surface-style";
@@ -26,7 +26,7 @@ export function useDiffOptions(
    * null when no live repo backs the diff (a frozen artifact) or the selection
    * has no two readable refs — the expander is then off and no git read fires. */
   loadDiffFiles: FileDiffContentsLoader | null,
-): CodeViewOptions<CommentSlot> {
+): CodeViewOptions<DiffSlot> {
   const dark = useEffectiveDark();
   const themeSelection = useSettingsStore((state) => state.resolved.theme);
   const wrap = useSettingsStore((state) => state.resolved.diffWrap);
@@ -41,7 +41,7 @@ export function useDiffOptions(
   );
 
   return useMemo(
-    (): CodeViewOptions<CommentSlot> => ({
+    (): CodeViewOptions<DiffSlot> => ({
       // themeType picks which side of the pool's light/dark pair this view paints, so it follows the
       // shell's appearance. `theme` mirrors the pool's active pair, but NOT to tokenize (a per-view
       // theme is disregarded once a worker pool is in use — the pool owns tokenizing, DiffThemeSync):

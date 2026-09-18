@@ -23,7 +23,7 @@ type CommentThreadProps = {
   /** What the reader decided about this finding, or null for one they have not answered.
    * Handed in from the slot rather than read here: the card lives in a CodeView portal that
    * only re-renders on an item `version` change, and the mark is folded into that version
-   * (`buildCommentItems`). */
+   * (`buildDiffItems`). */
   resolution: CommentResolution | null;
   onEdit: () => void;
   onDiscard: () => void;

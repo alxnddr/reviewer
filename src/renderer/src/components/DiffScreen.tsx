@@ -9,6 +9,7 @@ import { unplaceableComments } from "../../../shared/diff/comment-annotations";
 import { isFullyRead, NO_COLLAPSED_FILES, NO_READ_FILES, tallyRead } from "@/lib/read-progress";
 import { NO_RESOLUTIONS } from "../../../shared/comment-resolution";
 import { resolveExpandLoader } from "@/lib/diff/expand-context";
+import { movedBlocksFor, NO_MOVED_BLOCKS } from "@/lib/diff/moved-blocks";
 import { DiffView } from "@/components/DiffView";
 import { LayerIntro } from "@/components/LayerIntro";
 import { UnplaceableComments } from "@/components/UnplaceableComments";
@@ -214,6 +215,11 @@ export function DiffScreen(): ReactElement | null {
     () => unplaceableComments(loadedFiles ?? [], comments),
     [loadedFiles, comments],
   );
+  // What this review moved rather than wrote. Derived from the *full* loaded diff, never the
+  // soloed subset — a move is a fact about the review, and re-running the pass per solo
+  // would cost it again on every chapter step and could answer differently each time
+  // (`lib/diff/moved-blocks.ts`). Memoised on the file list's identity, so this is a lookup.
+  const movedBlocks = loadedFiles === null ? NO_MOVED_BLOCKS : movedBlocksFor(loadedFiles);
   // The authored layers plus the inferred "not covered by layers" layer (so soloing that
   // synthetic row restricts the code view to the skipped files just like an authored one),
   // the active one resolved against that list, and the subset it leaves on screen — empty
@@ -327,6 +333,7 @@ export function DiffScreen(): ReactElement | null {
           pendingScroll={pendingScroll}
           collapsedPaths={collapsedPaths}
           resolutions={resolutions}
+          movedBlocks={movedBlocks}
           onSetFileCollapsed={onSetFileCollapsed}
           loadDiffFiles={loadDiffFiles}
           onScrollTop={onScrollTop}
@@ -337,6 +344,7 @@ export function DiffScreen(): ReactElement | null {
           onStepComment={onStepComment}
           onClearActiveComment={onClearActiveComment}
           onScrollServed={onScrollServed}
+          onFollowMove={onSelectReference}
         />
       );
       // The active layer's chapter intro reads its description at width. In

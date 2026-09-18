@@ -13,7 +13,9 @@ import {
 import { useGutterUtility } from "@/components/diff/DiffGutterAdd";
 import { useDiffSearch } from "@/lib/diff/use-diff-search";
 import { indexOfComment, navigableEntries, orderedComments } from "@/lib/diff/comment-navigation";
-import { buildCommentItems, type CommentSlot } from "../../../shared/diff/comment-annotations";
+import { buildDiffItems, type DiffSlot } from "../../../shared/diff/comment-annotations";
+import type { MovedBlock } from "../../../shared/diff/moved";
+import type { ReferenceSpan } from "../../../shared/markdown";
 import type { CommentResolutions } from "../../../shared/comment-resolution";
 import type { CommentResolution } from "../../../shared/review-progress";
 import type { PatchFile } from "../../../shared/diff/patch";
@@ -41,7 +43,7 @@ type DiffViewProps = {
   activeLayerId: string | null;
   /** The comment the reader is focused on (via `n`/`p` or the sidebar list), or
    * null. Rings its card and positions the floating counter; the ring itself is driven
-   * through `buildCommentItems`. */
+   * through `buildDiffItems`. */
   activeCommentId: string | null;
   /** The jump this surface still owes — a focused comment, or the line a prose reference's
    * chip asked for — or null. Separate from `activeCommentId` because it survives the
@@ -52,11 +54,16 @@ type DiffViewProps = {
   /** What the reader decided about each finding, keyed by fingerprint. Handed down rather
    * than read by the card, because a comment card lives in a CodeView portal that only
    * re-renders when its item's `version` changes — so the mark has to reach the items
-   * (`buildCommentItems`) to be visible at all. */
+   * (`buildDiffItems`) to be visible at all. */
   resolutions: CommentResolutions;
   /** Files rendered as a header band with the body folded away — the reader's own
    * disclosures, plus the fold that rides on marking a file read. */
   collapsedPaths: ReadonlySet<string>;
+  /** The blocks this review moved rather than wrote, detected over the whole loaded diff
+   * and memoised per load (`lib/diff/moved-blocks.ts`) — the pass is far too expensive to
+   * run per render. Each block both of whose ends are among `files` draws a one-line note
+   * under each end; the rest draw nothing (`shared/diff/moved-annotations.ts`). */
+  movedBlocks: readonly MovedBlock[];
   /** Fold a file away or open it back up: the header's disclosure, and what the surface
    * calls before jumping to something inside a folded file. */
   onSetFileCollapsed: (path: string, collapsed: boolean) => void;
@@ -78,6 +85,9 @@ type DiffViewProps = {
   onClearActiveComment: () => void;
   /** Clears the pending scroll once this surface has served it. */
   onScrollServed: (pending: PendingScroll) => void;
+  /** Go to a moved block's other end — the same action a prose reference's chip takes,
+   * routed to the same store verb. */
+  onFollowMove: (path: string, span: ReferenceSpan) => void;
 };
 
 /** The Pierre diff surface, untouched: themes, gutters, and bands come from
@@ -106,6 +116,7 @@ export function DiffView({
   pendingScroll,
   collapsedPaths,
   resolutions,
+  movedBlocks,
   onSetFileCollapsed,
   loadDiffFiles,
   onScrollTop,
@@ -116,13 +127,15 @@ export function DiffView({
   onStepComment,
   onClearActiveComment,
   onScrollServed,
+  onFollowMove,
 }: DiffViewProps): ReactElement {
-  const handleRef = useRef<CodeViewHandle<CommentSlot>>(null);
+  const handleRef = useRef<CodeViewHandle<DiffSlot>>(null);
   const { editingId, draft, openDraft, renderAnnotation } = useCommentSlots({
     onAddComment,
     onEditComment,
     onDiscardComment,
     onSetCommentResolution,
+    onFollowMove,
   });
 
   // Find-in-diff. The surface is virtualized, so off-screen lines never enter the
@@ -136,7 +149,7 @@ export function DiffView({
 
   const items = useMemo(
     () =>
-      buildCommentItems(
+      buildDiffItems(
         files,
         comments,
         { editingId, draft },
@@ -145,6 +158,7 @@ export function DiffView({
         diffStyle,
         collapsedPaths,
         resolutions,
+        movedBlocks,
       ),
     [
       files,
@@ -156,6 +170,7 @@ export function DiffView({
       diffStyle,
       collapsedPaths,
       resolutions,
+      movedBlocks,
     ],
   );
 

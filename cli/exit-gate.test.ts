@@ -11,7 +11,7 @@ import {
 } from "../src/shared/review";
 import { importReviewFromPath, reviewOpenFromArgv } from "../src/main/review/guard";
 import { parsePatch } from "../src/shared/diff/patch";
-import { buildCommentItems, type CommentUiState } from "../src/shared/diff/comment-annotations";
+import { buildDiffItems, type CommentUiState } from "../src/shared/diff/comment-annotations";
 import type { FileUniverse } from "../src/tools/review-coverage";
 import { artifactDiff } from "./git";
 import type { CheckReport } from "./commands/check";
@@ -201,10 +201,7 @@ const UI: CommentUiState = { editingId: null, draft: null };
  * file header) and `outdated` is the resolver verdict CodeView renders. */
 type PlacedAnnotation = { lineNumber: number; outdated: boolean };
 
-function annotationFor(
-  items: ReturnType<typeof buildCommentItems>,
-  file: string,
-): PlacedAnnotation {
+function annotationFor(items: ReturnType<typeof buildDiffItems>, file: string): PlacedAnnotation {
   const annotation = items.find((item) => item.id === file)?.annotations?.[0];
   if (annotation === undefined || annotation.metadata.kind !== "comment") {
     throw new Error(`no comment annotation for ${file}`);
@@ -498,7 +495,7 @@ describe("exit gate: the agent's toolchain, end to end in a foreign repo", () =>
     // Derived mode is the mode the app renders a refs-only artifact in, and the mode that can
     // *fail*: it resolves each anchor against the re-derived diff's hunks. Every comment lands on
     // its authored line, none outdated — nothing for a human to fix on open.
-    const derived = buildCommentItems(files, review.comments, UI, false);
+    const derived = buildDiffItems(files, review.comments, UI, false);
     expect(annotationFor(derived, "src/engine.ts")).toEqual({ lineNumber: 2, outdated: false });
     expect(annotationFor(derived, "src/util.ts")).toEqual({ lineNumber: 2, outdated: false });
 

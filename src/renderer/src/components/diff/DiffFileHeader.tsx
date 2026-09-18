@@ -1,7 +1,7 @@
 import { memo, useCallback, type ReactElement } from "react";
 import type { CodeViewProps } from "@pierre/diffs/react";
 import { Check, ChevronDown, ChevronRight, Copy } from "lucide-react";
-import type { CommentSlot } from "../../../../shared/diff/comment-annotations";
+import type { DiffSlot } from "../../../../shared/diff/comment-annotations";
 import { Button } from "@/components/ui/button";
 import { FileReadToggle } from "@/components/FileReadToggle";
 import { OpenInEditorButton } from "@/components/OpenInEditorButton";
@@ -20,7 +20,7 @@ import { selectActiveSlice, useReviewStore } from "@/stores/review";
 // tooltip trees included. The contents are `memo` leaves that read their own state for the
 // same reason: a slot that closes over a prop of the view cannot have a stable identity, and
 // a leaf with its own subscription repaints only the file whose state actually changed.
-type HeaderSlotRenderer = NonNullable<CodeViewProps<CommentSlot>["renderHeaderPrefix"]>;
+type HeaderSlotRenderer = NonNullable<CodeViewProps<DiffSlot>["renderHeaderPrefix"]>;
 
 // The file's own disclosure, at the head of its header band: a folded file is
 // still a file in the diff, and the twisty is what says so. It leads the name

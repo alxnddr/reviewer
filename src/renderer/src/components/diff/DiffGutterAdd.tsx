@@ -6,13 +6,13 @@ import type { ReviewAnchor } from "../../../../shared/review";
 import {
   pickAddAnchor,
   selectionRange,
-  type CommentSlot,
+  type DiffSlot,
   type HoveredLine,
 } from "../../../../shared/diff/comment-annotations";
 import { Button } from "@/components/ui/button";
 import { TooltipHint } from "@/components/ui/tooltip";
 
-type GutterUtilityRenderer = NonNullable<CodeViewProps<CommentSlot>["renderGutterUtility"]>;
+type GutterUtilityRenderer = NonNullable<CodeViewProps<DiffSlot>["renderGutterUtility"]>;
 
 /** The gutter add affordance, as a slot renderer. Nothing about the live line selection is
  * threaded through here: the button reads it from the handle when it needs it, so a drag's
@@ -20,7 +20,7 @@ type GutterUtilityRenderer = NonNullable<CodeViewProps<CommentSlot>["renderGutte
  * keeps the identity stable across everything else the view holds — see `DiffFileHeader`
  * for why a slot renderer's identity is worth this much care. */
 export function useGutterUtility(
-  handleRef: RefObject<CodeViewHandle<CommentSlot> | null>,
+  handleRef: RefObject<CodeViewHandle<DiffSlot> | null>,
   onOpenDraft: (fileId: string, anchor: ReviewAnchor) => void,
 ): GutterUtilityRenderer {
   return useCallback<GutterUtilityRenderer>(
@@ -38,8 +38,8 @@ export function useGutterUtility(
 
 type GutterAddButtonProps = {
   getHoveredLine: Parameters<GutterUtilityRenderer>[0];
-  item: CodeViewItem<CommentSlot>;
-  handleRef: RefObject<CodeViewHandle<CommentSlot> | null>;
+  item: CodeViewItem<DiffSlot>;
+  handleRef: RefObject<CodeViewHandle<DiffSlot> | null>;
   onOpenDraft: (fileId: string, anchor: ReviewAnchor) => void;
 };
 

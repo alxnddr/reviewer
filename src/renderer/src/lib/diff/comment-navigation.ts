@@ -7,7 +7,7 @@ import { resolveAnchor } from "../../../../shared/diff/anchor";
 // top-to-bottom. The one source the sidebar list, the floating counter, and the
 // store's `stepComment` all read, so the panel's order, the `i/N` position, and the
 // `n`/`p` walk can never disagree. Placement reuses `resolveAnchor` — the same
-// resolver `buildCommentItems` renders through — so a comment's nav status matches
+// resolver `buildDiffItems` renders through — so a comment's nav status matches
 // what it looks like on the surface: placed on its line, outdated at the file
 // header, or unplaceable (its file is absent from the diff, so it has no host line).
 

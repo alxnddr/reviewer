@@ -1,15 +1,19 @@
 import { useCallback, useState, type ReactElement, type ReactNode } from "react";
 import type { CodeViewProps } from "@pierre/diffs/react";
 import type { ReviewAnchor } from "../../../../shared/review";
-import type { CommentDraft, CommentSlot } from "../../../../shared/diff/comment-annotations";
+import type { CommentDraft, DiffSlot } from "../../../../shared/diff/comment-annotations";
+import type { ReferenceSpan } from "../../../../shared/markdown";
 import type { CommentResolution } from "../../../../shared/review-progress";
 import { CommentEditor } from "@/components/CommentEditor";
 import { CommentThread } from "@/components/CommentThread";
+import { MovedBlockNote } from "@/components/diff/MovedBlockNote";
 
-type AnnotationRenderer = NonNullable<CodeViewProps<CommentSlot>["renderAnnotation"]>;
+type AnnotationRenderer = NonNullable<CodeViewProps<DiffSlot>["renderAnnotation"]>;
 
-/** The curation half of the diff surface: which comment is open for editing, the
- * in-flight new one, and what each annotation slot draws. */
+/** The curation half of the diff surface — which comment is open for editing, the in-flight
+ * new one — and what each annotation slot draws, which since moved-block notes is a little
+ * more than curation: Pierre takes one `renderAnnotation` per view, so every slot kind the
+ * items carry is drawn through this one callback. */
 export type CommentSlots = {
   /** Folded into the items' annotations, so a version bump follows every visible
    * change — CodeView reuses an item record and only re-renders its slots when the
@@ -26,6 +30,11 @@ export type CommentSlotHandlers = {
   onEditComment: (commentId: string, body: string) => void;
   onDiscardComment: (commentId: string) => void;
   onSetCommentResolution: (commentId: string, resolution: CommentResolution | null) => void;
+  /** Go to a moved block's other end — the one handler here that is not curation. It is in
+   * this hook because Pierre takes exactly one `renderAnnotation` for the whole view, so
+   * every slot kind is drawn by this one callback; splitting the moved note into a hook of
+   * its own would mean two render props the surface has no way to accept. */
+  onFollowMove: (path: string, span: ReferenceSpan) => void;
 };
 
 /** Comment cards, their editors, and the two pieces of state that say which is which.
@@ -37,6 +46,7 @@ export function useCommentSlots({
   onEditComment,
   onDiscardComment,
   onSetCommentResolution,
+  onFollowMove,
 }: CommentSlotHandlers): CommentSlots {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [draft, setDraft] = useState<CommentDraft | null>(null);
@@ -56,6 +66,12 @@ export function useCommentSlots({
   const renderAnnotation = useCallback<AnnotationRenderer>(
     (annotation): ReactNode => {
       const slot = annotation.metadata;
+      // Not a comment and not in the frame comments share: a provenance note is a caption on
+      // the line above it, one row high, and it renders first when a comment sits on the
+      // same line (`moved-annotations.ts` has the collision reasoning).
+      if (slot.kind === "moved") {
+        return <MovedBlockNote slot={slot} onFollow={onFollowMove} />;
+      }
       if (slot.kind === "draft") {
         return (
           <CommentAnnotationFrame twoColumn={slot.twoColumn}>
@@ -100,7 +116,7 @@ export function useCommentSlots({
         </CommentAnnotationFrame>
       );
     },
-    [openEdit, onAddComment, onEditComment, onDiscardComment, onSetCommentResolution],
+    [openEdit, onAddComment, onEditComment, onDiscardComment, onSetCommentResolution, onFollowMove],
   );
 
   return { editingId, draft, openDraft, renderAnnotation };

@@ -5,6 +5,7 @@ import {
   buildHugeAdditionPatch,
   buildManyFilesPatch,
   buildPathsPatch,
+  MOVED_BLOCK_PATCH,
   MULTI_STATUS_PATCH,
 } from "../../../shared/diff/fixtures";
 import { parsePatch, type PatchFile } from "../../../shared/diff/patch";
@@ -571,6 +572,30 @@ export function applyPreviewState(): void {
         diff: { phase: "loaded", loadId: 1, files },
         selectedFilePath: files[0]?.path ?? null,
         comments: fixtureComments(),
+      });
+      break;
+    }
+    case "moved": {
+      // A function that moved between two files and was re-indented on the way — the patch
+      // `moved.test.ts` is built on — with a comment parked on the destination's first line,
+      // which is the collision the render half had to settle: the note on top, the card under
+      // it, both on line 3 of `src/moved-to.ts`. The other end carries the mirror note.
+      const files = parsePatch(MOVED_BLOCK_PATCH, "preview:moved");
+      seedSession({
+        diff: { phase: "loaded", loadId: 1, files },
+        selectedFilePath: files[0]?.path ?? null,
+        comments: [
+          {
+            file: "src/moved-to.ts",
+            side: "additions",
+            startLine: 3,
+            endLine: 3,
+            body: "Worth a test now that it is on its own — `formatTitle` has three branches.",
+            severity: "minor",
+            tag: "refactor",
+            id: "c0000000-0000-4000-8000-000000000031",
+          },
+        ],
       });
       break;
     }

@@ -13,7 +13,7 @@ import { selectActiveSlice, useReviewStore } from "@/stores/review";
 //
 // It reads the store directly rather than taking props, unlike the rest of the diff
 // surface. Two reasons, and they point the same way: Pierre re-renders a file item's slots
-// only when the item's `version` fingerprint changes (`buildCommentItems`), so a
+// only when the item's `version` fingerprint changes (`buildDiffItems`), so a
 // prop-threaded toggle would need read state folded into that fingerprint and would still
 // only refresh on reconciliation — while a component with its own subscription repaints on
 // the click that caused it. And read state is genuinely per-file: threading a whole map
