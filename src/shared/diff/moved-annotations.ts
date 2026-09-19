@@ -61,9 +61,10 @@ export type MovedSlot = {
  * `drawn` is what the surface is currently rendering (a solo's subset, or every file): a
  * block with an end outside it contributes *neither* annotation, for the reason in the
  * header. Ordering within a file follows the block order `detectMovedBlocks` produced,
- * which is destination reading order; two ends that land on the same line (only reachable
- * for a move inside one file) keep that order rather than being merged, since they say
- * different things. */
+ * which is destination reading order, and the two ends of one block never contend for a
+ * slot even when the move stays inside a single file: `from.side` is always `deletions`
+ * and `to.side` always `additions` (`moved.ts`), and Pierre keys a slot by side as well as
+ * line — so equal line numbers are still two different slots, one on each lane. */
 export function movedAnnotationsByFile(
   blocks: readonly MovedBlock[],
   drawn: ReadonlySet<string>,
