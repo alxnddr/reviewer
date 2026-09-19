@@ -44,7 +44,20 @@ export function MovedBlockNote({ slot, onFollow }: MovedBlockNoteProps): ReactEl
   const marker = endLabel(other);
   return (
     <div className="bg-comment-band py-1 pr-4 pl-14 text-xs text-text-muted">
-      <span className="inline-flex items-center gap-1">
+      {/* The path is the only part of this row allowed to shorten, and making that true is
+          three cooperating classes, none of which does anything alone:
+          `max-w-full` caps the shrink-to-fit inline-flex at the lane — in split view that
+          lane is one column (549 px at a 1440 px window, against the 577 px this row wants
+          for a path of this repository's own length), so without the cap the row simply
+          runs past the divider and the `N lines` count is cut off; `min-w-0 shrink` on the
+          chip undoes the button's base `shrink-0` and its automatic minimum, which is what
+          lets the flex line take the cap out of the chip rather than overflow; and the chip
+          lays its own contents out as a flex row so `truncate` has a box to act on — an
+          ellipsis on the chip itself would eat the line spec, which trails the path, and
+          the coordinate is the half a reader cannot reconstruct from the diff in front of
+          them. `gap-0` keeps the chip's parts touching (`size="xs"` would space them), and
+          the glyph and the two counts stay at natural width. */}
+      <span className="inline-flex max-w-full items-center gap-1">
         <ArrowLeftRight className="size-3.5 shrink-0" aria-hidden="true" />
         {slot.end === "to" ? "Moved from" : "Moved to"}
         <Button
@@ -59,15 +72,15 @@ export function MovedBlockNote({ slot, onFollow }: MovedBlockNoteProps): ReactEl
               endLine: other.endLine,
             })
           }
-          className="mx-0.5 inline-block h-auto rounded border border-border-strong px-1.5 align-baseline text-xs leading-5"
+          className="mx-0.5 h-auto min-w-0 shrink gap-0 rounded border border-border-strong px-1.5 text-xs leading-5"
         >
-          <FileTypeIcon path={other.file} className="mr-1 inline size-3 align-[-0.15em]" />
-          {other.file}
+          <FileTypeIcon path={other.file} className="mr-1 size-3" />
+          <span className="truncate">{other.file}</span>
           {/* Mono and a step quieter: a line number is a coordinate, not a word — the same
               treatment a prose reference's chip gives its own (`Markdown.tsx`). */}
-          <span className="font-mono text-text-faint">{marker}</span>
+          <span className="shrink-0 font-mono text-text-faint">{marker}</span>
         </Button>
-        <span className="text-text-faint">
+        <span className="shrink-0 text-text-faint">
           {slot.lines} {slot.lines === 1 ? "line" : "lines"}
         </span>
       </span>
