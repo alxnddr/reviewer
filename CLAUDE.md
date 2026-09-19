@@ -207,8 +207,10 @@ Other renderer-wide rules:
   about, one place a test can redirect. Each owner validates its own keys on read and carries the
   other owners' keys through a whole-file write untouched. Two things are deliberately outside it:
   sessions are their own `electron-store` (`sessions.ts` → `sessions.json`, with a version envelope
-  and per-session salvage), and read progress is one small JSON per review under `~/.rvw`
-  (`review/progress.ts`). Don't fold either into `store.ts`.
+  and per-session salvage), and read progress is one small JSON per review under
+  `app.getPath("userData")/progress` (`review/progress.ts`, wired in `main/index.ts`). Don't
+  fold either into `store.ts`. Progress is *not* in `~/.rvw` — that directory is the CLI's,
+  and `rvw emit` owns every byte of `~/.rvw/reviews`.
 - `main/ipc-registry.ts` is the only place an IPC payload is trusted: the sender frame is checked
   first, then the request is parsed, then the response is parsed. A registration site passes no
   schema — the pair is looked up by channel — so it cannot pass the wrong one.
