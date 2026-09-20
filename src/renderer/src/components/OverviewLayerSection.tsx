@@ -123,8 +123,8 @@ function FileNote({ note }: { note: string | null }): ReactElement {
     <TooltipHint content={note} whenTruncated side="top" align="start">
       <span className="flex min-w-0 flex-1 items-center gap-1.5 text-xs text-text-faint">
         {/* The boundary between the path and the note, said with the app's own separator
-            rather than with ink alone — on a skim row the two are set in the same faint
-            grey, and without it a note reads as a continuation of the filename. */}
+            rather than with ink alone — the two greys are a step apart, and without it a
+            note reads as a continuation of the filename. */}
         <span aria-hidden="true">·</span>
         <span className="min-w-0 truncate">{note}</span>
       </span>
@@ -134,7 +134,16 @@ function FileNote({ note }: { note: string | null }): ReactElement {
 
 /** One file the layer covers: its path and the layer's own footprint in it. A file the
  * loaded diff no longer carries stays listed — the layer still claims it — but says so
- * and does not pretend to navigate anywhere useful. */
+ * and does not pretend to navigate anywhere useful.
+ *
+ * The one row for every chapter, a `skim` one included. A skim chapter used to get a row of
+ * its own — no type glyph, no padding, the path in the faint ink of the counts — so that a
+ * dozen lockfiles cost a dozen lines instead of half a screen. The reader, meeting it on a
+ * real review, read it as a list that had failed to load its icons: the glyph is how a file
+ * looks like itself everywhere else in the app, and the one list without it looked broken,
+ * not dense. The saving was about 4px a row under a fold that already stops at
+ * `FILES_SHOWN`. What says "skim" on the page is the chip on the heading; the rows are
+ * just files. Do not bring the second row back to save height. */
 function FileRow({ entry, onOpen }: FileRowProps): ReactElement {
   const missing = entry.status === null;
   return (
@@ -169,51 +178,12 @@ function FileRow({ entry, onOpen }: FileRowProps): ReactElement {
           {entry.path}
         </span>
       </TooltipHint>
+      {/* The note earns its place most in a skim chapter: its whole argument for existing is
+          that its files need a glance and not a read, and one line saying which dependency
+          moved is exactly the glance. */}
       <FileNote note={entry.note} />
       {missing ? (
         <span className="shrink-0 text-xs text-text-faint">not in this diff</span>
-      ) : (
-        <LineCounts additions={entry.additions} deletions={entry.deletions} />
-      )}
-    </button>
-  );
-}
-
-/** The same row for a chapter the author marked `skim`, set as a list rather than as a
- * catalogue: no type glyph, no row padding, the path in the faint ink the counts already
- * use. It is still a button, still hinted, still carries the read slot — the mark is about
- * how much attention the files are owed, never about what can be reached — but a dozen
- * lockfiles now cost a dozen lines instead of half a screen.
- *
- * Kept as its own component rather than a `dense` flag on `FileRow`: the two differ in what
- * they *show*, not only in how tightly, and a row with four conditionals in it is how the
- * catalogue row and the list row end up drifting into a third thing that is neither. */
-function SkimFileRow({ entry, onOpen }: FileRowProps): ReactElement {
-  const missing = entry.status === null;
-  return (
-    <button
-      type="button"
-      disabled={missing}
-      onClick={onOpen}
-      className={cn(
-        "flex w-full items-center gap-2 rounded px-1.5 text-left text-xs",
-        missing ? "cursor-default" : "hover:bg-border/50",
-      )}
-    >
-      <span className="flex size-3 shrink-0 items-center justify-center">
-        {entry.read && <ReadRing tally={READ_ONE} />}
-      </span>
-      <TooltipHint content={entry.path} whenTruncated side="top" align="start">
-        <span className={cn("min-w-0 shrink truncate text-text-faint", missing && "line-through")}>
-          {entry.path}
-        </span>
-      </TooltipHint>
-      {/* The note earns its place most on this row: a skim chapter's whole argument for
-          existing is that its files need a glance and not a read, and one line saying which
-          dependency moved is exactly the glance. */}
-      <FileNote note={entry.note} />
-      {missing ? (
-        <span className="shrink-0 text-text-faint">not in this diff</span>
       ) : (
         <LineCounts additions={entry.additions} deletions={entry.deletions} />
       )}
@@ -286,9 +256,6 @@ export function OverviewLayerSection({
   const shown = expanded ? files : files.slice(0, FILES_SHOWN);
   const rest = files.length - shown.length;
   const rank = rankStyle(chapter.depth);
-  // The fold threshold is `FILES_SHOWN` either way: a skim chapter is denser per row, not
-  // longer, and a second threshold would be a number nobody could explain the difference of.
-  const Row = chapter.skim ? SkimFileRow : FileRow;
   const Heading = headingTag(chapter.depth);
   const headingId = layerHeadingDomId(layer.id);
 
@@ -320,9 +287,10 @@ export function OverviewLayerSection({
           </button>
         </TooltipHint>
         {chapter.outdated && <ChapterChip>Outdated</ChapterChip>}
-        {/* Said once, on the heading, rather than as a sentence under it: the compact list
-            below is the rest of the explanation, and a chapter whose whole point is that it
-            is not worth reading should not open with a paragraph about itself. */}
+        {/* Said once, on the heading, rather than as a sentence under it: a chapter whose
+            whole point is that it is not worth reading should not open with a paragraph about
+            itself. The chip is also the only thing that marks the chapter — its file rows are
+            the same rows every other chapter has (`FileRow`). */}
         {chapter.skim && (
           <TooltipHint
             content="Mechanical — the author marked this layer skim, and its files open folded in the diff"
@@ -354,9 +322,9 @@ export function OverviewLayerSection({
           printing them here too would say everything twice. Its fact row still carries the
           totals, because the totals are what a group is. */}
       {files.length > 0 && !hasChildren && (
-        <div className={cn("flex flex-col", chapter.skim ? "mt-3" : "mt-4 gap-0.5")}>
+        <div className="mt-4 flex flex-col gap-0.5">
           {shown.map((entry) => (
-            <Row key={entry.path} entry={entry} onOpen={() => onOpenFile(entry.path)} />
+            <FileRow key={entry.path} entry={entry} onOpen={() => onOpenFile(entry.path)} />
           ))}
           {(rest > 0 || expanded) && (
             <Button

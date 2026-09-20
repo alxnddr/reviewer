@@ -221,7 +221,7 @@ export type ReviewLayerRange = z.infer<typeof ReviewLayerRange>;
  * tell authors to fold that kind of thing into the layer it serves, which buried it inside a
  * real chapter, inflated that chapter's counts, and still asked the reader to get through it
  * before the chapter read as finished. Marked instead, it stays a chapter of its own —
- * covered, counted, navigable — and the app renders it small and opens its files folded. It
+ * covered, counted, navigable — and the app chips its heading `Skim` and opens its files folded. It
  * is deliberately the author's mark and not a score: CodeRabbit collapses a summary below a
  * model-assigned complexity threshold, which puts a judgement between the author and the
  * reader; this is the same effect with nobody in between. Nothing enforces where a skim
@@ -248,7 +248,7 @@ export const ReviewLayerInput = z
      * literal is what makes the absent form the only other form. */
     skim: z.literal(true).optional().meta({
       description:
-        "Mark this layer as the mechanical remainder — lockfiles, generated output, a rename sweep, formatting. Write ONE such layer, holding everything of that kind, rather than cutting the lines out of the review: the app renders it as a compact list instead of a section and starts its files folded in the diff, so the reader can see what moved without it inflating the chapter it would otherwise have been buried in. Coverage still counts these lines, so nothing is hidden from the gate. Do not mark a layer skim to make it shorter — mark it skim when there is nothing to read.",
+        "Mark this layer as the mechanical remainder — lockfiles, generated output, a rename sweep, formatting. Write ONE such layer, holding everything of that kind, rather than cutting the lines out of the review: the app marks its heading Skim and starts its files folded in the diff, so the reader can see what moved without it inflating the chapter it would otherwise have been buried in. Coverage still counts these lines, so nothing is hidden from the gate. Do not mark a layer skim to make it shorter — mark it skim when there is nothing to read.",
     }),
     /** A getter, not a `z.lazy` wrapper: it defers the self-reference the same way, but
      * leaves the schema's own type *inferable*, so the two exported types below are read
