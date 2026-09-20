@@ -1,6 +1,6 @@
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { NO_PROGRESS, type ReadProgress } from "../../shared/review-progress";
 import { createProgressStore, progressFileName } from "./progress";
@@ -203,26 +203,38 @@ describe("createProgressStore", () => {
   it("prunes records whose review is gone, and keeps the ones whose review is not", async () => {
     const dir = makeDir();
     const store = createProgressStore(dir);
+    // A real file deleted out of a real directory: "gone" is only provable where the
+    // directory is still there to say so, so an invented path no longer stages an orphan.
+    const gone = makeArtifact("gone.reviewer.json");
     await store.write(REVIEW, progress());
-    await store.write(OTHER, progress());
+    await store.write(gone, progress());
+    rmSync(gone);
 
+    // REVIEW names a path that was never on this disk, so it survives on the fast path alone:
+    // a record named live is not looked for.
     await store.prune(new Set([progressFileName(REVIEW)]));
 
     expect(await store.read(REVIEW)).toEqual(progress());
-    expect(await store.read(OTHER)).toEqual(NO_PROGRESS);
-    expect(existsSync(join(dir, progressFileName(OTHER)))).toBe(false);
+    expect(await store.read(gone)).toEqual(NO_PROGRESS);
+    expect(existsSync(join(dir, progressFileName(gone)))).toBe(false);
   });
 
   it("a pruned review that comes back is written afresh, not skipped as unchanged", async () => {
     const dir = makeDir();
     const store = createProgressStore(dir);
-    await store.write(REVIEW, progress());
+    const review = makeArtifact("comes-back.reviewer.json");
+    await store.write(review, progress());
+    rmSync(review);
     await store.prune(new Set());
+    // Asserted, not assumed: without a sweep having happened the rest of this proves nothing —
+    // which is how this case went on passing, on an invented path, after the probe stopped
+    // believing one.
+    expect(existsSync(join(dir, progressFileName(review)))).toBe(false);
 
     // The skip-unchanged cache has to forget what it pruned, or a review whose record was
     // swept would silently never be written again in this session.
-    await store.write(REVIEW, progress());
-    expect(await store.read(REVIEW)).toEqual(progress());
+    await store.write(review, progress());
+    expect(await store.read(review)).toEqual(progress());
   });
 
   it("keeps a record whose artifact is elsewhere on disk than the directory that was listed", async () => {
@@ -250,6 +262,38 @@ describe("createProgressStore", () => {
     await store.prune(new Set());
 
     expect(existsSync(join(dir, progressFileName(deleted)))).toBe(false);
+  });
+
+  it("keeps a record whose artifact's whole directory is missing, as on an ejected disk", async () => {
+    const dir = makeDir();
+    const store = createProgressStore(dir);
+    const onVolume = makeArtifact("on-a-volume.reviewer.json");
+    await store.write(onVolume, progress());
+    // What ejecting a disk does on macOS: the mount point under /Volumes goes with it, so the
+    // artifact answers a plain `ENOENT` — indistinguishable from deleted by errno alone.
+    // Removing the artifact's whole directory is that shape without a disk. Only a parent that
+    // can still be listed makes an absence a proof; this one cannot, so the read marks stay
+    // for when the disk comes back.
+    rmSync(dirname(onVolume), { recursive: true });
+
+    await store.prune(new Set());
+
+    expect(await store.read(onVolume)).toEqual(progress());
+  });
+
+  it("keeps a record whose artifact could not be looked for", async () => {
+    const dir = makeDir();
+    const store = createProgressStore(dir);
+    // A path *through* a regular file is `ENOTDIR`: a failure to look that needs no chmod and
+    // no volume to stage, standing for every other one — EACCES, EIO, ELOOP. This is the arm
+    // the safety rests on: an `artifactIsGone` reduced to `catch { return true }` sweeps this
+    // record, and until this case existed that reduction passed the whole suite.
+    const unlookable = join(makeArtifact("a-file.reviewer.json"), "child.reviewer.json");
+    await store.write(unlookable, progress());
+
+    await store.prune(new Set());
+
+    expect(await store.read(unlookable)).toEqual(progress());
   });
 
   it("never sweeps a record it cannot parse, however orphaned it looks", async () => {

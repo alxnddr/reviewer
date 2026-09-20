@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { access, mkdir, readdir, readFile, rename, rm, writeFile } from "node:fs/promises";
-import { join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { errnoCode } from "../../shared/errors";
 import {
   NO_PROGRESS,
@@ -91,16 +91,40 @@ export function createProgressStore(dir: string): ProgressStore {
     return parsed.success ? parsed.data : null;
   }
 
-  /** Whether an artifact is *provably* absent: `ENOENT`, and nothing else. A permission
-   * failure, a path component that is not a directory, a volume that is not mounted all
-   * answer `false` — "I could not look" is not "it is gone", and the caller acting on this
-   * deletes the only copy of somebody's read marks. */
+  /** Whether an artifact is *provably* absent: `ENOENT`, from a parent directory that reads
+   * and does not list it. `ENOENT` alone proves nothing, which is what this used to believe:
+   * ejecting a disk on macOS removes its mount point under `/Volumes` outright, so every path
+   * on an unmounted volume answers exactly what a deleted file does — not `ENOTCONN`, not
+   * `EIO` — and a reader who ejected the disk a review lives on had its record swept at the
+   * next listing. The parent is the witness: a directory that can be listed is a directory
+   * that is there. A permission failure, a path component that is not a directory, a parent
+   * that is itself missing all answer `false` — "I could not look" is not "it is gone", and
+   * the caller acting on this deletes the only copy of somebody's read marks.
+   *
+   * The price is a record that outlives a folder deleted whole (a removed checkout, a temp
+   * dir): a few hundred bytes of litter against somebody's read marks, and litter is the side
+   * to err on. The gap that remains, named rather than pretended away: a mount point that
+   * survives as an *empty directory* — an unclean eject on macOS, the convention on Linux —
+   * lists, and lists nothing, so an artifact kept at the volume's root is still swept. Nothing
+   * a path can be asked tells that apart from a deleted file. */
   async function artifactIsGone(artifactPath: string): Promise<boolean> {
     try {
       await access(artifactPath);
       return false;
     } catch (error) {
-      return errnoCode(error) === "ENOENT";
+      if (errnoCode(error) !== "ENOENT") {
+        return false;
+      }
+    }
+    try {
+      // Asked of the listing, not merely that there is one: a volume mounted between the two
+      // looks — missing above, present here — reads as live rather than as a readable parent.
+      // `access` still goes first, because it is the one that knows the filesystem's own idea
+      // of a name (case, unicode normalization); this exact comparison only ever decides
+      // inside that remount window.
+      return !(await readdir(dirname(artifactPath))).includes(basename(artifactPath));
+    } catch {
+      return false;
     }
   }
 
