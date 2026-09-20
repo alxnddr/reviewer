@@ -160,11 +160,13 @@ export async function listRecentReviews(
     }),
   );
 
-  // The one place the whole artifact directory is known, so the one place an orphaned
-  // progress record can be recognized as orphaned: anything keyed to a review that is no
-  // longer here. Deliberately over the *found* set, not the capped one — a review pushed
-  // past RECENT_MAX is still on disk, and sweeping its progress because the list was long
-  // would be a silent data loss. Fire-and-forget: the list must not wait on housekeeping.
+  // The one place the whole artifact directory is known, so the one place the sweep is cheap
+  // enough to run: every record named here is live without the store having to stat anything.
+  // It is a fast path and not the question — the store asks each remaining record where its
+  // own artifact is, because a review opened by path lives outside this directory and is not
+  // an orphan. Deliberately over the *found* set, not the capped one — a review pushed past
+  // RECENT_MAX is still on disk, and sweeping its progress because the list was long would be
+  // a silent data loss. Fire-and-forget: the list must not wait on housekeeping.
   void progress
     .prune(new Set(found.map((candidate) => progressFileName(candidate.path))))
     .catch(() => {});

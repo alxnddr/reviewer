@@ -39,6 +39,17 @@ function progress(overrides: Partial<ReadProgress> = {}): ReadProgress {
   };
 }
 
+/** A real artifact file on a disk of its own, outside any progress directory. The sweep no
+ * longer asks the directory it was handed whether a record is an orphan — it goes and looks
+ * for the artifact the record names — so proving that needs a file that is actually there. */
+function makeArtifact(name: string): string {
+  const dir = mkdtempSync(join(tmpdir(), "reviewer-artifact-"));
+  tempDirs.push(dir);
+  const file = join(dir, name);
+  writeFileSync(file, "{}", "utf8");
+  return file;
+}
+
 /** Put arbitrary bytes where a given review's record belongs — the only way to stage the
  * damaged, hand-edited, and from-the-future records the store has to survive. */
 function writeRaw(dir: string, artifactPath: string, bytes: string): string {
@@ -212,6 +223,46 @@ describe("createProgressStore", () => {
     // swept would silently never be written again in this session.
     await store.write(REVIEW, progress());
     expect(await store.read(REVIEW)).toEqual(progress());
+  });
+
+  it("keeps a record whose artifact is elsewhere on disk than the directory that was listed", async () => {
+    const dir = makeDir();
+    const store = createProgressStore(dir);
+    const elsewhere = makeArtifact("opened-by-path.reviewer.json");
+    await store.write(elsewhere, progress());
+
+    // What the recents listing hands over: the names it found in ~/.rvw/reviews, which a
+    // review opened by path was never among. Sweeping on that set alone is what used to cost
+    // every `rvw emit --out`, every File ▸ Open Review… and every argv open its read marks.
+    await store.prune(new Set([progressFileName(REVIEW)]));
+
+    expect(await store.read(elsewhere)).toEqual(progress());
+    expect(existsSync(join(dir, progressFileName(elsewhere)))).toBe(true);
+  });
+
+  it("sweeps a record whose artifact is really gone from disk", async () => {
+    const dir = makeDir();
+    const store = createProgressStore(dir);
+    const deleted = makeArtifact("deleted.reviewer.json");
+    await store.write(deleted, progress());
+    rmSync(deleted);
+
+    await store.prune(new Set());
+
+    expect(existsSync(join(dir, progressFileName(deleted)))).toBe(false);
+  });
+
+  it("never sweeps a record it cannot parse, however orphaned it looks", async () => {
+    const dir = makeDir();
+    const store = createProgressStore(dir);
+    const file = writeRaw(dir, REVIEW, "{ not json");
+
+    await store.prune(new Set());
+
+    // A record this build cannot read names no artifact it can go and check, so nothing about
+    // it is provable and the sweep must leave it alone — "never delete on failure" is the same
+    // rule that keeps a from-the-future record readable by the build that owns it.
+    expect(existsSync(file)).toBe(true);
   });
 
   it("pruning a directory that is not there is a no-op, not a failure", async () => {

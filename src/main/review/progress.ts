@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
-import { mkdir, readdir, readFile, rename, rm, writeFile } from "node:fs/promises";
+import { access, mkdir, readdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
+import { errnoCode } from "../../shared/errors";
 import {
   NO_PROGRESS,
   ReviewProgressFile,
@@ -27,7 +28,11 @@ import {
 //   **Never delete on failure.** An unparseable record is left exactly where it is: the build
 //   that can read it may be the next one, and it is the only copy. It is overwritten only
 //   when the reader generates real progress to put in its place, which is the one moment
-//   clobbering it is unambiguously right.
+//   clobbering it is unambiguously right. The orphan sweep obeys the same rule from the other
+//   side: it asks the *artifact*, not the directory it was listed from, so a record may only
+//   be dropped when it parses and the file it names is provably gone. A review opened by path
+//   from anywhere — `rvw emit --out`, File ▸ Open Review…, an argv open — lives outside
+//   `~/.rvw/reviews` and would otherwise look like an orphan at every listing.
 
 /** The filename for an artifact path: its sha256, truncated. The path is the key (see
  * session.ts's `reviewPath`), but a path is not a filename — it carries separators, unicode,
@@ -50,8 +55,10 @@ export type ProgressStore = {
   /** Ratios for a list of artifacts, for the picker rows. Absent from the map means no
    * record; the caller renders nothing rather than an empty ring. */
   summaries: (artifactPaths: readonly string[]) => Promise<Map<string, ReviewProgressSummary>>;
-  /** Drop records whose artifact is no longer among `liveNames`. Called from the one pass
-   * that already knows the whole directory (the recents listing), never on its own. */
+  /** Drop records whose artifact is gone from disk. `liveNames` is a fast path, not the
+   * rule: a record named there is known live without a stat, and every other record is
+   * checked against the path it carries rather than assumed orphaned. Called from the one
+   * pass that already knows the whole directory (the recents listing), never on its own. */
   prune: (liveNames: ReadonlySet<string>) => Promise<void>;
 };
 
@@ -62,28 +69,47 @@ export function createProgressStore(dir: string): ProgressStore {
   // scrolling a long diff would rewrite this file continuously.
   const lastWritten = new Map<string, string>();
 
-  async function readRecord(artifactPath: string): Promise<ReadProgress> {
+  /** One record by its *filename*, whole — including the `path` only the sweep reads. `null`
+   * is every failure collapsed into one answer, because both callers want the same thing
+   * from all of them: missing (the overwhelmingly common case — a review nobody has read
+   * yet), unreadable, not JSON, or a format this build predates. The reader sees no
+   * progress; the sweep sees a record it does not understand and therefore may not touch. */
+  async function readFileRecord(name: string): Promise<ReviewProgressFile | null> {
     let bytes: string;
     try {
-      bytes = await readFile(join(dir, progressFileName(artifactPath)), "utf8");
+      bytes = await readFile(join(dir, name), "utf8");
     } catch {
-      // Missing is the overwhelmingly common case — a review nobody has read yet — so it is
-      // not worth distinguishing from unreadable here. Both mean the same thing to a reader.
-      return NO_PROGRESS;
+      return null;
     }
     let json: unknown;
     try {
       json = JSON.parse(bytes);
     } catch {
-      return NO_PROGRESS;
+      return null;
     }
     const parsed = ReviewProgressFile.safeParse(json);
-    if (!parsed.success) {
-      // A record from a format this build predates lands here too, and gets the same
-      // treatment: no progress shown, the file left alone for whichever build owns it.
+    return parsed.success ? parsed.data : null;
+  }
+
+  /** Whether an artifact is *provably* absent: `ENOENT`, and nothing else. A permission
+   * failure, a path component that is not a directory, a volume that is not mounted all
+   * answer `false` — "I could not look" is not "it is gone", and the caller acting on this
+   * deletes the only copy of somebody's read marks. */
+  async function artifactIsGone(artifactPath: string): Promise<boolean> {
+    try {
+      await access(artifactPath);
+      return false;
+    } catch (error) {
+      return errnoCode(error) === "ENOENT";
+    }
+  }
+
+  async function readRecord(artifactPath: string): Promise<ReadProgress> {
+    const record = await readFileRecord(progressFileName(artifactPath));
+    if (record === null) {
       return NO_PROGRESS;
     }
-    const { readFiles, collapsedFiles, foldsSeeded, readTotal, resolvedComments } = parsed.data;
+    const { readFiles, collapsedFiles, foldsSeeded, readTotal, resolvedComments } = record;
     return { readFiles, collapsedFiles, foldsSeeded, readTotal, resolvedComments };
   }
 
@@ -146,6 +172,13 @@ export function createProgressStore(dir: string): ProgressStore {
         names
           .filter((name) => name.endsWith(".json") && !liveNames.has(name))
           .map(async (name) => {
+            // Not listed is not orphaned. Ask the record where its artifact is and look
+            // there: a review kept outside the directory this sweep was handed is the
+            // normal case, not the exotic one, and the old rule swept every one of them.
+            const record = await readFileRecord(name);
+            if (record === null || !(await artifactIsGone(record.path))) {
+              return;
+            }
             try {
               await rm(join(dir, name));
               lastWritten.delete(name);
