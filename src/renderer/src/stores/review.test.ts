@@ -1674,11 +1674,47 @@ describe("start tabs", () => {
     const first = store.getState().activeSessionId;
     store.getState().openStartTab();
 
-    // Same path: one tab per repository, so this re-activates rather than creating one.
+    // Same path: one plain tab per repository, so this re-activates rather than creating one.
     await store.getState().openRepository();
 
     expect(store.getState().activeSessionId).toBe(first);
     expect(startIds()).toEqual([]);
+  });
+
+  it("pulses the plain tab it landed on, and again when asked again", async () => {
+    const bridge = makeBridge({});
+    await openFixtureRepo(bridge);
+    const first = store.getState().activeSessionId;
+    expect(store.getState().revealedSession).toBeNull();
+
+    await store.getState().openRepository();
+    const once = store.getState().revealedSession;
+    await store.getState().openRepository();
+    const twice = store.getState().revealedSession;
+
+    expect(once?.id).toBe(first);
+    expect(twice?.id).toBe(first);
+    expect(twice?.nonce).not.toBe(once?.nonce);
+  });
+
+  it("opens a plain session beside a review of the same repository", async () => {
+    // The fixture bridge's picker answers `/repo`. A review session is pinned to a checkout,
+    // so it carries that path too — and must not count as "this repository is already open".
+    const bridge = makeBridge({});
+    await hydrateWith(bridge, {
+      sessions: [refsReviewSession(ID_A, "/repo", "main", "feature")],
+      activeSessionId: ID_A,
+    });
+
+    await store.getState().openRepository();
+
+    const state = store.getState();
+    expect(bridge.createSession).toHaveBeenCalledTimes(1);
+    expect(Object.keys(state.sessions)).toHaveLength(2);
+    expect(state.activeSessionId).not.toBe(ID_A);
+    expect(active().reviewOrigin).toBeNull();
+    expect(active().repo.path).toBe("/repo");
+    expect(state.revealedSession).toBeNull();
   });
 
   it("takes the review that arrives from the CLI while it is focused", async () => {

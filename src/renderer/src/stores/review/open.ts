@@ -33,8 +33,8 @@ export type OpenSlice = {
    * Null otherwise, File → Open Review… included: main picked that path and the renderer never
    * learns it. Set and cleared with the failure, never apart from it. */
   reviewOpenLocate: ReviewLocateRepoRequest | null;
-  /** The tab an open request landed on when it turned out to already be open, and a nonce so
-   * asking twice flashes twice. One tab per artifact means a reader who clicks a review they
+  /** The tab an open request landed on when it turned out to already be open — a review, or
+   * a plain repository — and a nonce so asking twice flashes twice. One tab per artifact means a reader who clicks a review they
    * already have up gets no new tab — and a click that produces no visible change is a click
    * that reads as broken, however correct it was. The strip pulses the tab instead, which is
    * the same "here, this one" the browser gives you. Null until it happens; app-level and
@@ -132,15 +132,33 @@ export const createOpenSlice: StateCreator<ReviewState, [], [], OpenSlice> = (se
         return;
       }
       const repo = opened.value.repo;
-      // One tab per repository: re-opening a path that already has a session
-      // re-activates its tab — two tabs over one repo would silently fight over
-      // the same persisted state through the write-back.
+      // One *plain* tab per repository: re-opening a path that already has a plain session
+      // re-activates its tab — two of them over one repo would be the same diff twice, each
+      // writing back its own copy of the same selection.
+      //
+      // A review of that repo is not a match, and until this said so it was: a review session
+      // is pinned to a checkout, so it carries the same `repo.path`, and ⌘O on the repo of an
+      // open review focused the review and opened nothing. The rule predates reviews, when
+      // every session was a plain one. The two share no persisted state — sessions are keyed
+      // by id, and a review's progress is keyed by its artifact — and two reviews of one repo
+      // already sit side by side (one tab per *artifact*, `main/review/handlers.ts`), so a
+      // plain diff beside a review is nothing new. `reviewOrigin` is the review-session
+      // marker every other slice asks (`picker.ts`, `lib/diff-plan.ts`).
+      //
       // Captured before the awaits: the reader may have switched tabs while the picker was up,
       // and this is a fact about where the errand started.
       const from = get().activeStartTabId;
-      const existing = Object.values(get().sessions).find((slice) => slice.repo.path === repo.path);
+      const existing = Object.values(get().sessions).find(
+        (slice) => slice.reviewOrigin === null && slice.repo.path === repo.path,
+      );
       if (existing !== undefined) {
-        set({ openFailure: null });
+        // Pulsed, like a review that was already open (`revealedSession`): when the tab in
+        // question is the active one, activating it changes nothing on screen, and a ⌘O that
+        // changes nothing reads as broken.
+        set({
+          openFailure: null,
+          revealedSession: { id: existing.id, nonce: nextRevealNonce() },
+        });
         get().activateSession(existing.id);
         // The start tab was still spent — it did its job, the tab it would have become was
         // already open — so it goes rather than lingering as a door nobody opened.
