@@ -178,6 +178,7 @@ Other renderer-wide rules:
   its own state (`LayerList` → layers, `CommentsPanel` → comments); anything drawn once per item
   takes what it needs. `components/ReviewRail.tsx` states the rule, `components/rail.tsx` owns the
   shared row/section vocabulary so four widgets in one column cannot drift apart again.
+- **The start screen's foot line is the only entry to a plain session drawn in the window.** `PlainDiffFoot` in `components/StartScreen.tsx` — "No review to read? Open a repository ⌘O…" — calls the same `openRepository` as File ▸ Open Repository… and the `?` sheet's row, and takes its key from `lib/shortcuts.ts`. It is one faint `text-xs` line pinned under the list, not a third heading, a button or a `+` menu: a plain diff is a different errand from reading a review, so it stays out of the sight path (heading, prompt, heading, list) while still being words on the one screen a person with no review is standing on. The screen names two things; keep it at two. `StartScreen.tsx`'s header holds the argument, including why the two doors that used to sit at that foot do not come back.
 - **Keyboard.** `lib/shortcuts.ts` is the vocabulary — the sheet, the tooltips and the recents
   footer all derive from it, and advertising an unregistered key is a type error. It is deliberately
   *not* a dispatch table: handlers stay in the short switch beside the state they act on, guarded by

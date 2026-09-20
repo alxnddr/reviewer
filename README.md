@@ -49,6 +49,8 @@ send one to a machine without the checkout, `rvw emit --embed-patch` packs the d
 itself; the app still reads from the checkout wherever it finds one, and shows the packed diff only
 where it does not. `rvw --help` has the rest.
 
+**A plain diff, with no review.** **File ▸ Open Repository…** (⌘O), or the faint line at the foot of the start screen, opens any git checkout as a tab of its own. It lands on the newest commit; click the bar at the top of the sidebar for the rest. **Branch** is whose history you are reading, **Compare to** narrows the list to what that branch adds over another ref, and a drag or shift-click across the commits brushes out the range you want to read. Read marks and comments work as they do in a review. The tab comes back after a relaunch like any other, and ⌘W ends it.
+
 **Settings** (⌘,, or the gear in the title bar) hold the theme, whether the changed-files list
 collapses a chain of otherwise-empty folders into one row, the diff's typography — code font,
 size, line height, tab size, ligatures, line wrapping — and which editor a file opens in. Each row

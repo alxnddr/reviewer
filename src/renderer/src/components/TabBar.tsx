@@ -636,7 +636,9 @@ export function TabBar(): ReactElement {
       {/* One button, one meaning: a new tab, showing the start screen. It used to be a menu
           offering "Open Repository…" and "Open Review…", which made the strip's only
           affordance a pair of file pickers — the two errands a reader is *least* likely to
-          be on, and both of them still in the File menu and on the start screen itself. */}
+          be on. Both are still in the File menu; the start screen lists the reviews themselves
+          rather than offering their picker, and says where the repository one is in one faint
+          line at its foot (see StartScreen). */}
       <TooltipHint side="bottom" align="start" content={<ShortcutHint id="tab.new" />}>
         <Button
           variant="chrome"

@@ -5,7 +5,9 @@ import { DiffField } from "@/components/DiffField";
 import { GitFailureText } from "@/components/GitFailureText";
 import { OnboardingCard } from "@/components/Onboarding";
 import { ReviewHistory } from "@/components/ReviewHistory";
-import { START_INSET, StartHeading } from "@/components/StartChrome";
+import { START_INSET, StartHeading, StartRule } from "@/components/StartChrome";
+import { Kbd } from "@/components/ui/kbd";
+import { shortcut } from "@/lib/shortcuts";
 import { cn } from "@/lib/utils";
 import { useOnboardingStore } from "@/stores/onboarding";
 import { useRecentReviewsStore } from "@/stores/recent-reviews";
@@ -34,11 +36,25 @@ import { useReviewStore } from "@/stores/review";
 // remain are held to the reading column for the same reason — a full-bleed rule across a window
 // this wide is louder than the boundary it marks.
 //
-// Nothing sits at the foot. A pair of quiet doors used to — open a review file, read the guide
-// again — and both were answers to questions this screen does not raise: the list *is* how a
-// reader comes back to a review, and a file picker beside it only matters for the review that is
-// not in the list. Both still exist where a reader looks for them by habit rather than by
-// reading: ⇧⌘O and File ▸ Open Review… for the picker.
+// One faint line sits at the foot, and the test it passed is the one that removed what used to
+// be there. A pair of quiet doors once sat here — open a review file, read the guide again — and
+// both were answers to questions this screen does not raise: the list *is* how a reader comes
+// back to a review, and a file picker beside it only matters for the review that is not in the
+// list. Both still exist where a reader looks for them by habit rather than by reading: ⇧⌘O and
+// File ▸ Open Review… for the picker. Neither comes back.
+//
+// The line that is there (`PlainDiffFoot`) duplicates nothing on the page, and its question is
+// raised here and nowhere else: this is the screen a person with no review is standing on, every
+// other word on it says "review", and so nobody has a reason to guess that ⌘O opens any
+// repository as a plain diff — a branch's commits, a second branch to compare to, a range
+// brushed out of the list. Habit only finds a door the reader knows exists; the line is less a
+// second door than the one sentence that says the room is there. It is the only entry to a
+// plain session drawn in the window (the others are File ▸ Open Repository… and the `?` sheet).
+//
+// It is deliberately not a third heading, a button or a row. Reading a plain diff is a different
+// purpose from reading a review, so it stays out of the sight path — heading, prompt, heading,
+// list — in the rail's own foot-line register (xs, faint), pinned under the scroller so it is
+// findable without scrolling and never moves. The screen still names two things.
 //
 // While the guide is up it owns the whole surface, and none of this shows behind it.
 
@@ -101,6 +117,39 @@ export function StartScreen({ failure }: StartScreenProps): ReactElement {
       </header>
 
       <ReviewHistory />
+      <PlainDiffFoot />
     </div>
+  );
+}
+
+/** The way into a plain diff — see the header for why it is here and why it is this quiet.
+ *
+ * `shrink-0` under the list's `flex-1` scroller is what pins it: a short window takes the height
+ * out of the list, never out of this. The key is read from the registry and drawn as a bare
+ * `Kbd` rather than through `ShortcutHint`, which would print the registered label a second
+ * time beside the button that already says it. */
+function PlainDiffFoot(): ReactElement {
+  const openRepository = useReviewStore((state) => state.openRepository);
+
+  return (
+    <footer className="shrink-0 px-6 pb-3">
+      <div className="mx-auto max-w-3xl">
+        <StartRule />
+        <p className={cn(START_INSET, "pt-2.5 text-xs leading-relaxed text-text-faint")}>
+          No review to read?{" "}
+          <button
+            type="button"
+            onClick={() => void openRepository()}
+            className="rounded-sm text-text-muted underline decoration-text-faint underline-offset-2 outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
+          >
+            Open a repository
+          </button>{" "}
+          {shortcut("repo.open").keys.map((key) => (
+            <Kbd key={key}>{key}</Kbd>
+          ))}{" "}
+          to browse its commits and compare branches.
+        </p>
+      </div>
+    </footer>
   );
 }
