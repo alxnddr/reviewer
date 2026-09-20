@@ -212,6 +212,7 @@ export function LayerIntro({
               ref={fit?.contentRef}
               text={content}
               links={{ paths: filePaths, onSelect: onSelectReference }}
+              diagrams
               className="max-w-3xl space-y-2 px-6 text-base leading-relaxed text-foreground select-text"
             />
           </div>

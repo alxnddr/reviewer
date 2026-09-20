@@ -18,6 +18,8 @@ import { Button } from "@/components/ui/button";
 import { TooltipHint } from "@/components/ui/tooltip";
 import { FileTypeIcon } from "@/components/FileTypeIcon";
 import { InlineCode } from "@/components/InlineCode";
+import { MermaidDiagram } from "@/components/MermaidDiagram";
+import { mermaidSource } from "@/lib/mermaid";
 import { cn } from "@/lib/utils";
 
 // The app's one prose tier, rendered: the markdown a layer `description`, the overview
@@ -35,6 +37,13 @@ import { cn } from "@/lib/utils";
 // against one line, and a stranded one names a file that left the diff), so it renders
 // the same prose with every reference inert. Web links work on every surface: the main
 // process hands an outbound navigation to the OS browser, and drops anything not https.
+//
+// `diagrams` is the other thing a surface chooses, and it is opt-in: the overview and a
+// layer description draw a ```mermaid fence as a diagram (`MermaidDiagram`), a comment does
+// not. A comment is read beside the code, and a card that unfolds into a figure has stopped
+// being a comment — so there a mermaid fence stays what every fence is, its source. Off by
+// default rather than on, so a surface added later gets the quiet answer until someone
+// decides otherwise, and `MermaidDiagram.test.ts` holds the two comment surfaces to it.
 
 /** Where a reference may land, on a surface that can navigate; undefined on one that
  * cannot, which is the whole difference between the artifact's prose and a comment body —
@@ -144,9 +153,10 @@ function InertRef({ label, path }: { label: ReactNode; path: string }): ReactEle
 /** Markers in the faint ink: they structure the text, they are not the text. */
 const LIST_CLASS = "space-y-1 pl-5 marker:text-text-faint";
 
-/** How each element of the grammar is set. Built per surface because only the anchor
- * differs (where a reference can go); everything else is the app's fixed face for prose. */
-function proseComponents(links: ProseLinks | undefined): Components {
+/** How each element of the grammar is set. Built per surface because two things differ —
+ * the anchor (where a reference can go) and whether a mermaid fence is drawn; everything
+ * else is the app's fixed face for prose. */
+function proseComponents(links: ProseLinks | undefined, diagrams: boolean): Components {
   const diffFiles = new Set(links?.paths ?? []);
 
   return {
@@ -190,11 +200,21 @@ function proseComponents(links: ProseLinks | undefined): Components {
     // Quoted code is a foreign body and dresses like one: hairline frame, faint tinted
     // ground, mono a step under the reading size — the diff snippet's own surface. It
     // scrolls sideways rather than wrapping; wrapped code lies about its line breaks.
-    pre: ({ children }) => (
-      <pre className="overflow-x-auto rounded-md border border-border bg-border/20 px-3 py-2 font-mono text-sm leading-6 whitespace-pre">
-        <InFence value={true}>{children}</InFence>
-      </pre>
-    ),
+    //
+    // A mermaid fence is decided here and not in `code`, one element down, where the
+    // language class actually arrives: by then the block is already inside this `<pre>`,
+    // and a diagram is not preformatted text. So the hast node is read for its language
+    // (`mermaidSource`), and the fence built below is handed over whole — it is what the
+    // diagram shows while it loads and what it falls back to when the text does not parse.
+    pre: ({ children, node }) => {
+      const fence = (
+        <pre className="overflow-x-auto rounded-md border border-border bg-border/20 px-3 py-2 font-mono text-sm leading-6 whitespace-pre">
+          <InFence value={true}>{children}</InFence>
+        </pre>
+      );
+      const source = diagrams ? mermaidSource(node) : null;
+      return source === null ? fence : <MermaidDiagram source={source} fence={fence} />;
+    },
     code: ({ children }) => <CodeSpan>{children}</CodeSpan>,
     // The hairline the doc already draws at its section boundaries.
     hr: () => <hr className="border-border" />,
@@ -297,12 +317,21 @@ type MarkdownProps = {
    * cannot, which renders every reference inert. */
   links?: ProseLinks | undefined;
   className?: string;
+  /** Draw ```mermaid fences as diagrams. The artifact's own prose asks for it; a comment
+   * surface leaves it off and keeps the fence — see the header. */
+  diagrams?: boolean;
   /** The measured block when a caller fits a panel to the prose's own height
    * (`lib/fit-panel.ts`); absent everywhere the prose just flows. */
   ref?: RefObject<HTMLDivElement | null> | undefined;
 };
 
-export function Markdown({ text, links, className, ref }: MarkdownProps): ReactElement {
+export function Markdown({
+  text,
+  links,
+  diagrams = false,
+  className,
+  ref,
+}: MarkdownProps): ReactElement {
   const paths = links?.paths;
   const onSelect = links?.onSelect;
 
@@ -320,8 +349,9 @@ export function Markdown({ text, links, className, ref }: MarkdownProps): ReactE
     () =>
       proseComponents(
         paths === undefined || onSelect === undefined ? undefined : { paths, onSelect },
+        diagrams,
       ),
-    [paths, onSelect],
+    [paths, onSelect, diagrams],
   );
 
   // The pipeline runs on render, and a comment card re-renders with the diff it hangs in —

@@ -222,6 +222,7 @@ export function OverviewScreen(): ReactElement | null {
           <Markdown
             text={overview.body}
             links={{ paths: filePaths, onSelect: focusReference }}
+            diagrams
             className="mt-5 space-y-3 text-base leading-relaxed text-foreground"
           />
 

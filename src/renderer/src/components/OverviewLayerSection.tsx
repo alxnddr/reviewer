@@ -347,6 +347,7 @@ export function OverviewLayerSection({
         <Markdown
           text={layer.description}
           links={{ paths: filePaths, onSelect: onSelectReference }}
+          diagrams
           className="mt-3 space-y-3 text-base leading-relaxed text-foreground"
         />
       )}

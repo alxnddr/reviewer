@@ -193,6 +193,7 @@ Other renderer-wide rules:
   the existing recipe before writing a fourth: `ui/surface.ts`'s `POPOVER_SURFACE` for opaque
   floating surfaces, `Glass.tsx` + `ui/dialog.tsx`'s glass variants for the ones the reader's work
   shows through, `cva` variants on `ui/button.tsx` for chrome.
+- **A ```` ```mermaid ```` fence is drawn on the artifact's prose and nowhere else.** `Markdown`'s `diagrams` prop is opt-in: the overview and the layer descriptions pass it, the comment surfaces do not, and there a fence stays its source. `lib/mermaid.ts` is the pure half (the fence read, `MERMAID_CONFIG`, the fallback decisions); `components/MermaidDiagram.tsx` is the effectful one, and its header is the argument for the renderer's one insertion of markup derived from artifact text — read it before touching the config or upgrading mermaid. Three rules are held against the source by `MermaidDiagram.test.ts`: mermaid's code is reached only through `import("mermaid")` (an `import type` erases; a static import moves the largest dependency in the app into the entry chunk), `dangerouslySetInnerHTML` appears in that one file, and the comment surfaces never pass `diagrams`. No `rehype-raw`, ever — the diagram must not become a general HTML escape hatch.
 - **The diff surface is `@pierre/diffs`.** The app owns the parse (`shared/diff/patch.ts`), the one
   line walk (`shared/diff/walk.ts`), anchoring (`shared/diff/anchor.ts`) and the slots
   (`components/diff/*`); rendering, highlighting and the worker pool are the library's. Render props
