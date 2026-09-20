@@ -29,6 +29,16 @@ import { cn } from "@/lib/utils";
 // History glyph, because it is the app's own claim about placement; a mark is greyscale,
 // because it is a person's. The reader never has to learn which is which: colour means the
 // review said something, grey means they did.
+//
+// **The words are explained where they are picked** (`markMeaning`, drawn under each menu
+// item). The reader asked what separates `skipped` from `disagree`, and nothing on screen
+// could tell them: the two behave identically in the app — both count as answered, both
+// drop out of "unresolved only" — so the whole difference is what the reader is recording,
+// and the bare words did not say it. Merging them or renaming one was the alternative and
+// was refused: they are the fix prompt's reply vocabulary (`lib/review-export.ts`), agents
+// do answer `disagree` and `skipped — already fixed` as different things, and a merge would
+// turn that transcription back into a translation. A line of grey text per item costs less
+// than a persisted word.
 
 /** Glyph per word. A `switch` with no `default`, so a fourth resolution added to the enum is
  * a compile error here rather than a blank space in the row (the closed-union rule,
@@ -42,6 +52,24 @@ function markGlyph(resolution: CommentResolution): ReactElement {
       return <CircleMinus aria-hidden="true" className="size-3 shrink-0" />;
     case "disagree":
       return <CircleX aria-hidden="true" className="size-3 shrink-0" />;
+  }
+}
+
+/** What each word means, in the fix prompt's sense: the line under the word in the menu and
+ * the second sentence of the rail's hint, so the two cannot explain a word differently.
+ *
+ * `skipped` and `disagree` are the pair this exists for. Skipped leaves the comment's claim
+ * standing — it may be right, the code just did not change for it (already fixed, out of
+ * scope, not worth it). Disagree answers the claim itself. `CommentMark.test.ts` holds the
+ * three apart. No full stop: the menu draws it as a caption, the hint adds its own. */
+export function markMeaning(resolution: CommentResolution): string {
+  switch (resolution) {
+    case "addressed":
+      return "The code was changed to answer it";
+    case "skipped":
+      return "It may be right, but nothing was changed";
+    case "disagree":
+      return "It is wrong about the code";
   }
 }
 
@@ -76,18 +104,20 @@ export function CommentMarkGlyph({ resolution }: { resolution: CommentResolution
   return <span className="shrink-0 text-text-muted">{markGlyph(resolution)}</span>;
 }
 
-/** The mark as a sentence, for the rail's hover hint. Null on an unmarked comment, so the
- * hint gains no empty line — `commentMetaLabel`'s contract beside it. */
+/** The mark as a sentence, for the rail's hover hint, followed by what the word means — the
+ * row has only a glyph, so this is the one place a marked comment says both. Null on an
+ * unmarked comment, so the hint gains no empty line — `commentMetaLabel`'s contract beside
+ * it. */
 export function commentMarkLabel(resolution: CommentResolution | null): string | null {
   switch (resolution) {
     case null:
       return null;
     case "addressed":
-      return "You marked this addressed";
+      return `You marked this addressed. ${markMeaning(resolution)}.`;
     case "skipped":
-      return "You marked this skipped";
+      return `You marked this skipped. ${markMeaning(resolution)}.`;
     case "disagree":
-      return "You disagreed with this";
+      return `You disagreed with this. ${markMeaning(resolution)}.`;
   }
 }
 
@@ -99,7 +129,9 @@ export function commentMarkLabel(resolution: CommentResolution | null): string |
  * circles there would be a row of seven things to tell apart by shape, on a surface that
  * only appears while the pointer is over the card. A menu also gets the words themselves on
  * screen, which is the point — they are the same three the agent was asked to answer with,
- * and reading them beside the reply is how a mark gets transcribed rather than guessed.
+ * and reading them beside the reply is how a mark gets transcribed rather than guessed. It is
+ * also the only surface with room to say what each word means (`markMeaning`), which a row
+ * of circles could not: a reader marking without an agent's reply has nothing to transcribe.
  *
  * The trigger wears the current mark's glyph, so the toolbar says what the card already
  * says and the state is reachable without opening anything. */
@@ -148,18 +180,19 @@ export function CommentMarkMenu({
             }
           }}
         >
-          <DropdownMenuRadioItem value="addressed" className="min-h-7">
-            <CircleCheck />
-            Addressed
-          </DropdownMenuRadioItem>
-          <DropdownMenuRadioItem value="skipped" className="min-h-7">
-            <CircleMinus />
-            Skipped
-          </DropdownMenuRadioItem>
-          <DropdownMenuRadioItem value="disagree" className="min-h-7">
-            <CircleX />
-            Disagree
-          </DropdownMenuRadioItem>
+          {/* Drawn from the enum, not written out three times: the glyph and the meaning are
+              both closed switches, so a fourth word is a compile error there and a row here,
+              never a mark the reader cannot pick. `items-start` hangs the glyph and the check
+              on the word's line rather than between the word and its caption. */}
+          {CommentResolution.options.map((word) => (
+            <DropdownMenuRadioItem key={word} value={word} className="min-h-7 items-start">
+              <span className="mt-0.5 [&_svg]:size-4">{markGlyph(word)}</span>
+              <span className="flex flex-col">
+                <span className="capitalize">{word}</span>
+                <span className="text-xs text-text-muted">{markMeaning(word)}</span>
+              </span>
+            </DropdownMenuRadioItem>
+          ))}
         </DropdownMenuRadioGroup>
         {resolution !== null && (
           <>
