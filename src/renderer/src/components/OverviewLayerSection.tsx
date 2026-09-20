@@ -64,10 +64,10 @@ function headingTag(depth: number): (typeof HEADING_TAGS)[number] {
  * digits only need to align in a column, and the doc's headline stat row sets the
  * precedent — mono is for code, not for counting.
  *
- * Exported for the chapter index, which prints the same fact one line per chapter: two
- * copies of this recipe would be two places for the signal colours, the dropped zero and
- * the `−` (a minus sign, not a hyphen) to drift apart. */
-export function LineCounts({
+ * One recipe for the file rows and the chapter's own totals: two copies would be two places
+ * for the signal colours, the dropped zero and the `−` (a minus sign, not a hyphen) to
+ * drift apart. */
+function LineCounts({
   additions,
   deletions,
 }: {
@@ -84,14 +84,12 @@ export function LineCounts({
   );
 }
 
-/** The one chip a chapter can wear, wherever it is named. Two of them exist — `Outdated`
- * and `Skim` — and each has to look identical on the section and on the index above it, or
- * the map and the document read as describing different reviews. One recipe, exported for
- * the index, the same reason `LineCounts` is.
+/** The one chip a chapter's heading can wear. Two of them exist — `Outdated` and `Skim` —
+ * and they are one recipe so the two cannot drift apart.
  *
- * `font-normal` because a section's chip sits inside a `font-medium` heading and a chip is
- * not part of the title; on the index's row it changes nothing. */
-export function ChapterChip({ children }: { children: string }): ReactElement {
+ * `font-normal` because the chip sits inside a `font-medium` heading and a chip is not part
+ * of the title. */
+function ChapterChip({ children }: { children: string }): ReactElement {
   return (
     <span className="shrink-0 rounded border border-border bg-border/60 px-1.5 py-px text-xs font-normal text-foreground">
       {children}

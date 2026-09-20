@@ -55,8 +55,7 @@ export type OverviewChapter = {
   layer: ReviewLayer;
   /** 0-based nesting depth. The doc's *sections* render it as heading rank (§4, §4.2,
    * §4.2.1) and never as an indent — every section is read at one width, whatever its
-   * depth. The chapter index renders the same number as an indent, because it is a list
-   * and not prose: there the tree has to be visible in one pass. */
+   * depth. */
   depth: number;
   /** The section number — `"4"`, `"4.2"`, `"4.2.1"` — identical to the rail's and the
    * band's. Null for the inferred "not covered by layers" chapter, no authored step. */
@@ -315,24 +314,6 @@ export function buildOverview({
     // finished — the same list the rail offers as stops.
     resumeLayerId: nextUnreadLayer(files, effective, readFiles),
   };
-}
-
-/** The doc's chapter index: the same chapters, or none at all.
- *
- * Derived, like every other figure here, and that is the whole difference from an authored
- * table of contents — the author cannot write an index that disagrees with the layers,
- * because the author does not write one. A layer that moves, splits or vanishes moves,
- * splits or vanishes here in the same render.
- *
- * Two shapes of review get no index, for one reason: there would be nothing to scan. A
- * review with no layers has no chapters at all, and a review with one chapter *is* that
- * chapter — a table of one row above a section that says everything the row would say is
- * chrome. The threshold reads the *effective* chapters, so one authored layer that leaves
- * part of the diff unwalked does get an index: "Not covered by layers" is the second row,
- * and a reader learning at the top that half the change is unexplained is exactly what the
- * index is for. */
-export function chapterIndex(chapters: readonly OverviewChapter[]): readonly OverviewChapter[] {
-  return chapters.length < 2 ? [] : chapters;
 }
 
 /** A chapter's comment count as the doc prints it: `5 comments`, or `2 blocking · 3 others`

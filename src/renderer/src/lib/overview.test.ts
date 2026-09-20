@@ -5,7 +5,7 @@ import { ONE_HUNK_PATCH } from "../../../shared/diff/fixtures";
 import { parsePatch, type PatchFile } from "../../../shared/diff/patch";
 import { snippetForAnchor } from "./diff/snippet";
 import { NO_READ_FILES } from "./read-progress";
-import { buildOverview, chapterCommentLabel, chapterIndex } from "./overview";
+import { buildOverview, chapterCommentLabel } from "./overview";
 
 // A three-file diff read by the real parser, so every count below is measured against a
 // genuine changed-line universe rather than a hand-tallied one. foo.ts is the shared
@@ -362,62 +362,6 @@ describe("buildOverview", () => {
       readFiles: NO_READ_FILES,
     });
     expect(present.chapters[0]?.outdated).toBe(false);
-  });
-});
-
-describe("chapterIndex", () => {
-  function index(layers: ReviewLayer[], files: PatchFile[] = FILES) {
-    return chapterIndex(
-      buildOverview({ layers, files, comments: [], frozen: false, readFiles: NO_READ_FILES })
-        .chapters,
-    );
-  }
-
-  it("is empty for a review with no layers — there are no chapters to index", () => {
-    expect(index([])).toEqual([]);
-  });
-
-  it("is empty for a review of one chapter: a table of one row says nothing twice", () => {
-    // Every file in the diff is walked, so no "Not covered" chapter is inferred and this
-    // really is a one-chapter review.
-    const whole = layer("whole", [
-      { file: "src/foo.ts", side: "additions", startLine: 11, endLine: 13 },
-      { file: "src/foo.ts", side: "deletions", startLine: 11, endLine: 11 },
-      { file: "src/bar.ts", side: "additions", startLine: 2, endLine: 3 },
-      { file: "src/skipped.ts", side: "additions", startLine: 1, endLine: 1 },
-    ]);
-
-    expect(index([whole])).toEqual([]);
-  });
-
-  it("indexes one authored layer once the inferred chapter joins it", () => {
-    // The threshold is on the *effective* chapters: one layer that leaves two files
-    // unwalked is a two-chapter review, and "Not covered by layers" as the second row is
-    // the fact this reader most needs off the top of the page.
-    const rows = index([FOO]);
-
-    expect(rows.map((chapter) => chapter.layer.id)).toEqual(["foo", UNCOVERED_LAYER_ID]);
-  });
-
-  it("carries nesting as depth and ordinal, in the sections' own order", () => {
-    const group = layer("group", []);
-    const child = layer(
-      "child",
-      [{ file: "src/bar.ts", side: "additions", startLine: 2, endLine: 3 }],
-      {
-        parent: "group",
-      },
-    );
-    const rows = index([group, child]);
-
-    // Pre-order, exactly as the sections and the rail read it, with the section number a
-    // row shares with the section it points at — so the index is navigable by the same
-    // numbers the rest of the app prints, and the depth is what it indents by.
-    expect(rows.map((chapter) => [chapter.ordinal, chapter.depth])).toEqual([
-      ["1", 0],
-      ["1.1", 1],
-      [null, 0],
-    ]);
   });
 });
 
