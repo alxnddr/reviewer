@@ -9,8 +9,9 @@ import {
 // Where settings meet the document. The store decides *what* the settings are; this module is
 // the one place that turns a resolved record into DOM state — the theme attributes on <html>
 // and the custom properties the diff's shadow roots read — so nothing else in the renderer
-// touches either. Every line here is a DOM write, which is why it is untested (the suite has
-// no DOM) and why the store takes it as an injected function rather than importing it.
+// touches either. Every line here is a DOM write, or a read of what was written ("Reading it
+// back", below), which is why it is untested (the suite has no DOM) and why the store takes
+// `applySettings` as an injected function rather than importing it.
 
 /** Apply the resolved theme to <html>: `data-theme` selects the chrome + diff-signal token block,
  * the `.dark` class drives Tailwind's dark variant, color-scheme, and the shadow-DOM diff consumers.
@@ -58,6 +59,67 @@ export function applySettings(next: ResolvedSettings, previous: ResolvedSettings
     applyResolvedTheme(resolveTheme(next.theme));
   }
   applyTypography(next);
+}
+
+// ── Reading it back ─────────────────────────────────────────────────────────────────────
+// A consumer that cannot inherit CSS has to be *told* the palette: mermaid computes a
+// diagram's colours in JavaScript and bakes them into the SVG's own <style>, so `var(--border)`
+// is no use to it. Those consumers read what this module applied, from here, rather than
+// keeping a palette of their own — the write and the read-back are one module so that "which
+// theme is in force" has one answer.
+
+/** The theme id on <html> right now — what `applyResolvedTheme` last wrote. Empty before the
+ * first apply, which `main.tsx` runs ahead of the first render. */
+export function appliedThemeId(): string {
+  return document.documentElement.dataset.theme ?? "";
+}
+
+/** Whether the document renders dark right now. The non-hook form of `useEffectiveDark`. */
+export function appliedDark(): boolean {
+  return document.documentElement.classList.contains("dark");
+}
+
+/** Palette tokens (`design/globals.css` names, without the `--`) as `#rrggbb`, whatever they
+ * were written as. Half the palette is `oklch()`, and neither route that looks cheaper gives
+ * a plain colour back: `getPropertyValue` answers the token's text as authored, and a probe
+ * element's computed `color` keeps the colour space (`oklch(0.97 0 0)` again). So each token
+ * is painted onto one canvas pixel and the pixel is read — the browser's own parser and its
+ * own gamut mapping, in sRGB bytes.
+ *
+ * A token is left out of the answer rather than guessed at when it is missing, when the
+ * canvas declines it (an invalid `fillStyle` assignment is *silently ignored*, so it is
+ * assigned over two different sentinels: a real colour reads back the same both times, a
+ * rejected one reads back each sentinel), or when it is not opaque, since a translucent
+ * token has no single colour to report. */
+export function readPalette<T extends string>(tokens: readonly T[]): Partial<Record<T, string>> {
+  const context = document
+    .createElement("canvas")
+    // Read back four bytes at a time: keep the pixel on the CPU.
+    .getContext("2d", { willReadFrequently: true });
+  const colors: Partial<Record<T, string>> = {};
+  if (context === null) {
+    return colors;
+  }
+  const computed = getComputedStyle(document.documentElement);
+  for (const token of tokens) {
+    const authored = computed.getPropertyValue(`--${token}`).trim();
+    context.fillStyle = "#000000";
+    context.fillStyle = authored;
+    const overBlack = context.fillStyle;
+    context.fillStyle = "#ffffff";
+    context.fillStyle = authored;
+    if (authored === "" || context.fillStyle !== overBlack) {
+      continue;
+    }
+    context.clearRect(0, 0, 1, 1);
+    context.fillRect(0, 0, 1, 1);
+    const [red = 0, green = 0, blue = 0, alpha = 0] = context.getImageData(0, 0, 1, 1).data;
+    if (alpha === 255) {
+      colors[token] =
+        `#${[red, green, blue].map((byte) => byte.toString(16).padStart(2, "0")).join("")}`;
+    }
+  }
+  return colors;
 }
 
 /** The OS's light/dark preference right now — the seed for the theme until one is chosen. */

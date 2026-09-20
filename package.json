@@ -25,6 +25,7 @@
     "fmt:check": "oxfmt --check .",
     "check": "bun run typecheck && bun run lint && bun run fmt:check",
     "check:package": "node scripts/check-package.mjs",
+    "check:bundle": "node scripts/check-bundle.mjs",
     "test": "vitest run",
     "test:coverage": "vitest run --coverage"
   },

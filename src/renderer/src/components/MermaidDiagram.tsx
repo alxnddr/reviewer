@@ -1,12 +1,15 @@
 import { useEffect, useState, type ReactElement } from "react";
 import type { Mermaid } from "mermaid";
+import { appliedDark, appliedThemeId, readPalette } from "@/lib/apply-settings";
 import {
-  MERMAID_CONFIG,
+  DIAGRAM_TOKENS,
   failedOutcome,
   planDiagram,
   renderedOutcome,
+  themedMermaidConfig,
   type DiagramOutcome,
 } from "@/lib/mermaid";
+import { useSettingsStore } from "@/stores/settings";
 
 // A ```mermaid fence, drawn. `Markdown` hands over the fence's text and the fence itself —
 // the very `<pre>` it would otherwise have rendered — and this shows the diagram once there
@@ -58,26 +61,64 @@ import {
 // renderer, and a review with no diagram in it must never fetch the chunk. There is no DOM in
 // the test environment to watch a network request in, so the rule is asserted against the
 // source instead (`MermaidDiagram.test.ts`): this is the only `import(` of it in `src/`, and
-// every other mention is an `import type`, which `verbatimModuleSyntax` erases.
+// every other mention is an `import type`, which `verbatimModuleSyntax` erases. That holds
+// the source; `scripts/check-bundle.mjs` holds the built renderer to the same rule, where a
+// bundler setting could break it without a line of `src/` changing.
+//
+// ── Theme ───────────────────────────────────────────────────────────────────────────────
+// Mermaid bakes a diagram's colours into the SVG's own `<style>` when it renders, so a theme
+// switch cannot restyle a drawn diagram — it has to be drawn again, under a mermaid that has
+// been told the new palette. Two ways to tell it, and the other one was rejected: a
+// per-render config means prepending an `%%{init}%%` directive to the author's text, which
+// sends the app's own colours through the directive sanitizer, moves every line number in a
+// parse error down by one, and makes the string rendered no longer the string in the
+// artifact. So mermaid is re-`initialize`d — once per theme, not per diagram (`themeMermaid`)
+// — and each mounted diagram redraws because the resolved theme is a dependency of its effect.
+// `lib/mermaid.ts`'s Theme block is what the palette is mapped to and why.
 
-/** The library, loaded and initialized — once per app, not per diagram: `initialize` resets
- * mermaid's site config, and ten diagrams in an overview would otherwise be ten resets racing
- * ten renders. A failed load clears the slot so a later diagram tries again (the chunk is a
- * local file; a failure is a transient read, not a verdict). */
+/** The library, loaded — once per app. A failed load clears the slot so a later diagram tries
+ * again (the chunk is a local file; a failure is a transient read, not a verdict). Not
+ * initialized here: `themeMermaid` does that, because what it is initialized *with* depends
+ * on the theme in force when a diagram is about to be drawn, not when the chunk arrived. */
 let loading: Promise<Mermaid> | null = null;
 
 function loadMermaid(): Promise<Mermaid> {
   loading ??= import("mermaid").then(
-    ({ default: mermaid }) => {
-      mermaid.initialize(MERMAID_CONFIG);
-      return mermaid;
-    },
+    ({ default: mermaid }) => mermaid,
     (error: unknown) => {
       loading = null;
       throw error;
     },
   );
   return loading;
+}
+
+/** The `data-theme` mermaid was last initialized under; null until the first diagram. */
+let themedFor: string | null = null;
+
+/** Initializes mermaid for the theme the document is wearing, if it is not already — once
+ * per theme, not per diagram: `initialize` resets mermaid's site config, and ten diagrams in
+ * an overview would otherwise be ten resets racing ten renders. Always with the whole
+ * hardened config (`themedMermaidConfig` spreads `MERMAID_CONFIG`), since that reset is total.
+ *
+ * Keyed on what <html> says *now* rather than on the theme the calling effect was started
+ * for. The two differ when the reader switches theme while the chunk is still loading, and
+ * then the document is the one that is right: the colours are read off it in the same
+ * breath, so the key and the palette cannot disagree, and the stale caller's result is
+ * discarded by its own effect's cleanup either way. */
+function themeMermaid(mermaid: Mermaid): void {
+  const theme = appliedThemeId();
+  if (theme === themedFor) {
+    return;
+  }
+  mermaid.initialize(
+    themedMermaidConfig({
+      dark: appliedDark(),
+      colors: readPalette(DIAGRAM_TOKENS),
+      fontFamily: getComputedStyle(document.body).fontFamily,
+    }),
+  );
+  themedFor = theme;
 }
 
 /** Mermaid wants a DOM id per render and uses it in a `#id` selector of its own — so it is a
@@ -91,6 +132,7 @@ let renders = 0;
 async function drawDiagram(source: string): Promise<DiagramOutcome> {
   try {
     const mermaid = await loadMermaid();
+    themeMermaid(mermaid);
     renders += 1;
     const { svg } = await mermaid.render(`mermaid-diagram-${renders}`, source);
     return renderedOutcome(svg);
@@ -112,6 +154,13 @@ export function MermaidDiagram({ source, fence }: MermaidDiagramProps): ReactEle
   // Held with the source it was drawn from, so a result that arrives for text the prose no
   // longer contains is simply not this diagram's — no reset effect, no flash of the old one.
   const [drawn, setDrawn] = useState<{ source: string; outcome: DiagramOutcome } | null>(null);
+  // Read for the redraw it causes, not for its value: by the time this changes,
+  // `applySettings` has already put the new theme on <html> (the store applies, then sets),
+  // and `themeMermaid` reads the palette from there. Deliberately *not* part of `drawn`'s key
+  // the way `source` is — across a theme switch the old drawing stays up until the new one
+  // lands, because the alternative is every diagram collapsing to its fence for a beat and
+  // the prose under it jumping twice. A frame of last theme's colours is the smaller lie.
+  const theme = useSettingsStore((state) => state.resolved.theme);
   const plan = planDiagram(source);
   const refused = plan.kind === "refuse";
 
@@ -128,7 +177,7 @@ export function MermaidDiagram({ source, fence }: MermaidDiagramProps): ReactEle
     return () => {
       live = false;
     };
-  }, [source, refused]);
+  }, [source, theme, refused]);
 
   const outcome: DiagramOutcome | null =
     plan.kind === "refuse"

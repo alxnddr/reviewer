@@ -38,6 +38,12 @@ jobs:
       - name: Build (smoke)
         run: bun run build
 
+      # On the artifact the step above just produced: a review with no mermaid fence must not
+      # load mermaid, and that is the bundler's property to break, not the source's — see the
+      # script's header.
+      - name: Verify built renderer
+        run: bun run check:bundle
+
   package:
     # The app is macOS-only (build:mac, .icns, entitlements) and the release workflow runs on
     # macos-latest, so packaging breakage is only discoverable here — otherwise it waits for a

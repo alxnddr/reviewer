@@ -45,7 +45,7 @@ oxfmt reads by default along with `.gitignore`) because the formatter is non-ide
 | `cli/` | `rvw`: the Stricli app, its six verbs, and the effectful shell around them. |
 | `design/` | The palette. `globals.css` is consumed; the rest is provenance — see `design/README.md`. |
 | `skills/` | The agent-facing review skill `rvw skills` points at. Shipped as `extraResources`. |
-| `scripts/` | `reset-state.mjs` (back to a first launch), `gen-icon.mjs`, `check-package.mjs` (asserts on the packaged artifact), `pack-cli.mjs` + `install-cli.sh` (`rvw` without the app, for Linux). |
+| `scripts/` | `reset-state.mjs` (back to a first launch), `gen-icon.mjs`, `check-package.mjs` (asserts on the packaged artifact), `check-bundle.mjs` (asserts on the built renderer), `pack-cli.mjs` + `install-cli.sh` (`rvw` without the app, for Linux). |
 
 The edges that actually exist, and are the ones to keep:
 
@@ -193,7 +193,7 @@ Other renderer-wide rules:
   the existing recipe before writing a fourth: `ui/surface.ts`'s `POPOVER_SURFACE` for opaque
   floating surfaces, `Glass.tsx` + `ui/dialog.tsx`'s glass variants for the ones the reader's work
   shows through, `cva` variants on `ui/button.tsx` for chrome.
-- **A ```` ```mermaid ```` fence is drawn on the artifact's prose and nowhere else.** `Markdown`'s `diagrams` prop is opt-in: the overview and the layer descriptions pass it, the comment surfaces do not, and there a fence stays its source. `lib/mermaid.ts` is the pure half (the fence read, `MERMAID_CONFIG`, the fallback decisions); `components/MermaidDiagram.tsx` is the effectful one, and its header is the argument for the renderer's one insertion of markup derived from artifact text — read it before touching the config or upgrading mermaid. Three rules are held against the source by `MermaidDiagram.test.ts`: mermaid's code is reached only through `import("mermaid")` (an `import type` erases; a static import moves the largest dependency in the app into the entry chunk), `dangerouslySetInnerHTML` appears in that one file, and the comment surfaces never pass `diagrams`. No `rehype-raw`, ever — the diagram must not become a general HTML escape hatch.
+- **A ```` ```mermaid ```` fence is drawn on the artifact's prose and nowhere else.** `Markdown`'s `diagrams` prop is opt-in: the overview and the layer descriptions pass it, the comment surfaces do not, and there a fence stays its source. `lib/mermaid.ts` is the pure half (the fence read, `MERMAID_CONFIG`, the fallback decisions); `components/MermaidDiagram.tsx` is the effectful one, and its header is the argument for the renderer's one insertion of markup derived from artifact text — read it before touching the config or upgrading mermaid. A diagram is drawn in the app's palette, not one of mermaid's: `lib/apply-settings.ts` reads the theme's tokens back off the document as `#rrggbb` (`readPalette` — mermaid's colour maths throws on `oklch()`), `lib/mermaid.ts` maps them to `themeVariables` over the hardened `MERMAID_CONFIG`, and mermaid is re-`initialize`d once per theme, with every mounted diagram redrawing because the resolved theme is a dependency of its effect. A new palette token a diagram needs goes in `DIAGRAM_TOKENS`, which a test holds against every theme block in `design/globals.css`. Three rules are held against the source by `MermaidDiagram.test.ts`: mermaid's code is reached only through `import("mermaid")` (an `import type` erases; a static import moves the largest dependency in the app into the entry chunk), `dangerouslySetInnerHTML` appears in that one file, and the comment surfaces never pass `diagrams`. No `rehype-raw`, ever — the diagram must not become a general HTML escape hatch.
 - **The diff surface is `@pierre/diffs`.** The app owns the parse (`shared/diff/patch.ts`), the one
   line walk (`shared/diff/walk.ts`), anchoring (`shared/diff/anchor.ts`) and the slots
   (`components/diff/*`); rendering, highlighting and the worker pool are the library's. Render props
@@ -268,7 +268,10 @@ bun run check   # tsgo × 4 projects, then oxlint, then oxfmt --check
 bun run test    # vitest
 ```
 
-Both must be clean before you are done; CI runs them plus `bun run build`, and a macOS job that
+Both must be clean before you are done; CI runs them plus `bun run build` and then `bun run
+check:bundle` against what that built — mermaid must be outside everything the window loads at
+launch and reachable only by a dynamic import, which is the bundler's to break with no line of
+`src/` changing — and a macOS job that
 packages the app and runs `bun run check:package` against the real `.app`. That last one exists
 because two shipped defects were invisible to every other check: `files:` in `electron-builder.yml`
 is an **allowlist** (electron-builder does not read `.gitignore`, so scratch directories and agent
