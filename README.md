@@ -74,8 +74,8 @@ Builds are unsigned, so on first launch right-click → **Open**, or run:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/alxnddr/reviewer/main/scripts/install-cli.sh | sh
-sh install-cli.sh --version 0.4.0          # one release rather than the latest
-sh install-cli.sh rvw-0.4.0-any.tar.gz     # a tarball you already have (bun run pack:cli)
+sh install-cli.sh --version 0.5.0          # one release rather than the latest
+sh install-cli.sh rvw-0.5.0-any.tar.gz     # a tarball you already have (bun run pack:cli)
 sh install-cli.sh --uninstall
 ```
 

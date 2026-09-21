@@ -3,8 +3,8 @@
 # dev box, a CI image. On macOS the app installs its own launcher (src/main/cli-install.ts).
 #
 #   install-cli.sh                          the latest published release
-#   install-cli.sh --version 0.4.0          one release
-#   install-cli.sh rvw-0.4.0-any.tar.gz     a tarball already on disk (scripts/pack-cli.mjs)
+#   install-cli.sh --version 0.5.0          one release
+#   install-cli.sh rvw-0.5.0-any.tar.gz     a tarball already on disk (scripts/pack-cli.mjs)
 #   install-cli.sh --uninstall
 #
 # What it leaves behind, and all it leaves behind:
@@ -237,7 +237,7 @@ while [ $# -gt 0 ]; do
   case $1 in
     --uninstall) mode=uninstall ;;
     --version)
-      [ $# -ge 2 ] || misuse "--version needs a version, e.g. --version 0.4.0"
+      [ $# -ge 2 ] || misuse "--version needs a version, e.g. --version 0.5.0"
       version=${2#v}
       shift
       ;;
