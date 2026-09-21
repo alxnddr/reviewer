@@ -78,7 +78,6 @@ export function ReviewRail({
   const soloed = useReviewStore(selectSoloedDiff);
   const hasOverview = useReviewStore((state) => selectActiveSlice(state)?.overview != null);
   const overviewOpen = useReviewStore((state) => selectActiveSlice(state)?.overviewOpen ?? false);
-  const docTrip = useReviewStore((state) => selectActiveSlice(state)?.docTrip ?? false);
   const openOverview = useReviewStore((state) => state.openOverview);
   const activeSessionId = useReviewStore((state) => state.activeSessionId);
   const activeLayerId = useReviewStore((state) => selectActiveSlice(state)?.activeLayerId ?? null);
@@ -135,7 +134,7 @@ export function ReviewRail({
   // sibling of that section, not one of its layers. Absent on a review that carries
   // no doc, in which case the rail simply starts at Layers.
   const overviewRow = hasOverview ? (
-    <OverviewRow selected={overviewOpen} returning={docTrip} onOpen={() => openOverview()} />
+    <OverviewRow selected={overviewOpen} onOpen={() => openOverview()} />
   ) : null;
   const renderComments = (fill: boolean): ReactElement | null => (
     <CommentsPanel

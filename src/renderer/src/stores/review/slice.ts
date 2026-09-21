@@ -76,11 +76,11 @@ export type SessionSlice = {
    * their own hand since. It is the one bit that tells a glance from a departure, and the app
    * never has to guess it at the click — an accidental click and a long look at some code are
    * the same thing (nothing navigated), and a departure is whatever navigates next. While it
-   * is true the document reopens exactly where it was left and the rail's Overview row says
-   * so; once it is false the document is a hub again (`lib/scroll.ts`'s `planDocReturn` holds
-   * the ranking and the argument).
+   * is true the document reopens exactly where it was left and the diff wears the pill that
+   * says so (`components/DocReturnPill.tsx`); once it is false the document is a hub again
+   * (`lib/scroll.ts`'s `planDocReturn` holds the ranking and the argument).
    *
-   * Written through `leaveDoc` and `enterDoc` below and nowhere else. True implies
+   * Written through `leaveDoc`, `enterDoc` and `endDocTrip` below and nowhere else. True implies
    * `overviewOpen === false`. Ephemeral, and per session — a tab switched away from and back
    * is still on its trip, like a browser tab's history. */
   docTrip: boolean;
@@ -281,7 +281,8 @@ export function fileFocus(path: string): Pick<SessionSlice, "activeCommentId" | 
  *
  * That is why it is a helper and not a field each site remembers: a new navigation action
  * that wrote the literal would leave the document correctly and silently never end a trip,
- * and the rail would go on offering a way back the reader has plainly walked away from.
+ * and the diff would go on floating a way back (`DocReturnPill`) the reader has plainly
+ * walked away from.
  * Scrolling, folding, marking and find do not spread this, and must not. */
 export function leaveDoc(slice: SessionSlice): Pick<SessionSlice, "overviewOpen" | "docTrip"> {
   return { overviewOpen: false, docTrip: slice.overviewOpen };
@@ -305,6 +306,15 @@ export function enterDoc(
     docTrip: false,
     docReturn: planDocReturn(slice.docTrip, slice.docScrollTop, slice.activeLayerId),
   };
+}
+
+/** Ending a trip without going anywhere — the pill's ×, the reader saying "I am staying here"
+ * instead of the app inferring it from their next navigation. The same bit `leaveDoc` clears,
+ * so everything downstream is what it already was for a reader who has moved on: the pill is
+ * gone and the document is a hub again. A helper for the reason the other two are: `docTrip`
+ * has three writers and all of them live in this file. */
+export function endDocTrip(): Pick<SessionSlice, "docTrip"> {
+  return { docTrip: false };
 }
 
 /** The slice's soloed diff: the authored layers plus the inferred "not covered by layers"

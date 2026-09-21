@@ -56,7 +56,10 @@ export function CommentNavIndicator({
       //
       // Still a pill, not a panel: the find bar owns the rounded-rect-with-a-field shape at
       // the top right, and the two overlays must stay tellable apart at a glance.
-      className="absolute bottom-3 left-1/2 z-20 flex -translate-x-1/2 items-center gap-0.5 rounded-full p-1 text-popover-foreground"
+      //
+      // It does not place itself: `DiffView` owns the bottom-centre of the pane, because the
+      // way back to the overview (`DocReturnPill`) can be there at the same time.
+      className="pointer-events-auto flex items-center gap-0.5 rounded-full p-1 text-popover-foreground"
     >
       <TooltipHint content={<ShortcutHint id="comment.previous" />} side="top" align="center">
         <Button

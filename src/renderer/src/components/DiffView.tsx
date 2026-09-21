@@ -4,6 +4,7 @@ import type { FileDiffContentsLoader } from "@pierre/diffs";
 import type { ReviewAnchor } from "../../../shared/review";
 import { CommentNavIndicator } from "@/components/CommentNavIndicator";
 import { DiffSearch } from "@/components/DiffSearch";
+import { DocReturnPill } from "@/components/DocReturnPill";
 import { useCommentSlots } from "@/components/diff/DiffCommentSlots";
 import {
   renderHeaderMetadata,
@@ -85,6 +86,11 @@ type DiffViewProps = {
   onClearActiveComment: () => void;
   /** Clears the pending scroll once this surface has served it. */
   onScrollServed: (pending: PendingScroll) => void;
+  /** Whether the reader is on a trip from the overview (`docTrip`), which is when the way
+   * back floats over the diff — and its two verbs, routed to the owning session's slice. */
+  returning: boolean;
+  onReturnToDoc: () => void;
+  onDismissReturn: () => void;
   /** Go to a moved block's other end — the same action a prose reference's chip takes,
    * routed to the same store verb. */
   onFollowMove: (path: string, span: ReferenceSpan) => void;
@@ -127,6 +133,9 @@ export function DiffView({
   onStepComment,
   onClearActiveComment,
   onScrollServed,
+  returning,
+  onReturnToDoc,
+  onDismissReturn,
   onFollowMove,
 }: DiffViewProps): ReactElement {
   const handleRef = useRef<CodeViewHandle<DiffSlot>>(null);
@@ -233,15 +242,28 @@ export function DiffView({
   // bar stays put while the diff scrolls beneath it.
   return (
     <div className="relative h-full">
-      {navActive !== null && (
-        <CommentNavIndicator
-          position={navIndex + 1}
-          count={navEntries.length}
-          onPrevious={() => onStepComment(-1)}
-          onNext={() => onStepComment(1)}
-          onRecenter={() => scrollToComment(navActive)}
-          onClose={onClearActiveComment}
-        />
+      {/* The bottom-centre of the pane, which two pills can want at once: a finding opened
+          from the overview starts a trip *and* a comment walk. One column rather than two
+          absolutely placed boxes, so they cannot land on each other. The stepper keeps the
+          lower slot — it is the one that stays: the way back above it goes on the reader's
+          next step, and nothing under their pointer moves when it does.
+
+          The row is `pointer-events-none`, as the overview's island's is: only the pills take
+          the pointer, and the diff beside them is still the diff's. */}
+      {(returning || navActive !== null) && (
+        <div className="pointer-events-none absolute inset-x-0 bottom-3 z-20 flex flex-col items-center gap-2">
+          {returning && <DocReturnPill onBack={onReturnToDoc} onDismiss={onDismissReturn} />}
+          {navActive !== null && (
+            <CommentNavIndicator
+              position={navIndex + 1}
+              count={navEntries.length}
+              onPrevious={() => onStepComment(-1)}
+              onNext={() => onStepComment(1)}
+              onRecenter={() => scrollToComment(navActive)}
+              onClose={onClearActiveComment}
+            />
+          )}
+        </div>
       )}
       {search.open && (
         <DiffSearch

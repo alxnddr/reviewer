@@ -9,8 +9,8 @@ import { describe, expect, it } from "vitest";
 // next navigation. Both halves are one expression, `leaveDoc(slice)`, spread by every action
 // that targets the diff. An action that wrote `overviewOpen: false` by hand instead would
 // typecheck, pass every test about where it lands, leave the document exactly as it should —
-// and never end a trip, so the rail would keep offering "back to where you were" to a reader
-// who has plainly moved on. The mirror failure for `overviewOpen: true` is a return planned
+// and never end a trip, so the diff would keep floating "Back to overview" at a reader who
+// has plainly moved on. The mirror failure for `overviewOpen: true` is a return planned
 // after the solo it depends on was cleared (`enterDoc`).
 //
 // The types cannot see either: the literal is a perfectly good `Partial<SessionSlice>`. So the

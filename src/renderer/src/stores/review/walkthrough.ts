@@ -13,6 +13,7 @@ import { withCollapsed } from "../../lib/read-progress";
 import { samePendingScroll, type PendingScroll } from "../../lib/scroll";
 import {
   commentFocus,
+  endDocTrip,
   enterDoc,
   fileFocus,
   leaveDoc,
@@ -76,6 +77,10 @@ export type WalkthroughSlice = {
   /** The doc's comment door, one write for the same reason: solo the chapter and focus one
    * of its findings. An id that names no comment still opens the chapter. */
   openLayerComment: (layerId: string, commentId: string, sessionId?: SessionId) => void;
+  /** The Back pill's ×: end the trip where the reader stands, without navigating. The pill
+   * goes and the document is a hub again, exactly as if they had moved on (`endDocTrip`).
+   * A no-op off a trip. */
+  dismissDocTrip: (sessionId?: SessionId) => void;
   /** The tour doc reporting where it is scrolled to. Not navigation — reading never is — so
    * it neither starts nor ends a trip, and it schedules no write-back: the position is
    * ephemeral. It also spends `docReturn`, which is what makes a bare remount restore this
@@ -246,6 +251,15 @@ export const createWalkthroughSlice: StateCreator<ReviewState, [], [], Walkthrou
       if (jump !== null) {
         get().scheduleSessionWriteBack(id);
       }
+    });
+  },
+
+  dismissDocTrip: (sessionId) => {
+    withSlice(get, sessionId, (slice, id) => {
+      if (!slice.docTrip) {
+        return;
+      }
+      setSlice(set, get, id, endDocTrip());
     });
   },
 

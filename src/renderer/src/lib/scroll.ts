@@ -120,7 +120,8 @@ export type DocReturn =
  * reference followed from the top of the page came back 5,000 px down, on a chapter left two
  * moves earlier. With no chapter soloed there is nothing better to offer than where they were.
  *
- * What ends a trip is navigation and nothing else. Scrolling the diff, folding, find, a mark,
+ * What ends a trip is navigation, or the reader saying so (the × on the diff's Back pill,
+ * `dismissDocTrip`) — nothing the app has to infer. Scrolling the diff, folding, find, a mark,
  * a comment written — none of them is the reader moving on, the same line a browser's history
  * and an editor's jump list draw, and there is no timer and no distance threshold for the
  * same reason. */

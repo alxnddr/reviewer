@@ -2566,6 +2566,31 @@ describe("useReviewStore tour doc navigation", () => {
     expect(active().docReturn).toEqual({ kind: "top" });
   });
 
+  it("dismissing the way back ends the trip where the reader stands, and the doc is a hub again", () => {
+    seedTour();
+    store.getState().setDocScrollTop(2770);
+    store.getState().setActiveLayer("layer-b");
+    expect(active().docTrip).toBe(true);
+
+    store.getState().dismissDocTrip();
+    // Not navigation: the reader is still on the chapter they were looking at.
+    expect(active()).toMatchObject({
+      overviewOpen: false,
+      docTrip: false,
+      activeLayerId: "layer-b",
+    });
+
+    store.getState().openOverview();
+    expect(active().docReturn).toEqual({ kind: "chapter", layerId: "layer-b" });
+  });
+
+  it("dismissing off a trip writes nothing", () => {
+    seedTour({ overviewOpen: false, docTrip: false });
+    const before = active();
+    store.getState().dismissDocTrip();
+    expect(active()).toBe(before);
+  });
+
   it("moved on with nothing soloed: the position, never the top", () => {
     seedTour();
     store.getState().setDocScrollTop(3000);

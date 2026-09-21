@@ -145,6 +145,9 @@ export function DiffScreen(): ReactElement | null {
   // Whether this review carries a tour doc: the chapter band then shows the breadcrumb
   // back to it, and stepping back off the first chapter lands there.
   const hasOverview = useReviewStore((state) => selectActiveSlice(state)?.overview != null);
+  // Whether the reader is on a trip from that doc — the diff then carries the way back
+  // (`DocReturnPill`). Read here, not in the pill: rows and pills take props.
+  const docTrip = useReviewStore((state) => selectActiveSlice(state)?.docTrip ?? false);
   // A frozen review pins its embedded patch: its anchors place directly, never
   // re-resolved against a re-derived diff.
   const frozen = useReviewStore(
@@ -186,6 +189,8 @@ export function DiffScreen(): ReactElement | null {
   // for both of them (the data rule, `ReviewRail.tsx`).
   const stepLayer = useReviewStore((state) => state.stepLayer);
   const focusReference = useReviewStore((state) => state.focusReference);
+  const openOverview = useReviewStore((state) => state.openOverview);
+  const dismissDocTrip = useReviewStore((state) => state.dismissDocTrip);
   // Collapsing the prose drops the resize panel entirely (nothing to size), so the
   // parent — not LayerIntro — owns this.
   const [layerIntroCollapsed, setLayerIntroCollapsed] = useState(false);
@@ -204,6 +209,8 @@ export function DiffScreen(): ReactElement | null {
   const onScrollServed = useSessionBound(scrollServed, activeSessionId);
   const onSetFileCollapsed = useSessionBound(setFileCollapsed, activeSessionId);
   const onSelectReference = useSessionBound(focusReference, activeSessionId);
+  const onReturnToDoc = useSessionBound(openOverview, activeSessionId);
+  const onDismissReturn = useSessionBound(dismissDocTrip, activeSessionId);
   const onResetReviewSubrange = useSessionBound(resetReviewSubrange, activeSessionId);
 
   const loadedFiles = diff !== null && diff.phase === "loaded" ? diff.files : null;
@@ -344,6 +351,9 @@ export function DiffScreen(): ReactElement | null {
           onStepComment={onStepComment}
           onClearActiveComment={onClearActiveComment}
           onScrollServed={onScrollServed}
+          returning={docTrip}
+          onReturnToDoc={onReturnToDoc}
+          onDismissReturn={onDismissReturn}
           onFollowMove={onSelectReference}
         />
       );
