@@ -22,13 +22,11 @@ export type ReviewJsonSchema = z.core.JSONSchema.BaseSchema;
 const SCHEMA_TITLE = ".reviewer.json";
 
 const SCHEMA_DESCRIPTION = [
-  "The Reviewer review artifact.",
-  "Derived from the zod contract that `rvw emit` and `rvw check` enforce.",
-  "Structural rules are expressed as JSON Schema; two classes of rule are not, because",
-  "JSON Schema cannot express them: an anchor's ascending line range (endLine >= startLine,",
-  "a comparison between sibling properties), and whether an anchor actually places on a hunk",
-  "of the review's diff. Both are checked by `rvw emit` / `rvw check`, which is the",
-  "authority — a document that satisfies this schema is well-formed, not necessarily valid.",
+  "The Reviewer review artifact, derived from the zod contract that `rvw emit` and `rvw check`",
+  "enforce. JSON Schema cannot express two of its rules: an anchor's ascending line range",
+  "(endLine >= startLine compares sibling properties), and whether an anchor places on a hunk",
+  "of the review's diff. `rvw emit` / `rvw check` check both, so a document that satisfies",
+  "this schema is well-formed, not necessarily valid.",
 ].join(" ");
 
 /** `ReviewArtifact` as a JSON Schema document an agent authors against. Draft 2020-12 is

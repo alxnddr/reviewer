@@ -229,6 +229,25 @@ export function buildManyFilesPatch(fileCount: number, linesPerFile: number): st
   }).join("");
 }
 
+/** One file, `hunkCount` hunks: line 10, 30, 50… each replaced, with no context, so hunk `n`
+ * (from zero) is exactly line `10 + 20n` on both sides. The many-hunks case — a generated or
+ * reformatted file — where a list of "every hunk" stops being a hint. */
+export function buildManyHunksPatch(hunkCount: number): string {
+  const name = "src/many-hunks.ts";
+  const hunks = Array.from({ length: hunkCount }, (_, index) => {
+    const line = 10 + 20 * index;
+    return [`@@ -${line} +${line} @@`, `-old ${line}`, `+new ${line}`];
+  });
+  return [
+    `diff --git a/${name} b/${name}`,
+    "index 1111111..2222222 100644",
+    `--- a/${name}`,
+    `+++ b/${name}`,
+    ...hunks.flat(),
+    "",
+  ].join("\n");
+}
+
 /** One generated addition per named path. The numbered builder above produces one
  * flat shape (`src/file-NN.ts`); a preview that has to show how a list narrows real
  * paths needs names and directories of differing depth, so it names them itself. */

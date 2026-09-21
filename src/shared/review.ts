@@ -122,7 +122,10 @@ export function reservedTag(tag: string | undefined): ReservedTag | null {
  * `evidence` is the receipts folded under the claim. Each carries its own
  * `.meta({ description })` because `rvw schema` is derived from this object and the
  * authoring skill names that output as the authority on field rules — an undescribed
- * field is a field an agent guesses at.
+ * field is a field an agent guesses at. A description states the field's rule and what the
+ * app does with it, and stops: *when* to write one is the skill's
+ * (`skills/present-review/SKILL.md`), and saying it in both places made every agent that
+ * fetched the schema pay for the same advice twice (912 bytes of it, measured).
  *
  * A plain `z.object`, like every `ReviewAnchor` descendant, so an artifact carrying these
  * keys still opens in an older build: the unknown keys are dropped and the review reads as
@@ -136,11 +139,11 @@ export const ReviewComment = ReviewAnchor.extend({
     .max(MAX_TAG_LENGTH)
     .optional()
     .meta({
-      description: `A short free-form label, at most ${MAX_TAG_LENGTH} characters, shown as a pill beside the comment. Use your own vocabulary; tag a comment only when a one-word label helps the reader decide how to read it, never on every comment. The app treats ${RESERVED_TAGS.join(", ")} as known words and every other value as an opaque label.`,
+      description: `A short free-form label, at most ${MAX_TAG_LENGTH} characters, shown as a pill beside the comment. Tag a comment only when the label changes how it is read, never every comment. The app knows ${RESERVED_TAGS.join(", ")}; any other value is printed as written.`,
     }),
   severity: CommentSeverity.optional().meta({
     description:
-      "How much this finding should block, if your review already ranks findings: blocking (must be resolved before merge — P0, critical, must-fix), important (should be addressed — P1, major, High/Medium), minor (worth knowing, not worth blocking — P2, P3, nit, trivial, info). Leave it unset rather than guessing; unset is not minor.",
+      "How much this finding should block, if your review already ranks findings: blocking (must be resolved before merge), important (should be addressed), minor (worth knowing, not worth blocking). Leave it unset rather than guessing; unset is not minor.",
   }),
   evidence: z.string().min(1).optional().meta({
     description:
@@ -188,7 +191,7 @@ export const ReviewLayerRange = ReviewAnchor.extend({
     .max(MAX_NOTE_LENGTH)
     .optional()
     .meta({
-      description: `One line, at most ${MAX_NOTE_LENGTH} characters, saying what this range contributes to its layer — shown beside the file's row in the overview. Not what changed in it (the diff shows that) and not a second summary (the layer's own is the chapter's point): "why this file is in this chapter". Optional, and worth writing exactly where the row would otherwise leave the reader guessing. When a layer anchors several ranges in one file, only the first note is shown, so put it on the range you want read.`,
+      description: `One line, at most ${MAX_NOTE_LENGTH} characters: what this range contributes to its layer, not what changed in it. Shown beside the file's row in the overview. When a layer anchors several ranges in one file, only the first note is shown.`,
     }),
 });
 export type ReviewLayerRange = z.infer<typeof ReviewLayerRange>;
@@ -248,7 +251,7 @@ export const ReviewLayerInput = z
      * literal is what makes the absent form the only other form. */
     skim: z.literal(true).optional().meta({
       description:
-        "Mark this layer as the mechanical remainder — lockfiles, generated output, a rename sweep, formatting. Write ONE such layer, holding everything of that kind, rather than cutting the lines out of the review: the app marks its heading Skim and starts its files folded in the diff, so the reader can see what moved without it inflating the chapter it would otherwise have been buried in. Coverage still counts these lines, so nothing is hidden from the gate. Do not mark a layer skim to make it shorter — mark it skim when there is nothing to read.",
+        "Marks this layer as the mechanical remainder: lockfiles, generated output, a rename sweep, formatting. Write one such layer, holding everything of that kind. The app marks its heading Skim and opens its files folded in the diff; coverage still counts its lines. It means there is nothing here to read, never that there is a lot.",
     }),
     /** A getter, not a `z.lazy` wrapper: it defers the self-reference the same way, but
      * leaves the schema's own type *inferable*, so the two exported types below are read
@@ -344,7 +347,7 @@ export const ReviewOverview = z.object({
   body: z.string().min(1),
   verdict: ReviewVerdict.optional().meta({
     description:
-      "Your claim about whether this should land: `ready` (land it as it stands), `caution` (landable, but read the comments first — a tradeoff, a risk, a follow-up you are naming), `blocked` (something here has to change before it lands). Shown as a chip on the doc and on the picker row, so a reader with four reviews waiting can tell them apart without opening them. It never replaces the verdict sentence in `body`: the chip is the index, the sentence is the content, and a chip with no sentence under it is a rating.",
+      "Whether this should land: `ready` (as it stands), `caution` (landable once the comments are read), `blocked` (something has to change first). Shown as a chip on the review and on the picker row. It never replaces the verdict sentence in `body`.",
   }),
 });
 export type ReviewOverview = z.infer<typeof ReviewOverview>;

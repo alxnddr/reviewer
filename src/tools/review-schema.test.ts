@@ -113,10 +113,11 @@ describe("reviewArtifactJsonSchema", () => {
       false,
     );
 
-    // ...and each carries the prose that says *when* to write one, not just its type.
+    // ...and each carries the one rule its type cannot say. Not the advice on when to write
+    // one: that is the skill's, and the descriptions were cut back to the rule on purpose.
     const document = JSON.stringify(reviewArtifactJsonSchema());
     expect(document).toContain("only the first note is shown");
-    expect(document).toContain("the chip is the index, the sentence is the content");
+    expect(document).toContain("never replaces the verdict sentence");
   });
 
   it("is derived from the contract, not hand-written: every artifact key appears in the schema", () => {

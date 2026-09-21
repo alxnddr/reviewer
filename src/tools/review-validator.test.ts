@@ -1,7 +1,14 @@
 import { describe, expect, it } from "vitest";
 import type { ReviewArtifact, ReviewLayerDraft } from "../shared/review";
-import { RENAMES_PATCH, TWO_FILE_PATCH, TWO_HUNKS_PATCH } from "../shared/diff/fixtures";
 import {
+  MULTI_STATUS_PATCH,
+  RENAMES_PATCH,
+  TWO_FILE_PATCH,
+  TWO_HUNKS_PATCH,
+  buildManyHunksPatch,
+} from "../shared/diff/fixtures";
+import {
+  describeProblem,
   parseReviewArtifact,
   validatePlacement,
   type ValidationProblem,
@@ -84,6 +91,7 @@ describe("parseReviewArtifact + validatePlacement", () => {
     expect(report.problems).toContainEqual({
       kind: "commentAnchorOutdated",
       anchor: { file: "src/foo.ts", side: "additions", startLine: 50, endLine: 50 },
+      nearestHunks: [{ startLine: 10, endLine: 14 }],
     });
     expect(report.problems).toContainEqual({
       kind: "commentFileAbsent",
@@ -121,6 +129,11 @@ describe("parseReviewArtifact + validatePlacement", () => {
       {
         kind: "commentAnchorOutdated",
         anchor: { file: "src/two-hunks.txt", side: "additions", startLine: 5, endLine: 28 },
+        // Both halves it would place in, which is the whole fix: split it or pick one.
+        nearestHunks: [
+          { startLine: 1, endLine: 6 },
+          { startLine: 27, endLine: 33 },
+        ],
       },
     ]);
   });
@@ -234,6 +247,7 @@ describe("parseReviewArtifact + validatePlacement", () => {
         kind: "referenceOutdated",
         site: { at: "overview" },
         anchor: { file: "src/foo.ts", side: "additions", startLine: 50, endLine: 51 },
+        nearestHunks: [{ startLine: 10, endLine: 14 }],
       },
     ]);
   });
@@ -290,11 +304,13 @@ describe("parseReviewArtifact + validatePlacement", () => {
       kind: "layerRangeOutdated",
       layer: "1",
       anchor: { file: "src/foo.ts", side: "additions", startLine: 90, endLine: 90 },
+      nearestHunks: [{ startLine: 10, endLine: 14 }],
     });
     expect(report.problems).toContainEqual({
       kind: "layerRangeOutdated",
       layer: "2",
       anchor: { file: "src/gone.ts", side: "additions", startLine: 1, endLine: 1 },
+      nearestHunks: null,
     });
   });
 
@@ -329,7 +345,70 @@ describe("parseReviewArtifact + validatePlacement", () => {
         kind: "layerRangeOutdated",
         layer: "2.2",
         anchor: { file: "src/foo.ts", side: "additions", startLine: 90, endLine: 90 },
+        nearestHunks: [{ startLine: 10, endLine: 14 }],
       },
+    ]);
+  });
+
+  // The hint is the part of a refusal that saves a round trip: without it the author's next
+  // call is `rvw diff`, to read off numbers the gate was already holding.
+  it("says where a misplaced anchor would place, so the fix needs no second look at the diff", () => {
+    const artifact = validArtifact({
+      patch: TWO_HUNKS_PATCH,
+      comments: [
+        { file: "src/two-hunks.txt", side: "additions", startLine: 5, endLine: 28, body: "note" },
+      ],
+      layers: [],
+    });
+    const report = validate(JSON.stringify(artifact));
+    expect(report.ok).toBe(false);
+    if (report.ok) return;
+    expect(report.problems.map(describeProblem)).toEqual([
+      "comment anchor does not place in the diff: src/two-hunks.txt additions 5-28 — it must sit inside one hunk; nearest on that side: 1-6, 27-33",
+    ]);
+  });
+
+  it("names only the hunks nearest the authored lines, in file order, however many the file has", () => {
+    const artifact = validArtifact({
+      patch: buildManyHunksPatch(40),
+      comments: [
+        { file: "src/many-hunks.ts", side: "additions", startLine: 401, endLine: 402, body: "n" },
+      ],
+      layers: [],
+    });
+    const report = validate(JSON.stringify(artifact));
+    expect(report.ok).toBe(false);
+    if (report.ok) return;
+    // Hunks sit at 10, 30, 50…; the four nearest 401-402 are 370, 390, 410 and 430.
+    expect(report.problems).toEqual([
+      {
+        kind: "commentAnchorOutdated",
+        anchor: { file: "src/many-hunks.ts", side: "additions", startLine: 401, endLine: 402 },
+        nearestHunks: [370, 390, 410, 430].map((line) => ({ startLine: line, endLine: line })),
+      },
+    ]);
+  });
+
+  it("tells a file with nothing on that side, and a file that is not there, from a wrong line", () => {
+    const artifact = validArtifact({
+      patch: MULTI_STATUS_PATCH,
+      comments: [],
+      layers: [
+        {
+          label: "Removed",
+          ranges: [
+            { file: "doomed.txt", side: "additions", startLine: 1, endLine: 1 },
+            { file: "never.txt", side: "additions", startLine: 1, endLine: 1 },
+          ],
+        },
+      ],
+    });
+    const report = validate(JSON.stringify(artifact));
+    expect(report.ok).toBe(false);
+    if (report.ok) return;
+    expect(report.problems.map(describeProblem)).toEqual([
+      "layer 1 range does not place in the diff: doomed.txt additions 1-1 — that file has no hunk on that side",
+      "layer 1 range does not place in the diff: never.txt additions 1-1 — that file is not in the diff",
     ]);
   });
 

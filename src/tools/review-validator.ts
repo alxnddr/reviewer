@@ -6,8 +6,10 @@ import {
   type AnchorSpan,
   type ReviewArtifact,
   type ReviewLayerInput,
+  type ReviewSide,
 } from "../shared/review";
 import { resolveAnchor } from "../shared/diff/anchor";
+import { hunkSpan } from "../shared/diff/walk";
 import {
   ANALYSIS_CACHE_KEY,
   filesByAnchorPath,
@@ -39,6 +41,9 @@ import { MAX_LAYER_DEPTH } from "../shared/layers";
  * than choosing to support one. */
 export type ProseSite = { at: "overview" } | { at: "layer"; layer: string };
 
+/** One hunk an anchor could have been placed in: inclusive, in its side's own line numbers. */
+export type PlaceableSpan = { startLine: number; endLine: number };
+
 /** One reason an artifact is not ready to hand over. Each variant carries enough
  * locator for the authoring agent to find and fix the offending anchor, range, or
  * link — illegal states (e.g. a comment problem with no line range) can't be built.
@@ -50,9 +55,19 @@ export type ValidationProblem =
   | { kind: "invalidJson"; message: string }
   | { kind: "schema"; path: string; message: string }
   | { kind: "missingPatch" }
-  | { kind: "commentAnchorOutdated"; anchor: AnchorSpan }
+  /** The three `…Outdated` kinds carry `nearestHunks` — where on that file and side an anchor
+   * *would* place — because the locator alone says what is wrong and not what is right: the
+   * author's next move was `rvw diff`, a whole round trip and the diff's bytes again, to read
+   * off the two numbers that are already in hand here. On a layer range `null` means the file
+   * is not in the diff at all, which is a different fix from moving the lines. */
+  | { kind: "commentAnchorOutdated"; anchor: AnchorSpan; nearestHunks: PlaceableSpan[] }
   | { kind: "commentFileAbsent"; anchor: AnchorSpan }
-  | { kind: "layerRangeOutdated"; layer: string; anchor: AnchorSpan }
+  | {
+      kind: "layerRangeOutdated";
+      layer: string;
+      anchor: AnchorSpan;
+      nearestHunks: PlaceableSpan[] | null;
+    }
   /** What is left of the outline contract once `children` carries the shape: an outline no
    * deeper than the reader can follow, in which every layer reaches some code — its own, or
    * its children's. A chain past the cap reports once, at its shallowest offender — the one
@@ -65,7 +80,12 @@ export type ValidationProblem =
   /** A reference whose *line* range no hunk covers. The file is here; the lines are not —
    * a distinct fix from the above, and the one thing no interchange format's "related
    * location" is: a second place in the change, proven to exist in it. */
-  | { kind: "referenceOutdated"; site: ProseSite; anchor: AnchorSpan }
+  | {
+      kind: "referenceOutdated";
+      site: ProseSite;
+      anchor: AnchorSpan;
+      nearestHunks: PlaceableSpan[];
+    }
   /** A target that reached for the line grammar and missed (`src/app.ts:abc`). Reported
    * with the target as written, because the thing to fix is those characters — reading the
    * suffix as part of the filename instead would report a file the author never named. */
@@ -217,7 +237,11 @@ export function validatePlacement(artifact: ReviewArtifact, patch: string): Vali
       continue;
     }
     if (resolveAnchor(comment, { kind: "derived", file: file.fileDiff }).status === "outdated") {
-      problems.push({ kind: "commentAnchorOutdated", anchor: pickAnchor(comment) });
+      problems.push({
+        kind: "commentAnchorOutdated",
+        anchor: pickAnchor(comment),
+        nearestHunks: nearestHunks(file, comment),
+      });
     }
   }
 
@@ -229,7 +253,12 @@ export function validatePlacement(artifact: ReviewArtifact, patch: string): Vali
       const file = byPath.get(range.file) ?? null;
       const resolution = resolveAnchor(range, { kind: "derived", file: file?.fileDiff ?? null });
       if (resolution.status === "outdated") {
-        problems.push({ kind: "layerRangeOutdated", layer: ordinal, anchor: pickAnchor(range) });
+        problems.push({
+          kind: "layerRangeOutdated",
+          layer: ordinal,
+          anchor: pickAnchor(range),
+          nearestHunks: file === null ? null : nearestHunks(file, range),
+        });
       }
     }
     if (layer.description !== undefined) {
@@ -286,9 +315,36 @@ function collectReferenceProblems(
     }
     const anchor = { file: reference.path, ...reference.span };
     if (resolveAnchor(anchor, { kind: "derived", file: file.fileDiff }).status === "outdated") {
-      problems.push({ kind: "referenceOutdated", site, anchor: pickAnchor(anchor) });
+      problems.push({
+        kind: "referenceOutdated",
+        site,
+        anchor: pickAnchor(anchor),
+        nearestHunks: nearestHunks(file, anchor),
+      });
     }
   }
+}
+
+/** How many hunks a problem names. A generated file can carry a hundred, and a hint that long
+ * is the `rvw diff` output it exists to replace; the few nearest the authored lines are the
+ * ones the author meant. */
+const MAX_NEAREST_HUNKS = 4;
+
+/** The same-side hunks closest to where the anchor was authored, in file order. Spans are
+ * `hunkSpan`'s — the header geometry `resolveAnchor` itself asks — so every span named here
+ * is one the gate will accept an anchor inside. A side with no lines in a hunk (additions on
+ * a pure deletion) yields an empty span and is left out. */
+function nearestHunks(file: PatchFile, anchor: AnchorSpan): PlaceableSpan[] {
+  const side: ReviewSide = anchor.side;
+  const distance = (span: PlaceableSpan): number =>
+    Math.max(0, span.startLine - anchor.endLine, anchor.startLine - span.endLine);
+  return file.fileDiff.hunks
+    .map((hunk) => hunkSpan(hunk, side))
+    .filter((span) => span.end >= span.start)
+    .map((span) => ({ startLine: span.start, endLine: span.end }))
+    .toSorted((a, b) => distance(a) - distance(b))
+    .slice(0, MAX_NEAREST_HUNKS)
+    .toSorted((a, b) => a.startLine - b.startLine);
 }
 
 /** The locator alone, picked out of whatever anchor-shaped value carried it: a comment also
@@ -315,11 +371,11 @@ export function describeProblem(problem: ValidationProblem): string {
     case "missingPatch":
       return "no diff to place anchors against — the range has no changes";
     case "commentAnchorOutdated":
-      return `comment anchor does not place in the diff: ${locator(problem.anchor)}`;
+      return `comment anchor does not place in the diff: ${locator(problem.anchor)}${hunkHint(problem.nearestHunks)}`;
     case "commentFileAbsent":
       return `comment references a file absent from the diff: ${locator(problem.anchor)}`;
     case "layerRangeOutdated":
-      return `layer ${problem.layer} range does not place in the diff: ${locator(problem.anchor)}`;
+      return `layer ${problem.layer} range does not place in the diff: ${locator(problem.anchor)}${hunkHint(problem.nearestHunks)}`;
     case "nestingTooDeep":
       return `layer ${problem.layer} is ${problem.depth} levels deep — nesting stops at ${MAX_LAYER_DEPTH}`;
     case "layerWalksNothing":
@@ -327,7 +383,7 @@ export function describeProblem(problem: ValidationProblem): string {
     case "unresolvedLink":
       return `${proseAt(problem.site)} links [${problem.label}](${problem.path}) — path is not in the diff`;
     case "referenceOutdated":
-      return `${proseAt(problem.site)} references a line range that does not place in the diff: ${locator(problem.anchor)}`;
+      return `${proseAt(problem.site)} references a line range that does not place in the diff: ${locator(problem.anchor)}${hunkHint(problem.nearestHunks)}`;
     case "malformedReference":
       return `${proseAt(problem.site)} links [${problem.label}](${problem.url}) — a line reference reads path:12, path:12-20 or path:12-20@deletions`;
   }
@@ -342,6 +398,19 @@ function proseAt(site: ProseSite): string {
     case "layer":
       return `layer ${site.layer} description`;
   }
+}
+
+/** What to change the lines *to*, appended to an outdated locator. States the rule once (one
+ * hunk, never two) because a range that straddles two hunks is the commonest way to miss. */
+function hunkHint(hunks: readonly PlaceableSpan[] | null): string {
+  if (hunks === null) {
+    return " — that file is not in the diff";
+  }
+  if (hunks.length === 0) {
+    return " — that file has no hunk on that side";
+  }
+  const spans = hunks.map((span) => `${span.startLine}-${span.endLine}`).join(", ");
+  return ` — it must sit inside one hunk; nearest on that side: ${spans}`;
 }
 
 function locator(anchor: AnchorSpan): string {

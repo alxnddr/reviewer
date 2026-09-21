@@ -148,6 +148,7 @@ describe("emitReviewArtifact", () => {
     expect(result.problems).toContainEqual({
       kind: "commentAnchorOutdated",
       anchor: { file: "src/foo.ts", side: "additions", startLine: 50, endLine: 50 },
+      nearestHunks: [{ startLine: 10, endLine: 14 }],
     });
   });
 

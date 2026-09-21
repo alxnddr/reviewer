@@ -172,4 +172,4 @@ Outcomes:
 - **Exit 1**: the gate refused the draft and **nothing was written**. Each problem is printed with its locator: a file, side and line span for a comment, or an ordinal path like `4.2.1` for a layer range, pointing at that position in the `layers` array you wrote. Fix the draft and re-run.
 - **Exit 2**: the invocation could not run.
 
-If an anchor will not place, run `rvw diff`, which prints the exact diff the gate validates against. `rvw diff --json` lists the anchorable line spans per file and side. A line inside a hunk's context also places, so that listing is the floor of valid anchors and not the ceiling.
+An anchor that will not place is printed with the nearest hunks on its file and side. Move it inside one: an anchor sits within a single hunk, and context lines count. `rvw diff` prints the exact diff the gate validates against; `rvw diff --json` lists the changed spans per file and side.
