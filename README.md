@@ -1,106 +1,76 @@
 # Reviewer
 
-A macOS app for reading code reviews written by your coding agent.
-
-By now you have probably put real work into how your agent reviews — a review skill, house rules in
-`CLAUDE.md` or `AGENTS.md`, conventions written down somewhere it can read. What comes out of all
-that still lands as a wall of text in a terminal, where you scroll and rebuild the diff in your head.
+Reviewer is a macOS app that shows the code review your agent wrote as a walkthrough of the diff, not as text in a terminal.
 
 ![Reviewer showing a diff grouped into ordered layers with anchored review comments](assets/screenshot.png)
 
-## Two things
+Your agent can already review code. You have a review skill, rules in `CLAUDE.md` or `AGENTS.md`, and a prompt you trust. The result is still a wall of text in a terminal, and you rebuild the diff in your head to follow it.
 
-**Bring your own agent.** `rvw` is a small CLI that takes a finished review as JSON. It has no
-opinion about what a bug is and never tells your agent what to look for. Ask for the review the way
-you already do — your `/code-review`, your skills, your `CLAUDE.md` — and the findings stay yours.
-Any agent that can run a shell command can hand them over.
+Reviewer keeps your agent and your prompt. It changes only where you read the review. You get:
 
-**The CLI turns findings into a tour.** A bundled skill walks the agent through building one: a
-summary of what the change does and why, the diff cut into chapters you read in order — the schema
-before the code that consumes it, the fix before the tests that pin it — and each finding anchored
-to the lines it's about. You read it top to bottom instead of piecing it back together.
+- A summary of what the change does and why.
+- The diff split into chapters that you read in order. The schema comes before the code that uses it, and the fix comes before its tests.
+- Each finding on the lines it is about. `rvw`, the CLI that comes with the app, checks every finding against the real diff before it saves the review, so a comment cannot point at the wrong code.
+- A mark for each finding (addressed, skipped, or disagree), and a button that copies the open findings back to your agent as a fix prompt.
 
-Anchors are checked against the real diff before a review is saved, so a comment can't land on the
-wrong code. Reviews are files on your disk — no account, no server.
+`rvw` has no opinion about what a bug is, and it never tells your agent what to look for. A review is a file on your disk. There is no account and no server.
 
 ## Use it
 
-Prompt for the review the way you already prompt for it — your skill, your rules, your wording — and
-add one clause saying where the findings go: *…then present the findings using the rvw CLI.* The
-app's own start screen shows this line with that clause marked, and a button that copies just the
-clause.
-
-Below, `/code-review` is Claude Code's built-in review skill — it stands in for whatever you already
-use, and only that first half changes from setup to setup:
+Ask for the review the way you already do, and add one clause that says where the findings go:
 
 ```
-/code-review this branch against main — then present the findings using the rvw CLI.
+/code-review this branch against main, then present the findings using the rvw CLI.
 ```
 
-`rvw` tells your agent the rest — the draft format and the guidance for building the tour ship with
-the CLI as a skill, so none of it has to live in your prompt. The commit range is worked out for
-you, and the app opens as soon as the review is written.
+`/code-review` is Claude Code's built-in review skill. Replace it with your own. Any agent that can run a shell command works.
 
-Reviews land in `~/.rvw/reviews/`. The start screen — the window with no review open, and ⌘T for a
-tab of it beside one — lists the recent ones newest-first; **File ▸ Recent Reviews** (⇧⌘R) searches
-all of them. Reviews keep git refs rather than a copy of the diff, so the app rebuilds the change
-from your branch every time you open it — which also means a review opens only where the repo is. To
-send one to a machine without the checkout, `rvw emit --embed-patch` packs the diff into the file
-itself; the app still reads from the checkout wherever it finds one, and shows the packed diff only
-where it does not. `rvw --help` has the rest.
+`rvw` ships with a skill that teaches the agent the review format and how to build the walkthrough, so none of that goes in your prompt. `rvw` works out the commit range, writes the review to `~/.rvw/reviews/`, and opens the app.
 
-**A plain diff, with no review.** **File ▸ Open Repository…** (⌘O), or the faint line at the foot of the start screen, opens any git checkout as a tab of its own. It lands on the newest commit; click the bar at the top of the sidebar for the rest. **Branch** is whose history you are reading, **Compare to** narrows the list to what that branch adds over another ref, and a drag or shift-click across the commits brushes out the range you want to read. Read marks and comments work as they do in a review. The tab comes back after a relaunch like any other, and ⌘W ends it.
+The start screen lists your recent reviews. **File ▸ Recent Reviews** (⇧⌘R) searches all of them.
 
-**Settings** (⌘,, or the gear in the title bar) hold the theme, whether the changed-files list
-collapses a chain of otherwise-empty folders into one row, the diff's typography — code font,
-size, line height, tab size, ligatures, line wrapping — and which editor a file opens in. Each row
-resets to its default on its own, and the file behind it is `settings.json` in the app's data
-directory if you would rather edit it by hand.
+A review stores git refs, not a copy of the diff, so it opens only on a machine that has the repository. To send a review to a machine without the repository, run `rvw emit --embed-patch`, which packs the diff into the file. Run `rvw --help` for the other commands.
+
+To read a diff that has no review, choose **File ▸ Open Repository…** (⌘O). Pick a branch, a ref to compare it to, or a range of commits.
+
+**Settings** (⌘,) has the theme, the code font, and the editor that files open in.
 
 ## Install
 
-macOS. Download the `.dmg` from the [latest release](../../releases/latest), or build it:
+Reviewer runs on macOS. Download the `.dmg` from the [latest release](../../releases/latest).
+
+The build is unsigned, so macOS blocks the first launch. Right-click the app and choose **Open**, or run:
 
 ```bash
-bun install
-bun run build:mac    # → Reviewer.app + .dmg in dist/
-bun run build:cli    # → rvw CLI at dist/rvw.js
+xattr -dr com.apple.quarantine /Applications/Reviewer.app
 ```
 
-Builds are unsigned, so on first launch right-click → **Open**, or run:
-`xattr -dr com.apple.quarantine /Applications/Reviewer.app`
+The app then offers to install the `rvw` command.
 
-**On Linux** there is no app, but `rvw` runs anywhere node ≥ 20 does, so you can write and check reviews on a Linux box and open them on a Mac. Each release attaches `rvw-<version>-any.tar.gz`, and `scripts/install-cli.sh` installs it for the current user:
+### Install only the CLI on Linux
+
+There is no Linux app. `rvw` runs on any machine with Node 20 or later, so you can write and check reviews on Linux and open them on a Mac.
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/alxnddr/reviewer/main/scripts/install-cli.sh | sh
-sh install-cli.sh --version 0.5.0          # one release rather than the latest
-sh install-cli.sh rvw-0.5.0-any.tar.gz     # a tarball you already have (bun run pack:cli)
-sh install-cli.sh --uninstall
 ```
 
-It unpacks the release to `~/.local/share/rvw/<version>` and writes `~/.local/bin/rvw`, a launcher that runs it with the `node` on your PATH. Every verb works except `rvw open`, which launches the macOS app and exits 2 anywhere else. `rvw emit` still writes the artifact there but says it could not open it, so pass `--no-open`.
+The script installs `rvw` to `~/.local/bin` for the current user. It also takes `--version 0.5.0` to install one release, and `--uninstall`. On Linux, pass `--no-open` to `rvw emit`, because opening a review needs the macOS app.
 
 ## Develop
 
 ```bash
-bun run dev        # build the CLI bundle, then electron-vite dev (HMR)
-bun run dev:fresh  # reset to a first launch, then dev
-bun run check      # typecheck + lint + format
+bun install
+bun run dev        # the app with hot reload
+bun run check      # typecheck, lint, and format
 bun run test       # vitest
+bun run build:mac  # Reviewer.app and a .dmg in dist/
 ```
 
-The installed `rvw` is a two-line shim that execs the app's bundle, so it follows the app — an
-update to Reviewer updates the command with no reinstall. In development that bundle is
-`dist/rvw.js`, which is why `bun run dev` rebuilds it first; edit anything under `cli/` mid-session
-and re-run `bun run build:cli` to catch the shim up.
-
-`bun run reset` does that reset on its own: it clears the first-run guide's flag, empties the tab
-strip (backup at `sessions.json.bak`), and removes the installed `rvw` launcher. Your settings
-(⌘, — theme, code font, and the rest) are left alone. `--keep-tabs` / `--keep-cli` skip a part; quit the app first, or pass `--force`.
+If you edit `cli/` while `bun run dev` is running, run `bun run build:cli` again. To return the app to a first launch, quit it and run `bun run reset`. `CLAUDE.md` describes how the code is organized.
 
 ## License
 
-MIT — see [LICENSE](./LICENSE).
+MIT. See [LICENSE](./LICENSE).
 
-> **Note:** fully vibecoded. Every line was written by Claude and no human has read the code.
+Claude wrote every line of this repository. No human has read the code.
