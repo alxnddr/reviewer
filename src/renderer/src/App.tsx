@@ -399,7 +399,11 @@ export function App(): ReactElement {
             // is for.
             <StartScreen key={activeStartTabId ?? "start"} failure={openFailure} />
           ) : showOverview ? (
-            <OverviewScreen />
+            // Keyed per session for the document's scroll position, which is per session
+            // (`docScrollTop`): two reviews both standing on their overview are otherwise one
+            // mounted scroller, and switching tabs would carry the first one's position into
+            // the second — and then record it there.
+            <OverviewScreen key={activeSessionId} />
           ) : (
             <DiffScreen />
           )}

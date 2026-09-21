@@ -11,15 +11,30 @@ import {
 } from "../../lib/diff/comment-navigation";
 import { withCollapsed } from "../../lib/read-progress";
 import { samePendingScroll, type PendingScroll } from "../../lib/scroll";
-import { commentFocus, lineFocus, setSlice, sliceSolo, withSlice } from "./slice";
+import {
+  commentFocus,
+  enterDoc,
+  fileFocus,
+  leaveDoc,
+  lineFocus,
+  setSlice,
+  sliceSolo,
+  withSlice,
+  type SessionSlice,
+} from "./slice";
 import type { ReviewState } from "./state";
 
 // The reader's way through an authored review: the tour doc as stop zero, the layer order
 // after it, and the comments inside whatever is on screen. Almost all of it is derived view
 // state — `overviewOpen`, `activeLayerId`, `activeCommentId` are absent from
 // `persistedSession` — so these actions schedule no write-back and a relaunch always starts
-// the walk over. The two exceptions are `focusComment` and `focusReference`, which also move
-// the file focus, and that half persists like any other navigation.
+// the walk over. The exceptions are `focusComment`, `focusReference` and the doc's two doors
+// (`openLayerFile`, `openLayerComment`), which also move the file focus, and that half
+// persists like any other navigation.
+//
+// Leaving and entering the doc is spelled `leaveDoc` / `enterDoc` (`slice.ts`) at every site
+// here, never as the literal: those two carry the trip rule, and `doc-trip.test.ts` holds the
+// spelling against the source.
 
 export type WalkthroughSlice = {
   /** Solo a layer by id, or pass null to clear back to the full diff.
@@ -29,8 +44,9 @@ export type WalkthroughSlice = {
    * the trailhead. */
   setActiveLayer: (layerId: string | null, sessionId?: SessionId) => void;
   /** Open the tour doc — the review's first stop. Clears the soloed layer so the rail has
-   * exactly one selected stop, and lands on the section the reader last came out of. A
-   * no-op on a session with no doc. */
+   * exactly one selected stop, and plans where the document opens (`enterDoc`): where the
+   * reader left it while their trip is live, the chapter they are in once they have moved on.
+   * A no-op on a session with no doc, and on one whose doc is already up. */
   openOverview: (sessionId?: SessionId) => void;
   /** Leave the tour doc for the full diff — the "browse all files" way out, and what the
    * `o` toggle does from inside the doc. */
@@ -52,6 +68,19 @@ export type WalkthroughSlice = {
    * or outdated), in reading order over the currently visible (soloed) file set,
    * wrapping at both ends. A no-op when there are none. */
   stepComment: (direction: 1 | -1, sessionId?: SessionId) => void;
+  /** The doc's file row: solo the chapter and land on one of its files, as **one** write.
+   * It was two calls (`setActiveLayer`, then `selectFile`), and under the trip rule the second
+   * would arrive with the document already closed — a navigation act, ending the trip the
+   * first had just started. One `setSlice`, one `leaveDoc`, one trip. */
+  openLayerFile: (layerId: string, path: string, sessionId?: SessionId) => void;
+  /** The doc's comment door, one write for the same reason: solo the chapter and focus one
+   * of its findings. An id that names no comment still opens the chapter. */
+  openLayerComment: (layerId: string, commentId: string, sessionId?: SessionId) => void;
+  /** The tour doc reporting where it is scrolled to. Not navigation — reading never is — so
+   * it neither starts nor ends a trip, and it schedules no write-back: the position is
+   * ephemeral. It also spends `docReturn`, which is what makes a bare remount restore this
+   * position instead of replaying the request the document was last opened with. */
+  setDocScrollTop: (scrollTop: number, sessionId?: SessionId) => void;
   /** Drop the focused comment back to none — dismisses the counter and the ring. */
   clearActiveComment: (sessionId?: SessionId) => void;
   /** Go where a prose reference points — `[the caller](src/worker.ts:40-44)`, and the
@@ -72,6 +101,44 @@ export type WalkthroughSlice = {
   scrollServed: (pending: PendingScroll, sessionId?: SessionId) => void;
 };
 
+/** What focusing a comment writes, short of leaving the doc — shared by `focusComment` and
+ * the doc's comment door so the two cannot come to differ about what a jump to a finding
+ * does. Null when the id names no comment. */
+function commentJump(slice: SessionSlice, commentId: string): Partial<SessionSlice> | null {
+  const comment = slice.comments.find((candidate) => candidate.id === commentId);
+  if (comment === undefined) {
+    return null;
+  }
+  // The file hosting the comment, under the path the loaded diff knows it by: an
+  // anchor authored before a rename names the old path, and every path below (solo
+  // cover, fold, file focus) is keyed on the diff's current one. Falls back to the
+  // authored path when no file claims it — an unplaceable comment focuses nothing.
+  const hostPath =
+    slice.diff.phase === "loaded"
+      ? (filesByAnchorPath(slice.diff.files).get(comment.file)?.path ?? comment.file)
+      : comment.file;
+  // A soloed layer that doesn't cover the target's file would leave its
+  // annotation unmounted, so there'd be nothing to scroll to; clear the solo
+  // first (the panel lists every comment, soloed-out ones included). The full
+  // diff is unaffected, so this only fires when a solo is actually hiding it.
+  const clearsSolo =
+    slice.activeLayerId !== null &&
+    slice.diff.phase === "loaded" &&
+    !sliceSolo(slice).files.some((file) => file.path === hostPath);
+  // A folded file renders no lines, so its comment cards are not mounted and there is
+  // nothing to scroll to — the same reason a solo that hides the file is cleared above.
+  // Unfold it rather than refuse the jump: the reader asked for this finding.
+  const collapsedFiles = withCollapsed(slice.collapsedFiles, [hostPath], false);
+  // The active id is ephemeral (no write-back); the file focus moves with it so
+  // the tree and j/k stay on the comment's file — that half persists.
+  return {
+    ...commentFocus(commentId),
+    selectedFilePath: hostPath,
+    ...(collapsedFiles === slice.collapsedFiles ? {} : { collapsedFiles }),
+    ...(clearsSolo ? { activeLayerId: null } : {}),
+  };
+}
+
 export const createWalkthroughSlice: StateCreator<ReviewState, [], [], WalkthroughSlice> = (
   set,
   get,
@@ -84,24 +151,19 @@ export const createWalkthroughSlice: StateCreator<ReviewState, [], [], Walkthrou
       // No write-back: the active layer is a derived view, never a persisted input
       // (it is absent from `persistedSession`), so soloing costs zero bridge calls
       // and a relaunch always reopens on the full diff.
-      setSlice(set, get, id, {
-        activeLayerId: layerId,
-        overviewOpen: false,
-        ...(layerId === null ? {} : { lastChapterId: layerId }),
-      });
+      setSlice(set, get, id, { activeLayerId: layerId, ...leaveDoc(slice) });
     });
   },
 
   openOverview: (sessionId) => {
     withSlice(get, sessionId, (slice, id) => {
-      if (slice.overview === null) {
+      // Already up is a no-op, and has to be said: `enterDoc` plans a fresh return each
+      // call, so without this the rail's Overview row clicked from the document would hand
+      // the mounted document a request nothing is going to serve.
+      if (slice.overview === null || slice.overviewOpen) {
         return;
       }
-      // The doc is a stop, not an overlay: it clears the solo rather than hiding it, so
-      // there is exactly one selected row in the rail and no remembered state to surprise
-      // the reader when they come back down into the diff. `lastChapterId` is untouched —
-      // it is the doc's own scroll target, so returning lands on the layer just read.
-      setSlice(set, get, id, { overviewOpen: true, activeLayerId: null });
+      setSlice(set, get, id, enterDoc(slice));
     });
   },
 
@@ -110,7 +172,7 @@ export const createWalkthroughSlice: StateCreator<ReviewState, [], [], Walkthrou
       if (!slice.overviewOpen) {
         return;
       }
-      setSlice(set, get, id, { overviewOpen: false });
+      setSlice(set, get, id, leaveDoc(slice));
     });
   },
 
@@ -122,11 +184,7 @@ export const createWalkthroughSlice: StateCreator<ReviewState, [], [], Walkthrou
         // walkthrough, so it stays put rather than wrapping to the end.
         const first = direction === 1 ? (layers[0]?.id ?? null) : null;
         if (first !== null) {
-          setSlice(set, get, id, {
-            activeLayerId: first,
-            overviewOpen: false,
-            lastChapterId: first,
-          });
+          setSlice(set, get, id, { activeLayerId: first, ...leaveDoc(slice) });
         }
         return;
       }
@@ -138,55 +196,65 @@ export const createWalkthroughSlice: StateCreator<ReviewState, [], [], Walkthrou
         slice.activeLayerId !== null &&
         layers[0]?.id === slice.activeLayerId
       ) {
-        setSlice(set, get, id, { overviewOpen: true, activeLayerId: null });
+        setSlice(set, get, id, enterDoc(slice));
         return;
       }
       const next = stepLayerId(layers, slice.activeLayerId, direction);
       if (next === null || next === slice.activeLayerId) {
         return;
       }
-      setSlice(set, get, id, { activeLayerId: next, lastChapterId: next });
+      // The document is already closed here, so `leaveDoc` changes nothing on screen — it is
+      // spread for its other half: stepping chapters is the reader moving on, and ends a trip.
+      setSlice(set, get, id, { activeLayerId: next, ...leaveDoc(slice) });
     });
   },
 
   focusComment: (commentId, sessionId) => {
     withSlice(get, sessionId, (slice, id) => {
-      const comment = slice.comments.find((candidate) => candidate.id === commentId);
-      if (comment === undefined) {
+      const jump = commentJump(slice, commentId);
+      if (jump === null) {
         return;
       }
-      // The file hosting the comment, under the path the loaded diff knows it by: an
-      // anchor authored before a rename names the old path, and every path below (solo
-      // cover, fold, file focus) is keyed on the diff's current one. Falls back to the
-      // authored path when no file claims it — an unplaceable comment focuses nothing.
-      const hostPath =
-        slice.diff.phase === "loaded"
-          ? (filesByAnchorPath(slice.diff.files).get(comment.file)?.path ?? comment.file)
-          : comment.file;
-      // A soloed layer that doesn't cover the target's file would leave its
-      // annotation unmounted, so there'd be nothing to scroll to; clear the solo
-      // first (the panel lists every comment, soloed-out ones included). The full
-      // diff is unaffected, so this only fires when a solo is actually hiding it.
-      const clearsSolo =
-        slice.activeLayerId !== null &&
-        slice.diff.phase === "loaded" &&
-        !sliceSolo(slice).files.some((file) => file.path === hostPath);
-      // A folded file renders no lines, so its comment cards are not mounted and there is
-      // nothing to scroll to — the same reason a solo that hides the file is cleared above.
-      // Unfold it rather than refuse the jump: the reader asked for this finding.
-      const collapsedFiles = withCollapsed(slice.collapsedFiles, [hostPath], false);
-      // The active id is ephemeral (no write-back); the file focus moves with it so
-      // the tree and j/k stay on the comment's file — that half persists.
+      // Stepping to a comment is diff navigation, so it leaves the doc — the card is
+      // about to be scrolled to, and it lives on the diff surface.
+      setSlice(set, get, id, { ...jump, ...leaveDoc(slice) });
+      get().scheduleSessionWriteBack(id);
+    });
+  },
+
+  openLayerFile: (layerId, path, sessionId) => {
+    withSlice(get, sessionId, (slice, id) => {
+      // `setActiveLayer` and `selectFile`, as the one write they have to be.
       setSlice(set, get, id, {
-        ...commentFocus(commentId),
-        selectedFilePath: hostPath,
-        ...(collapsedFiles === slice.collapsedFiles ? {} : { collapsedFiles }),
-        // Stepping to a comment is diff navigation, so it leaves the doc — the card is
-        // about to be scrolled to, and it lives on the diff surface.
-        overviewOpen: false,
-        ...(clearsSolo ? { activeLayerId: null } : {}),
+        activeLayerId: layerId,
+        selectedFilePath: path,
+        ...fileFocus(path),
+        ...leaveDoc(slice),
       });
       get().scheduleSessionWriteBack(id);
+    });
+  },
+
+  openLayerComment: (layerId, commentId, sessionId) => {
+    withSlice(get, sessionId, (slice, id) => {
+      // The jump is worked out against the slice as the solo will leave it, which is what
+      // calling `focusComment` second used to see: a chapter that does not cover its own
+      // finding's file (a comment on a file a rollup's child claims) still clears the solo.
+      // `jump` is spread after the layer so that clearing wins.
+      const jump = commentJump({ ...slice, activeLayerId: layerId }, commentId);
+      setSlice(set, get, id, { activeLayerId: layerId, ...jump, ...leaveDoc(slice) });
+      if (jump !== null) {
+        get().scheduleSessionWriteBack(id);
+      }
+    });
+  },
+
+  setDocScrollTop: (scrollTop, sessionId) => {
+    if (!Number.isFinite(scrollTop)) {
+      return;
+    }
+    withSlice(get, sessionId, (_slice, id) => {
+      setSlice(set, get, id, { docScrollTop: Math.max(0, scrollTop), docReturn: null });
     });
   },
 
@@ -255,7 +323,7 @@ export const createWalkthroughSlice: StateCreator<ReviewState, [], [], Walkthrou
         selectedFilePath: path,
         ...(collapsedFiles === slice.collapsedFiles ? {} : { collapsedFiles }),
         // Following a reference is diff navigation, so it leaves the doc the chip was on.
-        overviewOpen: false,
+        ...leaveDoc(slice),
       });
       get().scheduleSessionWriteBack(id);
     });

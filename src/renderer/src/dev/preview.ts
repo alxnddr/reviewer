@@ -656,7 +656,6 @@ export function applyPreviewState(): void {
         layers: fixtureLayers(),
         overview: fixtureOverview(),
         overviewOpen: true,
-        lastChapterId: null,
       });
       break;
     }

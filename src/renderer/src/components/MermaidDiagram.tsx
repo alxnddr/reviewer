@@ -2,6 +2,7 @@ import { useEffect, useState, type ReactElement } from "react";
 import type { Mermaid } from "mermaid";
 import { appliedDark, appliedThemeId, readPalette } from "@/lib/apply-settings";
 import {
+  createDrawnDiagrams,
   DIAGRAM_TOKENS,
   failedOutcome,
   planDiagram,
@@ -126,6 +127,11 @@ function themeMermaid(mermaid: Mermaid): void {
  * `dom-ids.test.ts` exists for, met from the other side. */
 let renders = 0;
 
+/** Every diagram this window has drawn, by theme and source (`lib/mermaid.ts` says why it
+ * exists: a remounted fence must be its diagram in the first render, or the overview changes
+ * height under a reader who was just put back where they left). */
+const drawnDiagrams = createDrawnDiagrams();
+
 /** Never rejects: every way this can go wrong — the chunk, the parse, the layout — comes
  * back as the `failed` arm, because the caller is a mount effect and a rejection there is
  * an unhandled one. Concurrent calls are safe; mermaid queues its renders internally. */
@@ -135,7 +141,10 @@ async function drawDiagram(source: string): Promise<DiagramOutcome> {
     themeMermaid(mermaid);
     renders += 1;
     const { svg } = await mermaid.render(`mermaid-diagram-${renders}`, source);
-    return renderedOutcome(svg);
+    const outcome = renderedOutcome(svg);
+    // Under the theme mermaid was just initialized for, which is the one baked into `svg`.
+    drawnDiagrams.remember(appliedThemeId(), source, outcome);
+    return outcome;
   } catch (error) {
     return failedOutcome(error);
   }
@@ -153,7 +162,13 @@ type MermaidDiagramProps = {
 export function MermaidDiagram({ source, fence }: MermaidDiagramProps): ReactElement {
   // Held with the source it was drawn from, so a result that arrives for text the prose no
   // longer contains is simply not this diagram's — no reset effect, no flash of the old one.
-  const [drawn, setDrawn] = useState<{ source: string; outcome: DiagramOutcome } | null>(null);
+  //
+  // Seeded from `drawnDiagrams`: a fence this window has already drawn mounts as its diagram,
+  // at its final height, instead of as its fence for a few frames first.
+  const [drawn, setDrawn] = useState<{ source: string; outcome: DiagramOutcome } | null>(() => {
+    const outcome = drawnDiagrams.recall(appliedThemeId(), source);
+    return outcome === null ? null : { source, outcome };
+  });
   // Read for the redraw it causes, not for its value: by the time this changes,
   // `applySettings` has already put the new theme on <html> (the store applies, then sets),
   // and `themeMermaid` reads the palette from there. Deliberately *not* part of `drawn`'s key
@@ -167,6 +182,19 @@ export function MermaidDiagram({ source, fence }: MermaidDiagramProps): ReactEle
   useEffect(() => {
     // A refused source never reaches the library — not even to load it.
     let live = !refused;
+    // One already drawn under the theme in force is not drawn again: on a mount it is on
+    // screen from the first render (the seed above), and the functional update hands back the
+    // same object, so nothing re-renders. The write matters on a switch *back* to a theme
+    // this fence has been drawn in, where `drawn` still holds the other theme's colours.
+    const recalled = live ? drawnDiagrams.recall(appliedThemeId(), source) : null;
+    if (recalled !== null) {
+      live = false;
+      setDrawn((current) =>
+        current?.source === source && current.outcome === recalled
+          ? current
+          : { source, outcome: recalled },
+      );
+    }
     if (live) {
       void drawDiagram(source).then((outcome) => {
         if (live) {

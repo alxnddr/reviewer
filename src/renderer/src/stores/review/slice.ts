@@ -11,7 +11,12 @@ import { NO_FILES, soloedDiff, type SoloedDiff } from "../../lib/soloed-diff";
 import type { ReadFiles } from "../../lib/read-progress";
 import type { CommentResolutions } from "../../../../shared/comment-resolution";
 import type { BrushRange } from "../../lib/selection";
-import type { LineTarget, PendingScroll } from "../../lib/scroll";
+import {
+  planDocReturn,
+  type DocReturn,
+  type LineTarget,
+  type PendingScroll,
+} from "../../lib/scroll";
 import type { BranchesState, DiffState, LogState } from "../../lib/load-state";
 import type { ReviewState } from "./state";
 
@@ -60,11 +65,34 @@ export type SessionSlice = {
    * begins at its overview, not mid-diff. Invariant: true implies
    * `activeLayerId === null`, which makes the rail's selection unambiguous. */
   overviewOpen: boolean;
-  /** The last chapter the reader entered, or null before they enter any. Ephemeral like
-   * the two above, and never a second source of truth for what is soloed — it exists so
-   * returning to the doc lands on the chapter you just read instead of the top of a long
-   * page, which is the one thing a hub-and-spoke walkthrough must not lose. */
-  lastChapterId: string | null;
+  /** Where the tour doc was last scrolled to, as the document itself reported it
+   * (`setDocScrollTop`, debounced and flushed on unmount exactly like the diff pane's
+   * `scrollTop`). Ephemeral, unlike that one: absent from `persistedSession`, so a relaunch
+   * opens the document at its title. Before this existed the document kept no position at
+   * all — it replaces the diff pane, so every way out unmounts it and every way back mounted
+   * it at 0, and even `o`,`o` lost the reader's place. */
+  docScrollTop: number;
+  /** Whether the reader is on a *trip*: the document closed and they have not navigated by
+   * their own hand since. It is the one bit that tells a glance from a departure, and the app
+   * never has to guess it at the click — an accidental click and a long look at some code are
+   * the same thing (nothing navigated), and a departure is whatever navigates next. While it
+   * is true the document reopens exactly where it was left and the rail's Overview row says
+   * so; once it is false the document is a hub again (`lib/scroll.ts`'s `planDocReturn` holds
+   * the ranking and the argument).
+   *
+   * Written through `leaveDoc` and `enterDoc` below and nowhere else. True implies
+   * `overviewOpen === false`. Ephemeral, and per session — a tab switched away from and back
+   * is still on its trip, like a browser tab's history. */
+  docTrip: boolean;
+  /** The place the document owes the reader on its next mount, or null when it owes none.
+   * A request the mount serves rather than a value it watches, for `pendingScroll`'s reason:
+   * opening the document *is* mounting it. Planned by `enterDoc` at the moment of the return,
+   * because that is the last moment the soloed chapter is still known.
+   *
+   * Spent by the document's next position report (`setDocScrollTop`) rather than by a
+   * separate "served" call: once the document has said where it is, that is the truth, and a
+   * bare remount (a tab bounce) must restore it instead of replaying the request. */
+  docReturn: DocReturn | null;
   /** The review's pinned diff, or null for a plain repo session. When set,
    * it drives the rendered diff so the anchors place on their exact authored lines. A
    * `frozenPatch` pin renders its embedded diff verbatim (anchors resolve frozen); a
@@ -240,6 +268,43 @@ export function lineFocus(
  * it, exactly as re-focusing the focused comment re-centres it. */
 export function fileFocus(path: string): Pick<SessionSlice, "activeCommentId" | "pendingScroll"> {
   return { activeCommentId: null, pendingScroll: { kind: "file", path } };
+}
+
+/** Closing the tour doc, as one value — the only spelling of `overviewOpen: false` outside
+ * this file and the slice factory, which `doc-trip.test.ts` holds against the source.
+ *
+ * Every action that targets the diff spreads this, and the one expression is both halves of
+ * the trip rule (`docTrip`): if the document was open, this act is what closed it, and a trip
+ * starts — whatever the act was, a chip, a heading, `j`, a rail row, since a click made while
+ * the document is up is as easy to make by accident from the rail as from the page. If it was
+ * already closed, this act is the reader navigating by their own hand, and the trip is over.
+ *
+ * That is why it is a helper and not a field each site remembers: a new navigation action
+ * that wrote the literal would leave the document correctly and silently never end a trip,
+ * and the rail would go on offering a way back the reader has plainly walked away from.
+ * Scrolling, folding, marking and find do not spread this, and must not. */
+export function leaveDoc(slice: SessionSlice): Pick<SessionSlice, "overviewOpen" | "docTrip"> {
+  return { overviewOpen: false, docTrip: slice.overviewOpen };
+}
+
+/** Opening the tour doc, as one value, for the same reason: two actions open it
+ * (`openOverview`, and `stepLayer` stepping back off the first chapter) and both must plan the
+ * return *from the slice as it stands*, before the solo this clears is gone — written out by
+ * hand, the natural order is to clear first and ask afterwards.
+ *
+ * The doc is a stop, not an overlay: it clears the solo rather than hiding it, so the rail has
+ * exactly one selected row and there is no remembered state to surprise the reader when they
+ * come back down into the diff. Arriving also ends any trip — there is nothing left to return
+ * to. */
+export function enterDoc(
+  slice: SessionSlice,
+): Pick<SessionSlice, "overviewOpen" | "activeLayerId" | "docTrip" | "docReturn"> {
+  return {
+    overviewOpen: true,
+    activeLayerId: null,
+    docTrip: false,
+    docReturn: planDocReturn(slice.docTrip, slice.docScrollTop, slice.activeLayerId),
+  };
 }
 
 /** The slice's soloed diff: the authored layers plus the inferred "not covered by layers"

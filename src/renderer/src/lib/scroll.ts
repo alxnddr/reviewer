@@ -94,6 +94,58 @@ export function planScrollRestore(
   return { kind: "none" };
 }
 
+/** Where the overview document opens. A request, like `PendingScroll`: whatever opens the
+ * document writes one (`slice.ts`'s `enterDoc`) and the document's mount serves it — the
+ * document replaces the diff pane, so every open *is* a mount and there is never a mounted
+ * document to watch a change arrive on. `top` is its own arm for `ScrollRestore`'s reason:
+ * absence is never `0`-as-maybe. */
+export type DocReturn =
+  | { kind: "position"; top: number }
+  | { kind: "chapter"; layerId: string }
+  | { kind: "top" };
+
+/** Where the document opens, ranked: a live trip beats the soloed chapter beats the position.
+ *
+ * A *trip* is the stretch between the act that closed the document and the reader's next
+ * navigation by their own hand (`slice.ts`'s `leaveDoc` is where it starts and ends). While
+ * it is live the reader has only looked — a reference followed, a file glanced at, however
+ * far they scrolled in it — so they come back to the exact paragraph they left, and a
+ * chapter the exit happened to solo does not get a say: a heading click made by accident
+ * must undo to the line it was made from, not to the top of its section.
+ *
+ * Once they have navigated, the document is a hub again, and a hub opens on the chapter the
+ * reader is *in* — which is why the chapter is read here, at the moment of the return, rather
+ * than remembered. It used to be remembered (`lastChapterId`, written on every solo and never
+ * cleared), and a bookmark that outlives its visit wins arguments it should not be in: a
+ * reference followed from the top of the page came back 5,000 px down, on a chapter left two
+ * moves earlier. With no chapter soloed there is nothing better to offer than where they were.
+ *
+ * What ends a trip is navigation and nothing else. Scrolling the diff, folding, find, a mark,
+ * a comment written — none of them is the reader moving on, the same line a browser's history
+ * and an editor's jump list draw, and there is no timer and no distance threshold for the
+ * same reason. */
+export function planDocReturn(
+  tripLive: boolean,
+  docScrollTop: number,
+  activeLayerId: string | null,
+): DocReturn {
+  if (!tripLive && activeLayerId !== null) {
+    return { kind: "chapter", layerId: activeLayerId };
+  }
+  return positionOrTop(docScrollTop);
+}
+
+function positionOrTop(docScrollTop: number): DocReturn {
+  return docScrollTop > 0 ? { kind: "position", top: docScrollTop } : { kind: "top" };
+}
+
+/** What a mount of the document serves: the request it was opened with, or — on a bare
+ * remount, a tab switched away from and back — the position it last reported. The same split
+ * `planScrollRestore` makes between an outstanding request and the activation restore. */
+export function docMountReturn(request: DocReturn | null, docScrollTop: number): DocReturn {
+  return request ?? positionOrTop(docScrollTop);
+}
+
 /** Coalesces a burst of scroll events into one slice write. Short so a switch
  * captures a near-current position, but non-zero so a fast scroll is not a write
  * per frame; the disk write-back is debounced separately. */

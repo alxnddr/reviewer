@@ -13,6 +13,7 @@ import {
   plainColor,
   planDiagram,
   readFence,
+  createDrawnDiagrams,
   renderedOutcome,
   themedMermaidConfig,
   type DiagramPalette,
@@ -278,6 +279,36 @@ describe("renderedOutcome", () => {
   it("is a failure when the render came back empty — never an empty box", () => {
     expect(renderedOutcome("")).toMatchObject({ kind: "failed" });
     expect(renderedOutcome(" \n")).toMatchObject({ kind: "failed" });
+  });
+});
+
+describe("createDrawnDiagrams", () => {
+  const svg = (name: string) => ({ kind: "drawn", svg: `<svg>${name}</svg>` }) as const;
+
+  it("recalls a drawing by theme and source, and nothing it was not given", () => {
+    const drawn = createDrawnDiagrams();
+    drawn.remember("paper", "graph TD; a-->b", svg("one"));
+    expect(drawn.recall("paper", "graph TD; a-->b")).toEqual(svg("one"));
+    // Another theme's drawing carries another palette: it is not this diagram.
+    expect(drawn.recall("ink", "graph TD; a-->b")).toBeNull();
+    expect(drawn.recall("paper", "graph TD; a-->c")).toBeNull();
+  });
+
+  it("never remembers a failure, so a transient one is retried", () => {
+    const drawn = createDrawnDiagrams();
+    drawn.remember("paper", "graph", { kind: "failed", reason: "chunk" });
+    expect(drawn.recall("paper", "graph")).toBeNull();
+  });
+
+  it("is bounded: the oldest goes first, and drawing again makes a diagram the newest", () => {
+    const drawn = createDrawnDiagrams(2);
+    drawn.remember("paper", "a", svg("a"));
+    drawn.remember("paper", "b", svg("b"));
+    drawn.remember("paper", "a", svg("a"));
+    drawn.remember("paper", "c", svg("c"));
+    expect(drawn.recall("paper", "b")).toBeNull();
+    expect(drawn.recall("paper", "a")).toEqual(svg("a"));
+    expect(drawn.recall("paper", "c")).toEqual(svg("c"));
   });
 });
 

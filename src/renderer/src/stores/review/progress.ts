@@ -8,6 +8,7 @@ import { isFileRead, markFilesRead, nextUnreadFile, withCollapsed } from "../../
 import { withResolution } from "../../../../shared/comment-resolution";
 import {
   fileFocus,
+  leaveDoc,
   setSlice,
   sliceSolo,
   withSlice,
@@ -124,7 +125,7 @@ export const createProgressSlice: StateCreator<ReviewState, [], [], ProgressSlic
   get,
 ) => ({
   selectFile: (path, sessionId) => {
-    withSlice(get, sessionId, (_slice, id) => {
+    withSlice(get, sessionId, (slice, id) => {
       // Plain file navigation dismisses the comment step-through: the reader is
       // browsing files now, not walking comments — and it leaves the tour doc, since a
       // picked file is a request to see the diff (the doc's own file chips route here).
@@ -135,7 +136,7 @@ export const createProgressSlice: StateCreator<ReviewState, [], [], ProgressSlic
       setSlice(set, get, id, {
         selectedFilePath: path,
         ...fileFocus(path),
-        overviewOpen: false,
+        ...leaveDoc(slice),
       });
       get().scheduleSessionWriteBack(id);
     });
@@ -170,7 +171,7 @@ export const createProgressSlice: StateCreator<ReviewState, [], [], ProgressSlic
         setSlice(set, get, id, {
           selectedFilePath: next.path,
           ...fileFocus(next.path),
-          overviewOpen: false,
+          ...leaveDoc(slice),
         });
         get().scheduleSessionWriteBack(id);
       }
@@ -243,7 +244,7 @@ export const createProgressSlice: StateCreator<ReviewState, [], [], ProgressSlic
         // as j/k do, since a reader who asked for the next file is asking to see it.
         next === null
           ? undefined
-          : { selectedFilePath: next, ...fileFocus(next), overviewOpen: false },
+          : { selectedFilePath: next, ...fileFocus(next), ...leaveDoc(slice) },
       );
     });
   },

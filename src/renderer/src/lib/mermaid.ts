@@ -255,6 +255,54 @@ export function renderedOutcome(svg: string): DiagramOutcome {
     : { kind: "drawn", svg };
 }
 
+/** Diagrams already drawn, so a fence that mounts again is its diagram in the *first* render
+ * rather than a beat later.
+ *
+ * The overview replaces the diff pane, so every trip out of it and back remounts every
+ * diagram on the page. Drawn afresh each time, each one was its fence for a few frames and
+ * then its SVG, and the two are different heights: the page changed height under a reader
+ * who had just been put back on the paragraph they left (`planDocReturn`), and they landed
+ * tens of px off. Restoring the position cannot fix that from its side — at mount the page is
+ * not yet the page the position was measured on. Remembering the drawing does.
+ *
+ * Keyed by theme as well as source, because mermaid bakes the palette into the SVG: last
+ * theme's drawing is a different drawing. Only `drawn` is remembered — a failure may be a
+ * transient chunk read (`loadMermaid`), and retrying it costs nothing. Bounded, oldest out
+ * first, since an SVG is tens of KB and a long session can walk many reviews and six themes.
+ *
+ * What is recalled is the string mermaid returned for this exact source under the hardened
+ * config, unchanged — so it widens nothing about `MermaidDiagram`'s raw-markup site. */
+export type DrawnDiagrams = {
+  recall: (theme: string, source: string) => DiagramOutcome | null;
+  remember: (theme: string, source: string, outcome: DiagramOutcome) => void;
+};
+
+export const DRAWN_DIAGRAMS_LIMIT = 48;
+
+export function createDrawnDiagrams(limit: number = DRAWN_DIAGRAMS_LIMIT): DrawnDiagrams {
+  const drawn = new Map<string, DiagramOutcome>();
+  // A theme id never contains a newline, so the first one always separates the two halves.
+  const keyOf = (theme: string, source: string): string => `${theme}\n${source}`;
+  return {
+    recall: (theme, source) => drawn.get(keyOf(theme, source)) ?? null,
+    remember: (theme, source, outcome) => {
+      if (outcome.kind !== "drawn") {
+        return;
+      }
+      const key = keyOf(theme, source);
+      // Re-inserted so a diagram drawn again is the newest, not the next one out.
+      drawn.delete(key);
+      drawn.set(key, outcome);
+      for (const oldest of drawn.keys()) {
+        if (drawn.size <= limit) {
+          break;
+        }
+        drawn.delete(oldest);
+      }
+    },
+  };
+}
+
 const ERROR_LINE_LIMIT = 160;
 
 /** A render (or the chunk load) that threw, as one short line. Mermaid's parse errors are

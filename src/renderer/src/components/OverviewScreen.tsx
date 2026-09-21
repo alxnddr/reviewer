@@ -1,4 +1,12 @@
-import { useMemo, type ReactElement } from "react";
+import {
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactElement,
+  type RefObject,
+} from "react";
 import { ArrowRight } from "lucide-react";
 import type { Comment, ReviewLayer } from "../../../shared/review";
 import { countLabel } from "../../../shared/plural";
@@ -6,7 +14,8 @@ import { buildOverview } from "@/lib/overview";
 import { reviewDrift } from "@/lib/review-drift";
 import { shortSha } from "@/lib/refs";
 import { NO_READ_FILES } from "@/lib/read-progress";
-import { useScrollIntoViewById } from "@/lib/use-scroll-into-view";
+import { createScrollCapture, docMountReturn, type DocReturn } from "@/lib/scroll";
+import { assertNever } from "../../../shared/assert";
 import { Button } from "@/components/ui/button";
 import { GLASS_PRIMARY } from "@/components/Glass";
 import { ReadRing } from "@/components/ReadRing";
@@ -59,6 +68,104 @@ function StatRow({ children }: { children: ReactElement[] }): ReactElement {
   );
 }
 
+/** The document's scroll position: reported while it is up, served when it mounts.
+ *
+ * The document replaces the diff pane, so every way out of it unmounts it and every way back
+ * is a fresh mount at 0. It used to answer that with one effect — scroll to the section of the
+ * chapter last soloed — which was right for a reader coming back from reviewing that chapter
+ * and wrong for everyone else: `o`,`o` from 3,000 px came back at the title, so did every prose
+ * reference (the most glance-shaped exit there is), and because the bookmark was never
+ * cleared, a reference followed from the top of the page came back 5,000 px down on a chapter
+ * left two moves earlier.
+ *
+ * Now the position is always recorded, and where the mount lands is a plan the *store* made
+ * when it opened the document (`enterDoc` → `planDocReturn`): the exact position while the
+ * reader's trip is live — they have not navigated by their own hand since the document closed
+ * — and the hub's old landing, the section of the chapter they are in, once they have. Position
+ * outranks the chapter on a live trip because the exits that solo a chapter are as easy to hit
+ * by accident as any other, and an accident has to undo to the line it was made from; the
+ * chapter outranks the position after a departure because a reader who went on to review
+ * chapter 9 is done with the paragraph they left from. The plan is read once, at mount: it is a
+ * request this mount owes, not a value the document follows, and nothing re-scrolls a
+ * document somebody is reading.
+ *
+ * Pixels, not `{ section, offset }`. What made that a question is the mermaid fence, which
+ * used to draw a beat after mount and move everything under it; `MermaidDiagram` now
+ * redraws a diagram it has drawn before in its first render, so by the time this layout effect
+ * runs the page is the height it was when the position was recorded.
+ *
+ * Capture is the diff pane's (`createScrollCapture`: debounced, flushed on unmount so the
+ * last scroll before a click is never lost), bound to the session this mounted for — the
+ * flush runs *after* a tab switch has moved `activeSessionId` on. The component is keyed per
+ * session in `App.tsx` for the same reason.
+ *
+ * DOM-only, so untested by this repo's rule; every decision it acts on is in `lib/scroll.ts`
+ * and the store, which are. */
+function useDocPosition(): { ref: RefObject<HTMLDivElement | null>; onScroll: () => void } {
+  const ref = useRef<HTMLDivElement>(null);
+  const setDocScrollTop = useReviewStore((state) => state.setDocScrollTop);
+  const [mount] = useState(() => {
+    const state = useReviewStore.getState();
+    const slice = selectActiveSlice(state);
+    const docScrollTop = slice?.docScrollTop ?? 0;
+    return {
+      sessionId: state.activeSessionId,
+      docScrollTop,
+      docReturn: docMountReturn(slice?.docReturn ?? null, docScrollTop),
+    };
+  });
+
+  useLayoutEffect(() => {
+    const scroller = ref.current;
+    if (scroller !== null) {
+      serveDocReturn(scroller, mount.docReturn, mount.docScrollTop);
+    }
+  }, [mount]);
+
+  const capture = useMemo(
+    () =>
+      createScrollCapture((scrollTop) => {
+        if (mount.sessionId !== null) {
+          setDocScrollTop(scrollTop, mount.sessionId);
+        }
+      }),
+    [mount, setDocScrollTop],
+  );
+  useEffect(() => () => capture.flush(), [capture]);
+
+  return {
+    ref,
+    onScroll: () => {
+      if (ref.current !== null) {
+        capture.notify(ref.current.scrollTop);
+      }
+    },
+  };
+}
+
+function serveDocReturn(scroller: HTMLElement, docReturn: DocReturn, docScrollTop: number): void {
+  switch (docReturn.kind) {
+    case "top":
+      return;
+    case "position":
+      scroller.scrollTop = docReturn.top;
+      return;
+    case "chapter": {
+      // `getElementById`, never a selector: a layer id is data (`dom-ids.test.ts`). A chapter
+      // with no section on the page falls back to where the reader was rather than the top.
+      const section = document.getElementById(layerSectionDomId(docReturn.layerId));
+      if (section === null) {
+        scroller.scrollTop = docScrollTop;
+      } else {
+        section.scrollIntoView({ block: "start" });
+      }
+      return;
+    }
+    default:
+      return assertNever(docReturn);
+  }
+}
+
 export function OverviewScreen(): ReactElement | null {
   const overview = useReviewStore((state) => selectActiveSlice(state)?.overview ?? null);
   const layers = useReviewStore((state) => selectActiveSlice(state)?.layers ?? EMPTY_LAYERS);
@@ -75,28 +182,14 @@ export function OverviewScreen(): ReactElement | null {
   const reviewedHead = useReviewStore(
     (state) => selectActiveSlice(state)?.reviewOrigin?.reviewedHead ?? null,
   );
-  const lastChapterId = useReviewStore((state) => selectActiveSlice(state)?.lastChapterId ?? null);
   const readFiles = useReviewStore((state) => selectActiveSlice(state)?.readFiles ?? NO_READ_FILES);
   const setActiveLayer = useReviewStore((state) => state.setActiveLayer);
   const setLayerRead = useReviewStore((state) => state.setLayerRead);
-  const selectFile = useReviewStore((state) => state.selectFile);
+  const openLayerFile = useReviewStore((state) => state.openLayerFile);
+  const openLayerComment = useReviewStore((state) => state.openLayerComment);
   const focusReference = useReviewStore((state) => state.focusReference);
-  const focusComment = useReviewStore((state) => state.focusComment);
 
-  // Coming back from a layer lands on that layer's section, not at the top of a long
-  // page: the doc is a hub the reader returns to repeatedly, and re-finding their place
-  // every time is the friction that would make them stop coming back. On the first open
-  // there is no last layer, so the doc simply starts at its title.
-  //
-  // On mount and whenever the target changes — which only ever happens through explicit
-  // navigation (entering a layer, or a rail heading asking for its section), never through
-  // reading. So this lands the reader somewhere they asked to be and then leaves their
-  // scrolling alone.
-  useScrollIntoViewById(
-    lastChapterId === null ? null : layerSectionDomId(lastChapterId),
-    { block: "start" },
-    [lastChapterId],
-  );
+  const doc = useDocPosition();
 
   const files = diff !== null && diff.phase === "loaded" ? diff.files : null;
   const model = useMemo(
@@ -134,13 +227,11 @@ export function OverviewScreen(): ReactElement | null {
       ]
     : [];
 
-  // A layer is opened by soloing it; the file and comment doors do that first, then point
-  // the diff at the exact place the reader clicked.
+  // A layer is opened by soloing it. The file and comment doors solo it *and* point the diff
+  // at the exact place the reader clicked, and each is one store action rather than two calls
+  // from here: the second call would find the document already closed, which makes it a
+  // navigation act, which ends the trip the first call started (`openLayerFile`).
   const openLayer = (layerId: string): void => setActiveLayer(layerId);
-  const openLayerFile = (layerId: string, path: string): void => {
-    setActiveLayer(layerId);
-    selectFile(path);
-  };
 
   return (
     <div className="relative flex h-full flex-col bg-diff-surface">
@@ -156,6 +247,8 @@ export function OverviewScreen(): ReactElement | null {
           screen, and focusing a scroll container is what gives PgDn and the arrows something
           to scroll. */}
       <div
+        ref={doc.ref}
+        onScroll={doc.onScroll}
         data-overview-doc
         tabIndex={-1}
         className="min-h-0 flex-1 overflow-y-auto outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
@@ -256,10 +349,8 @@ export function OverviewScreen(): ReactElement | null {
                     chapter.firstCommentId === null
                       ? null
                       : () => {
-                          const commentId = chapter.firstCommentId;
-                          openLayer(chapter.layer.id);
-                          if (commentId !== null) {
-                            focusComment(commentId);
+                          if (chapter.firstCommentId !== null) {
+                            openLayerComment(chapter.layer.id, chapter.firstCommentId);
                           }
                         }
                   }

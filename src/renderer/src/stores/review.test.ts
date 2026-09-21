@@ -2412,14 +2412,193 @@ describe("useReviewStore tour doc navigation", () => {
     expect(active()).toMatchObject({ overviewOpen: false, activeLayerId: "layer-a" });
   });
 
-  it("remembers the chapter last entered so the doc can return the reader to it", () => {
+  // ── The trip ────────────────────────────────────────────────────────────────────────
+  // The act that closes the doc starts a trip; the reader's next navigation ends it. While it
+  // is live the doc reopens where it was left; after it, on the chapter the reader is in.
+
+  const TOUR_COMMENT: Comment = {
+    file: "greet.ts",
+    side: "additions",
+    startLine: 2,
+    endLine: 2,
+    body: "why",
+    id: "33333333-3333-4333-8333-333333333333",
+  };
+
+  it("o, o comes back where it left: closing the doc starts a trip and reopening serves it", () => {
+    seedTour();
+    store.getState().setDocScrollTop(3000);
+    store.getState().closeOverview();
+    expect(active()).toMatchObject({ overviewOpen: false, docTrip: true });
+
+    store.getState().openOverview();
+    expect(active()).toMatchObject({
+      overviewOpen: true,
+      docTrip: false,
+      docReturn: { kind: "position", top: 3000 },
+    });
+  });
+
+  it("a live trip returns to the position even when the exit soloed a chapter", () => {
+    seedTour();
+    store.getState().setDocScrollTop(2770);
+    store.getState().setActiveLayer("layer-b");
+    expect(active().docTrip).toBe(true);
+    store.getState().openOverview();
+    expect(active().docReturn).toEqual({ kind: "position", top: 2770 });
+  });
+
+  it("every navigation act made with the doc closed ends the trip", () => {
+    const acts: [string, () => void][] = [
+      ["setActiveLayer", () => store.getState().setActiveLayer("layer-b")],
+      ["stepLayer", () => store.getState().stepLayer(1)],
+      ["selectFile", () => store.getState().selectFile("notes.txt")],
+      ["selectAdjacentFile", () => store.getState().selectAdjacentFile(1)],
+      ["markFileReadAndAdvance", () => store.getState().markFileReadAndAdvance()],
+      ["focusComment", () => store.getState().focusComment(TOUR_COMMENT.id)],
+      ["stepComment", () => store.getState().stepComment(1)],
+      [
+        "focusReference",
+        () =>
+          store
+            .getState()
+            .focusReference("greet.ts", { side: "additions", startLine: 2, endLine: 2 }),
+      ],
+      ["focusReference, bare file", () => store.getState().focusReference("notes.txt", null)],
+    ];
+    for (const [name, act] of acts) {
+      // On a trip inside chapter a, which covers greet.ts: the state a heading click leaves.
+      seedTour({
+        comments: [TOUR_COMMENT],
+        overviewOpen: false,
+        docTrip: true,
+        activeLayerId: name === "stepLayer" ? "layer-a" : null,
+      });
+      act();
+      expect(active().docTrip, name).toBe(false);
+      expect(active().overviewOpen, name).toBe(false);
+    }
+  });
+
+  it("each of those acts, made from the doc, starts a trip instead", () => {
+    seedTour({ comments: [TOUR_COMMENT] });
+    store.getState().selectAdjacentFile(1);
+    expect(active()).toMatchObject({ overviewOpen: false, docTrip: true });
+
+    seedTour({ comments: [TOUR_COMMENT] });
+    store.getState().focusReference("greet.ts", { side: "additions", startLine: 2, endLine: 2 });
+    expect(active()).toMatchObject({ overviewOpen: false, docTrip: true });
+
+    seedTour({ comments: [TOUR_COMMENT] });
+    store.getState().stepLayer(1);
+    expect(active()).toMatchObject({ overviewOpen: false, docTrip: true });
+  });
+
+  it("reading is not navigation: scrolling, folding and marking leave the trip alone", () => {
+    seedTour({ overviewOpen: false, docTrip: true });
+    store.getState().setScrollTop(5000);
+    store.getState().setFileCollapsed("greet.ts", true);
+    store.getState().toggleFileRead("greet.ts");
+    store.getState().setDocScrollTop(10);
+    expect(active().docTrip).toBe(true);
+  });
+
+  it("the doc's file row is one act: it solos, selects, and the trip it starts is still live", () => {
+    seedTour();
+    store.getState().openLayerFile("layer-b", "notes.txt");
+    expect(active()).toMatchObject({
+      overviewOpen: false,
+      activeLayerId: "layer-b",
+      selectedFilePath: "notes.txt",
+      pendingScroll: { kind: "file", path: "notes.txt" },
+      docTrip: true,
+    });
+  });
+
+  it("the doc's comment door is one act too, and still clears a solo that hides the finding", () => {
+    seedTour({ comments: [TOUR_COMMENT] });
+    store.getState().openLayerComment("layer-a", TOUR_COMMENT.id);
+    expect(active()).toMatchObject({
+      overviewOpen: false,
+      activeLayerId: "layer-a",
+      activeCommentId: TOUR_COMMENT.id,
+      selectedFilePath: "greet.ts",
+      docTrip: true,
+    });
+
+    // Chapter b does not cover greet.ts, so the jump wins over the solo — what calling
+    // `focusComment` second used to do.
+    seedTour({ comments: [TOUR_COMMENT] });
+    store.getState().openLayerComment("layer-b", TOUR_COMMENT.id);
+    expect(active()).toMatchObject({ activeLayerId: null, docTrip: true });
+
+    // An id that names nothing still opens the chapter.
+    seedTour({ comments: [TOUR_COMMENT] });
+    store.getState().openLayerComment("layer-b", "no-such-comment");
+    expect(active()).toMatchObject({
+      activeLayerId: "layer-b",
+      overviewOpen: false,
+      docTrip: true,
+    });
+  });
+
+  it("after the reader moves on, the doc opens on the chapter they are in", () => {
+    seedTour();
+    store.getState().setDocScrollTop(2733);
+    store.getState().openLayerFile("layer-a", "greet.ts");
+    store.getState().setActiveLayer("layer-b");
+    store.getState().openOverview();
+    expect(active()).toMatchObject({
+      activeLayerId: null,
+      docReturn: { kind: "chapter", layerId: "layer-b" },
+    });
+  });
+
+  it("a chapter left two moves ago cannot win: the return is planned from what is soloed now", () => {
+    // Visit chapter b and come back; scroll to the top; follow a reference; come back. The
+    // old bookmark sent this reader to chapter b's section, 5,000 px from where they were.
     seedTour();
     store.getState().setActiveLayer("layer-b");
     store.getState().openOverview();
-    expect(active().lastChapterId).toBe("layer-b");
-    // Clearing back to the full diff is not a chapter, so it leaves the bookmark alone.
-    store.getState().setActiveLayer(null);
-    expect(active().lastChapterId).toBe("layer-b");
+    store.getState().setDocScrollTop(0);
+    store.getState().focusReference("notes.txt", null);
+    store.getState().openOverview();
+    expect(active().docReturn).toEqual({ kind: "top" });
+  });
+
+  it("moved on with nothing soloed: the position, never the top", () => {
+    seedTour();
+    store.getState().setDocScrollTop(3000);
+    store.getState().closeOverview();
+    store.getState().selectAdjacentFile(1);
+    expect(active().docTrip).toBe(false);
+    store.getState().openOverview();
+    expect(active().docReturn).toEqual({ kind: "position", top: 3000 });
+  });
+
+  it("stepping back off the first chapter plans a return like any other way in", () => {
+    seedTour({ overviewOpen: false, activeLayerId: "layer-a", docScrollTop: 900 });
+    store.getState().stepLayer(-1);
+    expect(active()).toMatchObject({
+      overviewOpen: true,
+      activeLayerId: null,
+      docReturn: { kind: "chapter", layerId: "layer-a" },
+    });
+  });
+
+  it("the doc's own position report spends the request, so a bare remount restores it", () => {
+    seedTour({ overviewOpen: false, activeLayerId: "layer-b" });
+    store.getState().openOverview();
+    expect(active().docReturn).toEqual({ kind: "chapter", layerId: "layer-b" });
+    store.getState().setDocScrollTop(4008);
+    expect(active()).toMatchObject({ docReturn: null, docScrollTop: 4008 });
+  });
+
+  it("opening a doc that is already up plans nothing", () => {
+    seedTour({ docScrollTop: 1200 });
+    const before = active();
+    store.getState().openOverview();
+    expect(active()).toBe(before);
   });
 
   it("any navigation that targets the diff leaves the doc", () => {
@@ -2440,7 +2619,7 @@ describe("useReviewStore tour doc navigation", () => {
     expect(active().overviewOpen).toBe(false);
   });
 
-  it("is derived view state: neither the doc nor the bookmark reaches the persisted session", () => {
+  it("is derived view state: neither the doc nor its position reaches the persisted session", () => {
     seedTour();
     const bridge = makeBridge({});
     vi.stubGlobal("window", { reviewer: bridge });
@@ -2449,7 +2628,9 @@ describe("useReviewStore tour doc navigation", () => {
     store.getState().flushWriteBacks();
     const persisted = vi.mocked(bridge.updateSession).mock.calls[0]?.[0];
     expect(persisted).not.toHaveProperty("overviewOpen");
-    expect(persisted).not.toHaveProperty("lastChapterId");
+    expect(persisted).not.toHaveProperty("docScrollTop");
+    expect(persisted).not.toHaveProperty("docTrip");
+    expect(persisted).not.toHaveProperty("docReturn");
     // The authored doc itself does persist — it is review content, like the layers.
     expect(persisted?.overview).toEqual(OVERVIEW);
   });

@@ -1,7 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createScrollCapture,
+  docMountReturn,
+  planDocReturn,
   planScrollRestore,
+  type DocReturn,
   samePendingScroll,
   SCROLL_CAPTURE_DEBOUNCE_MS,
   type PendingScroll,
@@ -53,6 +56,46 @@ describe("planScrollRestore", () => {
 
 // What the store's clear guard is made of: it clears only the request the surface reports
 // serving, so a jump the reader made in between survives.
+describe("planDocReturn", () => {
+  it("a live trip returns to the exact position, even over a soloed chapter", () => {
+    // The heading clicked by accident: the exit soloed chapter 6, and the reader still comes
+    // back to the line they clicked from rather than to the top of that section.
+    expect(planDocReturn(true, 2770, "layer-6")).toEqual<DocReturn>({
+      kind: "position",
+      top: 2770,
+    });
+  });
+
+  it("an ended trip opens on the chapter the reader is in", () => {
+    expect(planDocReturn(false, 2770, "layer-9")).toEqual<DocReturn>({
+      kind: "chapter",
+      layerId: "layer-9",
+    });
+  });
+
+  it("an ended trip with nothing soloed falls back to the position, never the top", () => {
+    expect(planDocReturn(false, 3000, null)).toEqual<DocReturn>({ kind: "position", top: 3000 });
+  });
+
+  it("a position of 0 is the top, which is its own arm", () => {
+    expect(planDocReturn(true, 0, null)).toEqual<DocReturn>({ kind: "top" });
+    expect(planDocReturn(true, 0, "layer-1")).toEqual<DocReturn>({ kind: "top" });
+    expect(planDocReturn(false, 0, null)).toEqual<DocReturn>({ kind: "top" });
+  });
+});
+
+describe("docMountReturn", () => {
+  it("serves the request the document was opened with", () => {
+    const chapter: DocReturn = { kind: "chapter", layerId: "layer-9" };
+    expect(docMountReturn(chapter, 3000)).toBe(chapter);
+  });
+
+  it("a bare remount restores the last reported position", () => {
+    expect(docMountReturn(null, 3000)).toEqual<DocReturn>({ kind: "position", top: 3000 });
+    expect(docMountReturn(null, 0)).toEqual<DocReturn>({ kind: "top" });
+  });
+});
+
 describe("samePendingScroll", () => {
   const line: PendingScroll = { kind: "line", path: "src/app.ts", line: 40, side: "additions" };
 
