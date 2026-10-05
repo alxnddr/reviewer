@@ -51,7 +51,7 @@ import { layerOwning } from "../../../shared/layers";
  * read like a hand-authored one rather than one carrying `"children": []` under every
  * leaf. */
 export function serializeReview(review: ImportedReview): ReviewArtifactDraft {
-  // The optional three follow the same absent-key rule the artifact's own optionals take:
+  // The optional four follow the same absent-key rule the artifact's own optionals take:
   // a comment that carries no tag re-emits without the key, never with an empty string. A
   // field added to `ReviewComment` and not copied here round-trips through import and is
   // silently dropped on export, which is why this projection names every field by hand
@@ -65,6 +65,9 @@ export function serializeReview(review: ImportedReview): ReviewArtifactDraft {
     ...(comment.tag === undefined ? {} : { tag: comment.tag }),
     ...(comment.severity === undefined ? {} : { severity: comment.severity }),
     ...(comment.evidence === undefined ? {} : { evidence: comment.evidence }),
+    // Including one the reader refined in the app: the exported file is the review they would
+    // hand on, and the text they signed for the author is part of it.
+    ...(comment.postable === undefined ? {} : { postable: comment.postable }),
   }));
   const artifact: ReviewArtifactDraft = {
     repo: review.repo.path,
@@ -76,6 +79,9 @@ export function serializeReview(review: ImportedReview): ReviewArtifactDraft {
     // Provenance the app never authors and never edits: whatever `rvw emit` stamped comes
     // back out unchanged, so re-emitting a review does not quietly re-date it to now.
     ...(review.reviewedHead === null ? {} : { reviewedHead: review.reviewedHead }),
+    // The pull request, on the same rule: `rvw emit --pr` recorded it and the app never edits
+    // it, so a review exported from the app still links its comments to the same PR.
+    ...(review.pr === null ? {} : { pr: review.pr }),
     // The tour doc round-trips verbatim, on the same absent-key rule: a review with no
     // overview re-emits without the key, never with a null one.
     ...(review.overview === null ? {} : { overview: review.overview }),
@@ -191,7 +197,12 @@ export function exportSourceFor(
 /** A comment as Markdown needs: the authored anchor + body plus the render-time
  * outdated flag, which the JSON never carries. The authored vocabulary rides along
  * verbatim — both exports show it, and an export that dropped it would describe a
- * different review from the one on screen. */
+ * different review from the one on screen.
+ *
+ * `postable` is the one authored field that does not, deliberately. It is written to the
+ * change's author, and neither export is read by them: the Markdown export by someone
+ * reading the review, the prompt by an agent fixing what it found — both want the finding,
+ * which is `body`. Its one way out of the app is `shared/postable-comment.ts`. */
 export type MarkdownComment = {
   file: string;
   side: ReviewSide;

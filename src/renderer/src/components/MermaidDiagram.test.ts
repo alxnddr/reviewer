@@ -101,6 +101,7 @@ describe("comment surfaces keep a mermaid fence a fence", () => {
   const COMMENT_SURFACES = [
     "renderer/src/components/CommentBody.tsx",
     "renderer/src/components/CommentEvidence.tsx",
+    "renderer/src/components/CommentPostable.tsx",
   ];
 
   it("reads the files it asserts over, and they do mount Markdown", () => {
@@ -110,7 +111,7 @@ describe("comment surfaces keep a mermaid fence a fence", () => {
     }
   });
 
-  it("does not pass `diagrams` from either", () => {
+  it("does not pass `diagrams` from any of them", () => {
     for (const name of COMMENT_SURFACES) {
       expect(sources.get(name) ?? "").not.toMatch(/\bdiagrams\b/u);
     }

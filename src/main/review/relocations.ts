@@ -28,6 +28,10 @@ import { appStore } from "../store";
 export type RepoRelocations = {
   /** The local toplevel last located for `authored`, or null when there is none. */
   get: (authored: string) => string | null;
+  /** Every local toplevel a relocation points at — checkouts the reader has named on this
+   * machine, which Review Pull Request… looks among for one of a pull request's repository
+   * (`main/pull-request/flow.ts`). */
+  locals: () => string[];
   remember: (authored: string, local: string) => void;
   forget: (authored: string) => void;
 };
@@ -66,6 +70,7 @@ function writeRelocations(relocations: Relocations): void {
 export function storeRelocations(): RepoRelocations {
   return {
     get: (authored) => readRelocations()[authored] ?? null,
+    locals: () => Object.values(readRelocations()),
     remember: (authored, local) => {
       const current = readRelocations();
       if (current[authored] !== local) {

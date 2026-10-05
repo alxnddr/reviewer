@@ -1,6 +1,6 @@
 import type { FileDiffMetadata } from "@pierre/diffs";
 import type { ReviewAnchor } from "../review";
-import { hunkSpan } from "./walk";
+import { hunkSpan, type HunkGeometry } from "./walk";
 
 // A pure, deterministic placement of a `file + side + line range` anchor against
 // the review's diff. No I/O and no clock — the resolved line is recomputed on
@@ -26,7 +26,14 @@ export type AnchorResolution =
  * about its body. "Covered" is what already-stored anchors were resolved against — and
  * `rvw check` resolves them the same way — so it stays the claimed geometry. */
 function coversRange(file: FileDiffMetadata, anchor: ReviewAnchor): boolean {
-  return file.hunks.some((hunk) => {
+  return hunksCoverRange(file.hunks, anchor);
+}
+
+/** `coversRange` over bare hunk geometry — the same rule, for a caller that kept a diff's hunk
+ * headers and let its lines go (`remote-diff.ts`). One implementation, so a check against the
+ * code host's diff and a placement in the app cannot disagree about what "covered" means. */
+export function hunksCoverRange(hunks: readonly HunkGeometry[], anchor: ReviewAnchor): boolean {
+  return hunks.some((hunk) => {
     const span = hunkSpan(hunk, anchor.side);
     return span.start <= anchor.startLine && anchor.endLine <= span.end;
   });

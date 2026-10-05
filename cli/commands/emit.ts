@@ -2,11 +2,13 @@ import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { buildCommand } from "@stricli/core";
 import { errorMessage } from "../../src/shared/errors";
-import { emitReviewArtifact } from "../../src/tools/review-emit";
+import { emitReviewArtifact, postableGap, postableGapLine } from "../../src/tools/review-emit";
+import { pullRequestUrl, type PullRequest } from "../../src/shared/pull-request";
 import { describeProblem, type ValidationProblem } from "../../src/tools/review-validator";
 import { capturePatch } from "../git";
 import { launchReviewer } from "../launch";
 import { resolveRange, type ResolvedRange } from "../range";
+import { readPullRequestArg, resolvePullRequest } from "../pull-request";
 import { REVIEW_EXTENSION, reviewFileName, reviewsDir } from "../../src/shared/node/reviews-dir";
 import { EXIT_PROBLEMS, EXIT_READY, type LocalContext } from "../context";
 import { writeCannotRun, writeJson, type CliError } from "../errors";
@@ -34,6 +36,15 @@ import { writeCannotRun, writeJson, type CliError } from "../errors";
 // not warn that an embedded review is frozen; that was true once and is the sentence task 09
 // removed.
 //
+// `--pr` says the review is of a pull request, by URL, `owner/repo#123` or bare number (whose
+// owner and repo come from `origin` — `cli/pull-request.ts`). It is recorded on the artifact
+// and echoed back like the range, because a bare number completed from a remote is another
+// decision made on the caller's behalf. It also asks for one informational line: how many
+// comments carry no `postable`, the text the reader would post to the PR. That count is never
+// a problem and never moves the exit code — a reader may not mean to post every finding — so
+// it rides stdout with the other lines that describe what was written, and under `--json` it
+// is a field of the success document rather than prose beside it.
+//
 // Exit 2 = the shell could not run (bad flags, unresolvable ref, git failure, unreadable or
 // empty draft, unwritable out); exit 1 = it ran and the gate refused (nothing written, each
 // problem located); exit 0 = the artifact is written. A launch that fails *after* a clean write
@@ -54,6 +65,12 @@ type EmitOutcome =
       /** Whether the diff rode along, so a CI job can assert it got the portable form
        * rather than discovering on the reader's machine that it did not. */
       readonly embedded: boolean;
+      /** The pull request recorded, completed from `origin` when `--pr` was a bare number;
+       * null without `--pr`. */
+      readonly pr: PullRequest | null;
+      /** How many comments carry no `postable` — counted only for a review of a pull
+       * request, where that text is what the reader would post; null without `--pr`. */
+      readonly withoutPostable: number | null;
     }
   | { readonly ok: false; readonly problems: readonly ValidationProblem[] };
 
@@ -65,6 +82,7 @@ type EmitFlags = {
   readonly out?: string;
   readonly open: boolean;
   readonly embedPatch?: boolean;
+  readonly pr?: string;
   readonly json?: boolean;
 };
 
@@ -97,6 +115,10 @@ export const emitCommand = buildCommand<EmitFlags, [], LocalContext>({
       "The draft is read from stdin unless --draft names a file, and its only keys are overview,",
       "comments, and layers — at least one of which must be present, and layers (the reading order",
       "the app tours the diff in) unless the review was asked for as comments alone.",
+      "--pr records the pull request the review is of — its URL, owner/repo#123, or its number,",
+      "whose owner/repo come from the origin remote — so the app can link each comment to its",
+      "lines on GitHub. Nothing is looked up online. A bare number resolves against origin, so in a",
+      "fork workflow (origin is your fork) pass owner/repo#123 or the URL instead.",
       "--out is optional and must end .reviewer.json; without it the artifact lands in rvw's",
       "managed reviews dir (~/.rvw/reviews, or $RVW_HOME/reviews) rather than the repo.",
       "Exit 0 when written (even if the launch failed — the file is real either way); 1 when the",
@@ -108,6 +130,8 @@ export const emitCommand = buildCommand<EmitFlags, [], LocalContext>({
       "--base main --draft draft.json --json",
       "--repo . --base main --head feature --draft draft.json --no-open --out change.reviewer.json",
       "--base main --embed-patch --no-open --out review.reviewer.json",
+      "--pr https://github.com/owner/repo/pull/123 < draft.json",
+      "--pr 123 < draft.json",
     ],
   },
   parameters: {
@@ -154,6 +178,15 @@ export const emitCommand = buildCommand<EmitFlags, [], LocalContext>({
         brief: "Carry the diff in the artifact so it opens without the repo (CI handoff)",
         optional: true,
       },
+      pr: {
+        kind: "parsed",
+        // Read in the body rather than by a throwing `parse`, so a bad value is a cannot-run
+        // with a `badPullRequest` code (and a `--json` envelope) like every other refusal.
+        parse: String,
+        brief:
+          "The pull request reviewed: its URL, owner/repo#123, or its number (repo from origin)",
+        optional: true,
+      },
       json: {
         kind: "boolean",
         brief: "Emit the outcome as JSON on stdout for an agent to parse",
@@ -175,6 +208,14 @@ export const emitCommand = buildCommand<EmitFlags, [], LocalContext>({
       return;
     }
 
+    // The same for `--pr`'s spelling: a value that names no pull request is a typo in the call.
+    // Completing a bare number from `origin` has to wait for the range to say which repo.
+    const prArg = flags.pr === undefined ? null : readPullRequestArg(flags.pr);
+    if (prArg !== null && !prArg.ok) {
+      writeCannotRun(this, flags.json, prArg.error);
+      return;
+    }
+
     // The draft is read before git runs, because "you gave me nothing to present" is a fact
     // about the call and costs no spawn to establish.
     const draft = readDraft(this, flags.draft);
@@ -190,6 +231,13 @@ export const emitCommand = buildCommand<EmitFlags, [], LocalContext>({
     }
     const { repoPath, base, head, headSha } = resolved.range;
 
+    const prResolved = prArg === null ? null : resolvePullRequest(this.env, repoPath, prArg.arg);
+    if (prResolved !== null && !prResolved.ok) {
+      writeCannotRun(this, flags.json, prResolved.error);
+      return;
+    }
+    const pr = prResolved === null ? null : prResolved.pr;
+
     const capture = capturePatch(this.env, repoPath, base, head);
     if (!capture.ok) {
       writeCannotRun(this, flags.json, { code: "gitFailed", message: capture.message });
@@ -203,6 +251,7 @@ export const emitCommand = buildCommand<EmitFlags, [], LocalContext>({
       base,
       head,
       reviewedHead: headSha,
+      ...(pr === null ? {} : { pr }),
       patch: capture.patch,
       embedPatch: flags.embedPatch === true,
       comments: draft.content.comments,
@@ -260,6 +309,7 @@ export const emitCommand = buildCommand<EmitFlags, [], LocalContext>({
     // An empty range cannot carry a diff, so `--embed-patch` over one silently produces the
     // refs-only file it was asked not to. Report what was written, never what was requested.
     const embedded = flags.embedPatch === true && capture.patch.length > 0;
+    const gap = pr === null ? null : postableGap(result.artifact);
 
     if (flags.json === true) {
       const outcome: EmitOutcome = {
@@ -270,15 +320,23 @@ export const emitCommand = buildCommand<EmitFlags, [], LocalContext>({
         head,
         opened,
         embedded,
+        pr,
+        withoutPostable: gap === null ? null : gap.missing,
       };
       writeJson(this, outcome);
     } else {
       // The range first: it is the one thing this command may have decided on the caller's
       // behalf, so a defaulted `--base` is never a surprise discovered later in the app.
       this.process.stdout.write(`${repoPath}: ${base}...${head}\n`);
+      if (pr !== null) {
+        this.process.stdout.write(`pull request: ${pullRequestUrl(pr)}\n`);
+      }
       this.process.stdout.write(`${out}: written — every anchor places, every link resolves\n`);
       if (embedded) {
         this.process.stdout.write(`the diff is embedded — this artifact opens without the repo\n`);
+      }
+      if (gap !== null && gap.missing > 0) {
+        this.process.stdout.write(`${postableGapLine(gap)}\n`);
       }
       if (opened) {
         this.process.stdout.write(`opening ${out} in Reviewer\n`);

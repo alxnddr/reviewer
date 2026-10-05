@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   DIFF_FONT_SIZE,
   diffLineHeightPx,
+  githubLogin,
   mergeSettings,
   resolveSettings,
   SETTING_KEYS,
@@ -25,6 +26,38 @@ describe("Settings", () => {
     expect(Settings.parse({ diffLineHeight: 0.5 }).diffLineHeight).toBeUndefined();
     expect(Settings.parse({ theme: "solarized" }).theme).toBeUndefined();
     expect(Settings.parse({ diffFontFamily: "   " }).diffFontFamily).toBeUndefined();
+  });
+
+  it("never sends evidence to a change's author unless the reader chose to", () => {
+    // The default is the safety property: evidence is written to the reader, so a copy for the
+    // author leaves it out until someone turns it on — and a hand-edited value that is not a
+    // boolean reads as never chosen, which is that same off.
+    expect(SETTINGS_DEFAULTS.postableIncludesEvidence).toBe(false);
+    expect(
+      Settings.parse({ postableIncludesEvidence: "yes" }).postableIncludesEvidence,
+    ).toBeUndefined();
+    expect(resolveSettings({}, { systemDark: false }).postableIncludesEvidence).toBe(false);
+  });
+
+  it("reads a blank prompt template as never chosen, and keeps a real one whole", () => {
+    expect(Settings.parse({ pullRequestPrompt: "   " }).pullRequestPrompt).toBeUndefined();
+    expect(Settings.parse({ pullRequestPrompt: 42 }).pullRequestPrompt).toBeUndefined();
+    expect(Settings.parse({ pullRequestPrompt: " review {pr}\nplease " }).pullRequestPrompt).toBe(
+      "review {pr}\nplease",
+    );
+    expect(resolveSettings({}, { systemDark: false }).pullRequestPrompt).toContain("--pr {pr}");
+  });
+
+  it("holds the GitHub username to GitHub's login charset, and reads unset as no login", () => {
+    expect(Settings.parse({ githubUsername: "octo-cat" }).githubUsername).toBe("octo-cat");
+    // Each of these would otherwise reach the inbox search as a qualifier of its own.
+    for (const bad of ["octo cat", "a:b", "-octo", "octo/cat", ""]) {
+      expect(Settings.parse({ githubUsername: bad }).githubUsername, bad).toBeUndefined();
+    }
+    expect(githubLogin(resolveSettings({}, { systemDark: false }))).toBeNull();
+    expect(githubLogin(resolveSettings({ githubUsername: "octocat" }, { systemDark: false }))).toBe(
+      "octocat",
+    );
   });
 
   it("still fails whole on something that is not a settings object", () => {

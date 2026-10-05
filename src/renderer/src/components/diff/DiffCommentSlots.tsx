@@ -1,7 +1,11 @@
 import { useCallback, useState, type ReactElement, type ReactNode } from "react";
 import type { CodeViewProps } from "@pierre/diffs/react";
-import type { ReviewAnchor } from "../../../../shared/review";
-import type { CommentDraft, DiffSlot } from "../../../../shared/diff/comment-annotations";
+import type { CommentProse, ReviewAnchor } from "../../../../shared/review";
+import type {
+  CommentDraft,
+  CommentEditTarget,
+  DiffSlot,
+} from "../../../../shared/diff/comment-annotations";
 import type { ReferenceSpan } from "../../../../shared/markdown";
 import type { CommentResolution } from "../../../../shared/review-progress";
 import { CommentEditor } from "@/components/CommentEditor";
@@ -18,7 +22,7 @@ export type CommentSlots = {
   /** Folded into the items' annotations, so a version bump follows every visible
    * change — CodeView reuses an item record and only re-renders its slots when the
    * version changes. */
-  editingId: string | null;
+  editing: CommentEditTarget | null;
   draft: CommentDraft | null;
   /** Open a new-comment editor on an anchor — the gutter `+`'s one gesture. */
   openDraft: (fileId: string, anchor: ReviewAnchor) => void;
@@ -27,7 +31,7 @@ export type CommentSlots = {
 
 export type CommentSlotHandlers = {
   onAddComment: (anchor: ReviewAnchor, body: string) => void;
-  onEditComment: (commentId: string, body: string) => void;
+  onEditComment: (commentId: string, field: CommentProse, text: string) => void;
   onDiscardComment: (commentId: string) => void;
   onSetCommentResolution: (commentId: string, resolution: CommentResolution | null) => void;
   /** Go to a moved block's other end — the one handler here that is not curation. It is in
@@ -48,19 +52,21 @@ export function useCommentSlots({
   onSetCommentResolution,
   onFollowMove,
 }: CommentSlotHandlers): CommentSlots {
-  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editing, setEditing] = useState<CommentEditTarget | null>(null);
   const [draft, setDraft] = useState<CommentDraft | null>(null);
 
   // One editor is on-screen at a time: opening a draft closes any open edit, and
   // opening an edit closes any in-flight draft — the two-editor state is never
-  // reachable from either direction.
+  // reachable from either direction. An edit names its field as well as its comment, so
+  // the postable's editor is held to the same rule as the body's rather than living in a
+  // card's local state, where a draft could open beside it.
   const openDraft = useCallback((fileId: string, anchor: ReviewAnchor) => {
-    setEditingId(null);
+    setEditing(null);
     setDraft({ fileId, anchor });
   }, []);
-  const openEdit = useCallback((commentId: string) => {
+  const openEdit = useCallback((commentId: string, field: CommentProse) => {
     setDraft(null);
-    setEditingId(commentId);
+    setEditing({ commentId, field });
   }, []);
 
   const renderAnnotation = useCallback<AnnotationRenderer>(
@@ -76,7 +82,8 @@ export function useCommentSlots({
         return (
           <CommentAnnotationFrame twoColumn={slot.twoColumn}>
             <CommentEditor
-              initialBody=""
+              field="body"
+              initialText=""
               saveLabel="Comment"
               onSave={(body) => {
                 onAddComment(slot.anchor, body);
@@ -87,17 +94,20 @@ export function useCommentSlots({
           </CommentAnnotationFrame>
         );
       }
-      if (slot.editing) {
+      // The body's editor takes the card's place; the postable's opens inside the card,
+      // under the finding it is being rewritten from (`CommentPostable`).
+      if (slot.editing === "body") {
         return (
           <CommentAnnotationFrame twoColumn={slot.twoColumn}>
             <CommentEditor
-              initialBody={slot.comment.body}
+              field="body"
+              initialText={slot.comment.body}
               saveLabel="Save"
               onSave={(body) => {
-                onEditComment(slot.comment.id, body);
-                setEditingId(null);
+                onEditComment(slot.comment.id, "body", body);
+                setEditing(null);
               }}
-              onCancel={() => setEditingId(null)}
+              onCancel={() => setEditing(null)}
             />
           </CommentAnnotationFrame>
         );
@@ -109,7 +119,13 @@ export function useCommentSlots({
             outdated={slot.outdated}
             active={slot.active}
             resolution={slot.resolution}
-            onEdit={() => openEdit(slot.comment.id)}
+            editingPostable={slot.editing === "postable"}
+            onEdit={(field) => openEdit(slot.comment.id, field)}
+            onSavePostable={(postable) => {
+              onEditComment(slot.comment.id, "postable", postable);
+              setEditing(null);
+            }}
+            onCancelEdit={() => setEditing(null)}
             onDiscard={() => onDiscardComment(slot.comment.id)}
             onSetResolution={(resolution) => onSetCommentResolution(slot.comment.id, resolution)}
           />
@@ -119,7 +135,7 @@ export function useCommentSlots({
     [openEdit, onAddComment, onEditComment, onDiscardComment, onSetCommentResolution, onFollowMove],
   );
 
-  return { editingId, draft, openDraft, renderAnnotation };
+  return { editing, draft, openDraft, renderAnnotation };
 }
 
 type CommentAnnotationFrameProps = { twoColumn: boolean; children: ReactNode };

@@ -4,7 +4,7 @@ import type {
   DiffLineAnnotation,
   Hunk,
 } from "@pierre/diffs";
-import type { Comment, ReviewAnchor, ReviewSide } from "../review";
+import type { Comment, CommentProse, ReviewAnchor, ReviewSide } from "../review";
 import { fnv1a } from "../fingerprint";
 import { NO_RESOLUTIONS, resolutionOf, type CommentResolutions } from "../comment-resolution";
 import type { CommentResolution } from "../review-progress";
@@ -38,7 +38,11 @@ export type CommentSlot =
       kind: "comment";
       comment: Comment;
       outdated: boolean;
-      editing: boolean;
+      /** Which of the comment's prose fields is open in an editor, or null for none. The
+       * field, not a flag, because the two open differently: the body's editor takes the
+       * card's place, and the postable's opens inside the card under the finding it is
+       * rewriting for the author. */
+      editing: CommentProse | null;
       active: boolean;
       twoColumn: boolean;
       /** What the reader decided about this finding, or null for one they have not
@@ -80,15 +84,18 @@ function rendersTwoColumns(file: PatchFile, diffStyle: "split" | "unified"): boo
 /** An in-flight new comment: the file it was opened on and the picked range. */
 export type CommentDraft = { fileId: string; anchor: ReviewAnchor };
 
+/** The one comment field open in an editor: which comment, and which of its prose. */
+export type CommentEditTarget = { commentId: string; field: CommentProse };
+
 /** The curation UI state DiffView folds into the items so a version bump follows
  * every visible change (open editor, discard, start a draft). */
-export type CommentUiState = { editingId: string | null; draft: CommentDraft | null };
+export type CommentUiState = { editing: CommentEditTarget | null; draft: CommentDraft | null };
 
 /** Fold everything the item renders into one number — a pure per-item `version`: any
  * change to the rendered annotation set (a placed line, an outdated flag, an edited body,
  * an opened editor, a draft, the reader's mark) changes the string and therefore the number,
- * which is the signal CodeView reconciles on. Body is included so an edit
- * bumps the version; `editing`/draft are included so opening an editor does too.
+ * which is the signal CodeView reconciles on. Body and postable are included so an edit to
+ * either bumps the version; `editing`/draft are included so opening an editor does too.
  * `twoColumn` is in here because the comment frame sizes itself against the lane it
  * sits beside — it changes what the slot renders without changing a single comment,
  * and CodeView re-renders a reused item's slots only on a version change, so leaving
@@ -119,7 +126,9 @@ function slotKey(annotation: DiffLineAnnotation<DiffSlot>): string {
   const slot = annotation.metadata;
   switch (slot.kind) {
     case "comment":
-      return `c|${annotation.side}|${annotation.lineNumber}|${slot.comment.id}|${slot.outdated ? 1 : 0}|${slot.editing ? 1 : 0}|${slot.active ? 1 : 0}|${slot.twoColumn ? 1 : 0}|${slot.resolution ?? ""}|${slot.comment.body}`;
+      // The two editable prose fields go in as one JSON pair rather than `|`-joined, so a
+      // `|` typed into either cannot shift the boundary between them and read as no change.
+      return `c|${annotation.side}|${annotation.lineNumber}|${slot.comment.id}|${slot.outdated ? 1 : 0}|${slot.editing ?? ""}|${slot.active ? 1 : 0}|${slot.twoColumn ? 1 : 0}|${slot.resolution ?? ""}|${JSON.stringify([slot.comment.body, slot.comment.postable ?? null])}`;
     case "draft":
       return `d|${annotation.side}|${annotation.lineNumber}|${slot.anchor.startLine}-${slot.anchor.endLine}|${slot.twoColumn ? 1 : 0}`;
     case "moved":
@@ -204,7 +213,7 @@ export function buildDiffItems(
           kind: "comment",
           comment,
           outdated: resolution.status === "outdated",
-          editing: ui.editingId === comment.id,
+          editing: ui.editing?.commentId === comment.id ? ui.editing.field : null,
           active: activeCommentId === comment.id,
           twoColumn,
           resolution: resolutionOf(resolutions, comment),

@@ -2,6 +2,7 @@ import type { RepoInfo } from "../../../../shared/git";
 import type { Session, SessionId } from "../../../../shared/session";
 import { NO_COLLAPSED_FILES, NO_READ_FILES } from "../../lib/read-progress";
 import { NO_RESOLUTIONS } from "../../../../shared/comment-resolution";
+import { NO_POSTING } from "../../lib/github-posting";
 import type { SessionSlice } from "./slice";
 
 // The two ways a `SessionSlice` comes into being: from nothing (a repository the reader just
@@ -42,6 +43,12 @@ export function createSessionSlice(
     reviewDiff: null,
     reviewSubrange: null,
     reviewOrigin: null,
+    // Nothing fetched until a derive asks the review's repository (`readPrHead`).
+    prHead: null,
+    // Nothing asked of GitHub until a derive does (`checkGitHubDiff`).
+    githubCheck: null,
+    // Nothing known about GitHub until a derive asks main (`refreshPosted`).
+    posting: NO_POSTING,
     activeLayerId: null,
     docScrollTop: 0,
     docTrip: false,

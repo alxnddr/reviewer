@@ -1,7 +1,7 @@
 import { useCallback, useMemo, useRef, type ReactElement } from "react";
 import { CodeView, type CodeViewHandle } from "@pierre/diffs/react";
 import type { FileDiffContentsLoader } from "@pierre/diffs";
-import type { ReviewAnchor } from "../../../shared/review";
+import type { CommentProse, ReviewAnchor } from "../../../shared/review";
 import { CommentNavIndicator } from "@/components/CommentNavIndicator";
 import { DiffSearch } from "@/components/DiffSearch";
 import { DocReturnPill } from "@/components/DocReturnPill";
@@ -76,7 +76,7 @@ type DiffViewProps = {
   onScrollTop: (scrollTop: number) => void;
   /** Curation, routed to the owning session's slice. */
   onAddComment: (anchor: ReviewAnchor, body: string) => void;
-  onEditComment: (commentId: string, body: string) => void;
+  onEditComment: (commentId: string, field: CommentProse, text: string) => void;
   onDiscardComment: (commentId: string) => void;
   /** Record or clear one finding's mark, routed to the owning session's slice. */
   onSetCommentResolution: (commentId: string, resolution: CommentResolution | null) => void;
@@ -139,7 +139,7 @@ export function DiffView({
   onFollowMove,
 }: DiffViewProps): ReactElement {
   const handleRef = useRef<CodeViewHandle<DiffSlot>>(null);
-  const { editingId, draft, openDraft, renderAnnotation } = useCommentSlots({
+  const { editing, draft, openDraft, renderAnnotation } = useCommentSlots({
     onAddComment,
     onEditComment,
     onDiscardComment,
@@ -161,7 +161,7 @@ export function DiffView({
       buildDiffItems(
         files,
         comments,
-        { editingId, draft },
+        { editing, draft },
         frozen,
         activeCommentId,
         diffStyle,
@@ -172,7 +172,7 @@ export function DiffView({
     [
       files,
       comments,
-      editingId,
+      editing,
       draft,
       frozen,
       activeCommentId,

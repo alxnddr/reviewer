@@ -1,15 +1,19 @@
 import { spawnSync } from "node:child_process";
 import { cpSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import {
   installBundle,
   minimalRepo,
   REPO_ROOT,
   rvw,
+  SPAWN_SUITE_TIMEOUT_MS,
   type InstalledCli,
   type RvwResult,
 } from "./fixtures";
+
+// Real processes, so not the 5s default — see `SPAWN_SUITE_TIMEOUT_MS` for why and how long.
+vi.setConfig({ testTimeout: SPAWN_SUITE_TIMEOUT_MS, hookTimeout: SPAWN_SUITE_TIMEOUT_MS });
 
 // The load-bearing claim: `rvw` is the *agent's* tool, runnable in any repo — not a
 // Reviewer-repo dev script. Asserting that requires actually leaving the repo, so this suite
@@ -80,7 +84,7 @@ beforeAll(() => {
   // The install root and every temp dir above it must be dependency-free, or "runs without the
   // target repo's node_modules" would be proven against a directory that has some.
   expect(existsSync(join(dirname(dirname(cli.bundle)), "node_modules"))).toBe(false);
-}, 60_000);
+});
 
 afterAll(() => {
   for (const root of roots) {

@@ -11,6 +11,8 @@ import {
 } from "@/components/FailureBanner";
 import { ReviewDropZone } from "@/components/ReviewDropZone";
 import { OverviewScreen } from "@/components/OverviewScreen";
+import { HeadMovedDialog } from "@/components/GitHubPosting";
+import { PullRequestDialog } from "@/components/PullRequestDialog";
 import { RecentReviews } from "@/components/RecentReviews";
 import { SettingsDialog } from "@/components/SettingsDialog";
 import { ShortcutsDialog } from "@/components/ShortcutsDialog";
@@ -22,6 +24,7 @@ import { nextRegion, visibleRegions } from "@/lib/focus-regions";
 import { shortcutBlocked } from "@/lib/shortcut-guard";
 import { useEditorStore } from "@/stores/editor";
 import { useOnboardingStore } from "@/stores/onboarding";
+import { usePullRequestStore } from "@/stores/pull-request";
 import { useRecentReviewsStore } from "@/stores/recent-reviews";
 import { useSettingsStore } from "@/stores/settings";
 import { selectActiveSlice, useReviewStore } from "@/stores/review";
@@ -237,6 +240,13 @@ function useRecentReviewsCommand(): void {
   }, [open, openPanel, close]);
 }
 
+/** Review Pull Request…, on the File menu's ⇧⌘P command — the dialog's only way in. Toggling,
+ * for the recents picker's reason. */
+function useReviewPullRequestCommand(): void {
+  const toggle = usePullRequestStore((state) => state.toggle);
+  useEffect(() => window.reviewer?.onReviewPullRequestCommand(toggle), [toggle]);
+}
+
 /** The settings dialog, on the app menu's ⌘, command. Toggling, for the recents picker's
  * reason: the chord that put it up is the one a reader presses to take it down. */
 function useSettingsCommand(): void {
@@ -311,6 +321,7 @@ export function App(): ReactElement {
   useOnboardingLifecycle();
   useRecentReviewsCommand();
   useSettingsCommand();
+  useReviewPullRequestCommand();
   useSidebarCommand();
   useOpenRepoInEditorCommand();
 
@@ -367,6 +378,13 @@ export function App(): ReactElement {
           from inside a review, where there is no page listing them — the start screen lists
           the recent ones itself and opens this for the rest. */}
       <RecentReviews />
+      {/* App-level too: a pull request is reviewed from wherever the reader is, the start
+          screen included — which it reaches only through the menu (⇧⌘P), never a button. */}
+      <PullRequestDialog />
+      {/* The one question posting asks (the pull request moved past the reviewed commit). Up
+          here rather than beside the rail's Post all: Post on a card raises it too, with
+          the rail put away. */}
+      <HeadMovedDialog />
       {/* The standing "no rvw, no reviews" notice. Above the shell too, because it is true
           of the app rather than of whatever session happens to be open. */}
       <CliBanner />

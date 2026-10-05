@@ -27,6 +27,47 @@ extraResources:
     to: cli/package.json
   - from: skills
     to: skills
+# Electron fuses: switches compiled into the Electron Framework binary that turn off ways to run
+# code *as Reviewer* other than the app in app.asar. They matter because the macOS Keychain trusts
+# the app, not the code it happens to run: an item Reviewer stores (safeStorage's key, and the
+# GitHub token next-features.md plans) is readable without a prompt by anything that executes
+# inside the Reviewer binary. Agents run as the same user, so every switch below is a door one
+# could otherwise walk through without touching the Keychain's prompt.
+#
+# The option names are electron-builder's (FuseOptionsV1 in app-builder-lib's scheme.json); it
+# flips them with @electron/fuses after packing. scripts/check-package.mjs reads the wire back
+# out of the packaged binary, so a typo here or a key electron-builder stops honouring fails CI
+# rather than silently shipping an unfused app. Fuses are a packaging-time property only:
+# `bun run dev` / `bun run start` run node_modules' stock Electron, whose wire is untouched, so
+# their NODE_OPTIONS=--enable-source-maps keeps working.
+electronFuses:
+  # `ELECTRON_RUN_AS_NODE=1 Reviewer.app/Contents/MacOS/Reviewer -e '…'` is a full Node running
+  # arbitrary JS as Reviewer. Nothing here needs it: both rvw launchers (src/main/cli-install.ts,
+  # scripts/install-cli.sh) exec the `node` on PATH, never the app binary, and main uses neither
+  # `process.fork` nor a child Electron (this fuse breaks `process.fork`; utilityProcess is the
+  # replacement if one is ever needed).
+  runAsNode: false
+  # NODE_OPTIONS (and NODE_EXTRA_CA_CERTS) would let the environment inject `--require` into the
+  # packaged app. Packaged Electron already ignores most of NODE_OPTIONS (see the sourcemap note
+  # in electron.vite.config.ts); this closes the rest.
+  enableNodeOptionsEnvironmentVariable: false
+  # `--inspect` / `--inspect-brk` and SIGUSR1 open a debugger port that evaluates JS in main.
+  enableNodeCliInspectArguments: false
+  # Load the app only from app.asar, never from a sibling `app/` directory or default_app.asar —
+  # without it, dropping an unpacked `app/` beside the asar side-loads code past the check below.
+  onlyLoadAppFromAsar: true
+  # Electron hashes app.asar against the ElectronAsarIntegrity entry electron-builder writes into
+  # Info.plist, and refuses to start on a mismatch ("ASAR Integrity Violation"). This only
+  # truly holds once the app is *signed*: today the build is unsigned (README: the user strips the
+  # quarantine attribute), so whoever can edit app.asar can also rewrite Info.plist's hash and
+  # re-sign ad hoc. It still costs nothing now and becomes real the day a Developer ID signs it.
+  enableEmbeddedAsarIntegrityValidation: true
+  # Required, not optional, while the build is unsigned. Flipping a fuse rewrites bytes inside the
+  # Electron Framework binary, which invalidates the linker's ad-hoc signature; with no identity
+  # electron-builder does not re-sign, so `codesign --verify` fails and `open` refuses to launch
+  # the app. This re-signs it ad hoc after the flip (verified: without it the app does not launch,
+  # with it it does). scripts/check-package.mjs runs `codesign --verify` for exactly this reason.
+  resetAdHocDarwinSignature: true
 mac:
   category: public.app-category.developer-tools
   entitlementsInherit: build/entitlements.mac.plist

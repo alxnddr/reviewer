@@ -62,7 +62,7 @@ function stamp(): ReviewStamp {
   return { newId: () => `id-${(n += 1)}` };
 }
 
-const UI: CommentUiState = { editingId: null, draft: null };
+const UI: CommentUiState = { editing: null, draft: null };
 
 /** The comment annotation the app's render path (buildDiffItems) produced for a
  * file+line: `lineNumber` is the placed line (0 = pinned to the file header), and

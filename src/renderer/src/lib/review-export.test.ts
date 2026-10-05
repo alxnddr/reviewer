@@ -115,12 +115,13 @@ function authored(comment: Comment): ReviewComment {
     startLine: comment.startLine,
     endLine: comment.endLine,
     body: comment.body,
-    // The optional three ride along on the absent-key rule, so a round-trip comparison
+    // The optional four ride along on the absent-key rule, so a round-trip comparison
     // through this helper fails when `serializeReview` stops copying one of them — which is
     // the exact way a hand-copied projection loses a field.
     ...(comment.tag === undefined ? {} : { tag: comment.tag }),
     ...(comment.severity === undefined ? {} : { severity: comment.severity }),
     ...(comment.evidence === undefined ? {} : { evidence: comment.evidence }),
+    ...(comment.postable === undefined ? {} : { postable: comment.postable }),
   };
 }
 
@@ -320,6 +321,19 @@ describe("serializeReview", () => {
     const review = importFixture(FIXTURE, "jj");
     expect(review.reviewedHead).toBeNull();
     expect(serializeReview(review)).not.toHaveProperty("reviewedHead");
+  });
+
+  it("round-trips the pull request, and writes none for a review that names none", () => {
+    // The third strict-object addition, through the same hand-copied projection: an export of a
+    // review emitted with `--pr` must still link its comments to that pull request.
+    const pr = { host: "github.com", owner: "acme", repo: "widgets", number: 42 } as const;
+    const imported = importFixture({ ...FIXTURE, pr }, "pr");
+    expect(imported.pr).toEqual(pr);
+    const serialized = serializeReview(imported);
+    expect(serialized.pr).toEqual(pr);
+    expect(serializeReview(importFixture(serialized, "ps"))).toEqual(serialized);
+
+    expect(serializeReview(importFixture(FIXTURE, "pn"))).not.toHaveProperty("pr");
   });
 
   it("preserves the embedded patch verbatim and drops an absent one", () => {
@@ -1175,6 +1189,7 @@ describe("the comment vocabulary", () => {
         tag: "perf",
         severity: "blocking",
         evidence: "```\n$ node bench.js\n4.2s\n```",
+        postable: "This loop is quadratic in the number of hosts; could it build the map once?",
       },
       { file: "src/b.ts", side: "deletions", startLine: 3, endLine: 3, body: "second" },
     ],
@@ -1193,6 +1208,10 @@ describe("the comment vocabulary", () => {
     expect("tag" in plain).toBe(false);
     expect("severity" in plain).toBe(false);
     expect("evidence" in plain).toBe(false);
+    expect("postable" in plain).toBe(false);
+    expect(emitted.comments?.[0]?.postable).toBe(
+      "This loop is quadratic in the number of hosts; could it build the map once?",
+    );
     // And again, because an export a reader re-opens has to be the same file.
     expect(serializeReview(importFixture(emitted, "v2")).comments).toEqual(emitted.comments);
   });
@@ -1202,6 +1221,16 @@ describe("the comment vocabulary", () => {
     const projected = markdownCommentsFrom(review.comments, [], true);
     expect(projected[0]).toMatchObject({ tag: "perf", severity: "blocking" });
     expect(projected[1]?.tag).toBeUndefined();
+  });
+
+  it("keeps postable out of both exports — neither is read by the change's author", () => {
+    const review = importFixture(VOCAB, "v4");
+    const projected = markdownCommentsFrom(review.comments, [], true)[0];
+    expect(projected === undefined ? true : "postable" in projected).toBe(false);
+    const prompted = promptCommentsFrom(review.comments, [], true)[0];
+    expect(prompted === undefined ? "" : commentToPrompt(prompted)).not.toContain(
+      "build the map once",
+    );
   });
 
   it("prints the labels in the Markdown bullet's header, severity first", () => {

@@ -1,4 +1,5 @@
 import * as z from "zod";
+import { GitHubPostRecord } from "./github-posting";
 
 // Where a reader got to, as something that survives the tab being closed.
 //
@@ -110,12 +111,24 @@ export const NO_PROGRESS: ReadProgress = {
  *
  * `path` is the artifact it belongs to. The filename is derived from that path, so this is
  * strictly redundant — and worth every byte: it is what makes the directory greppable when
- * something is wrong, and what lets the orphan sweep name what it is dropping. */
+ * something is wrong, and what lets the orphan sweep name what it is dropping.
+ *
+ * `github` is what the reader posted from this review to its pull request as pending comments
+ * (`shared/github-posting.ts`'s `GitHubPostRecord`, Layer C). It rides on the record and *not* on
+ * `ReadProgress`, so it is not on the session either, and the reason is who writes it: main, after
+ * each comment GitHub accepts, and nobody else. On the session it would come back on every
+ * renderer write-back, a debounce behind, and could put an older record over a newer one; here
+ * the session mirror carries it through untouched (`main/review/progress.ts`), the way the
+ * settings store carries the keys other owners write — raw, so a value this build cannot read is
+ * carried rather than dropped. Optional, and salvaged on its own: an unreadable value never costs
+ * the read marks beside it. It is never overwritten either: main refuses to post while it cannot
+ * read it (`recordUnreadable`), because the record is what keeps a comment from going out twice. */
 export const ReviewProgressFile = z.object({
   version: z.literal(1),
   path: z.string().min(1),
   updated: z.iso.datetime(),
   ...ReadProgress.shape,
+  github: GitHubPostRecord.optional().catch(undefined),
 });
 export type ReviewProgressFile = z.infer<typeof ReviewProgressFile>;
 

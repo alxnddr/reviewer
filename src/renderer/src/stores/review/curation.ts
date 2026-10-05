@@ -1,5 +1,5 @@
 import type { StateCreator } from "zustand";
-import { Comment, type ReviewAnchor } from "../../../../shared/review";
+import { Comment, type CommentProse, type ReviewAnchor } from "../../../../shared/review";
 import type { SessionId } from "../../../../shared/session";
 import {
   commentsToPrompt,
@@ -8,6 +8,7 @@ import {
   type PromptComment,
 } from "../../lib/review-export";
 import { isResolved } from "../../../../shared/comment-resolution";
+import { hasPostable } from "../../../../shared/postable-comment";
 import { commentFocus, setSlice, withSlice, type SessionSlice } from "./slice";
 import type { ReviewState } from "./state";
 
@@ -37,9 +38,20 @@ export type CurationSlice = {
    * identity here — a manual comment is stamped exactly like an imported one; an
    * empty body is never stored. Persists via the write-back. */
   addComment: (anchor: ReviewAnchor, body: string, sessionId?: SessionId) => void;
-  /** Edit any comment — imported or manual, all equally editable; an
-   * empty body is a no-op, never an empty-body write. */
-  editComment: (commentId: string, body: string, sessionId?: SessionId) => void;
+  /** Rewrite one of a comment's prose fields — imported or manual, all equally editable.
+   * `body` is the finding; `postable` is the agent's text for the change's author, which the
+   * reader may refine before it leaves the app because they are the one signing it — but
+   * never start: on a comment without one this is a no-op (`withProse`). Empty text means
+   * something different per field: for `body` it is a no-op, because a comment is never
+   * bodyless; for `postable` it removes the key, because "this should not be posted" is a
+   * decision the reader is allowed to make. Neither ever writes an empty string — the schema
+   * refuses one, and a write-back that then failed to persist would lose the edit. */
+  editComment: (
+    commentId: string,
+    field: CommentProse,
+    text: string,
+    sessionId?: SessionId,
+  ) => void;
   /** Discard any comment; a discarded comment leaves no trace. */
   discardComment: (commentId: string, sessionId?: SessionId) => void;
   /** Put one comment on the clipboard as a prompt an agent can act on directly. Resolves
@@ -81,6 +93,37 @@ function promptCommentsOf(slice: SessionSlice, comments: readonly Comment[]): Pr
     // must not turn up in a work order as if it were open.
     slice.resolvedComments,
   );
+}
+
+/** `comment` with one prose field set to `text` (already trimmed), or null when that changes
+ * nothing. A `default:`-less switch rather than a computed key: `{ [field]: text }` over a
+ * union key widens to an index signature the compiler then accepts for any field name, and a
+ * third editable field should be a compile error here — including its answer to empty text.
+ *
+ * The two differ in what they allow. A body cannot be removed, only discarded with its
+ * comment, so empty is a no-op. A postable can be rewritten or removed — the reader deciding
+ * the finding is not to be posted, which is the absent key, never an empty string, and takes
+ * the block off the card — but not created: it is the agent's output, written while it had
+ * the context, and a comment the agent wrote none for is simply not for posting
+ * (`CommentPostable`). Refusing here as well as offering no affordance there is what keeps a
+ * body from ever being saved into the field the app posts. A blank one (`hasPostable`) counts
+ * as none. */
+function withProse(comment: Comment, field: CommentProse, text: string): Comment | null {
+  switch (field) {
+    case "body":
+      return text === "" ? null : { ...comment, body: text };
+    case "postable": {
+      if (!hasPostable(comment)) {
+        return null;
+      }
+      if (text !== "") {
+        return { ...comment, postable: text };
+      }
+      const removed: Comment = { ...comment };
+      delete removed.postable;
+      return removed;
+    }
+  }
 }
 
 /** Write to the clipboard, reporting whether it landed. Never throws: a denied or absent
@@ -134,16 +177,18 @@ export const createCurationSlice: StateCreator<ReviewState, [], [], CurationSlic
       });
     },
 
-    editComment: (commentId, body, sessionId) => {
+    editComment: (commentId, field, text, sessionId) => {
       withSlice(get, sessionId, (slice, id) => {
-        const trimmed = body.trim();
-        if (trimmed === "" || !slice.comments.some((comment) => comment.id === commentId)) {
+        const target = slice.comments.find((comment) => comment.id === commentId);
+        const edited = target === undefined ? null : withProse(target, field, text.trim());
+        if (edited === null) {
           return;
         }
+        // Rewriting the body changes the comment's fingerprint and so drops the reader's mark
+        // (`shared/fingerprint.ts`); rewriting or removing the postable does not — it is the
+        // same finding, worded for someone else or not at all.
         setSlice(set, get, id, {
-          comments: slice.comments.map((comment) =>
-            comment.id === commentId ? { ...comment, body: trimmed } : comment,
-          ),
+          comments: slice.comments.map((comment) => (comment.id === commentId ? edited : comment)),
         });
         get().scheduleSessionWriteBack(id);
       });

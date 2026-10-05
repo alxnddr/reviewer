@@ -1,11 +1,12 @@
 import { type ReactElement } from "react";
 import { History, Pencil, Trash2 } from "lucide-react";
-import type { Comment } from "../../../shared/review";
+import type { Comment, CommentProse } from "../../../shared/review";
 import type { CommentResolution } from "../../../shared/review-progress";
 import { Button } from "@/components/ui/button";
 import { TooltipHint } from "@/components/ui/tooltip";
 import { CommentBody } from "@/components/CommentBody";
 import { CommentEvidence } from "@/components/CommentEvidence";
+import { CommentPostable } from "@/components/CommentPostable";
 import { CommentMeta } from "@/components/CommentMeta";
 import { CommentMark, CommentMarkMenu } from "@/components/CommentMark";
 import { CopyCommentPromptButton } from "@/components/CopyPromptButton";
@@ -25,7 +26,16 @@ type CommentThreadProps = {
    * only re-renders on an item `version` change, and the mark is folded into that version
    * (`buildDiffItems`). */
   resolution: CommentResolution | null;
-  onEdit: () => void;
+  /** The postable's editor is open, inside this card. (The body's editor replaces the card
+   * outright, so a card that is drawn at all is never editing its body.) */
+  editingPostable: boolean;
+  /** Open an editor on one of the comment's prose fields: the toolbar's Edit opens the body,
+   * the postable block's own Edit opens the postable. That block is drawn only for a comment
+   * the agent wrote a postable for, so there is no way here to start one. */
+  onEdit: (field: CommentProse) => void;
+  /** Save the postable's editor. Empty text removes the postable (`editComment`). */
+  onSavePostable: (postable: string) => void;
+  onCancelEdit: () => void;
   onDiscard: () => void;
   onSetResolution: (resolution: CommentResolution | null) => void;
 };
@@ -52,6 +62,14 @@ type CommentThreadProps = {
  * back the moment the pointer leaves. The hover group is the wrapper, not the card,
  * so reaching up for the toolbar does not dismiss it.
  *
+ * **One container, stacked sections.** The finding, the text for its author and its evidence
+ * are sections of the one card, split by full-width dividers rather than nested inside the
+ * finding's padding. Each section owns a header row and the buttons in it, so an action is
+ * read as being about the section it sits in: the toolbar over the card's top edge acts on the
+ * comment and edits the finding under it, and the author's text has its own Edit in its own
+ * row. The earlier shape — evidence and the author's text inset under the body, inside the
+ * same padding — made the toolbar's Edit read as editing all of it.
+ *
  * **A marked comment goes quiet, and nothing else.** The card is not collapsed, struck
  * through or moved: the reader answered it, they did not delete it, and a review read a
  * second time has to show the same twelve findings in the same order it showed the first
@@ -63,7 +81,10 @@ export function CommentThread({
   outdated,
   active,
   resolution,
+  editingPostable,
   onEdit,
+  onSavePostable,
+  onCancelEdit,
   onDiscard,
   onSetResolution,
 }: CommentThreadProps): ReactElement {
@@ -73,49 +94,70 @@ export function CommentThread({
     <div className="group/comment relative">
       <div
         className={cn(
-          "rounded-lg border border-border-strong bg-comment-surface px-4 py-3 font-sans text-foreground shadow-surface transition-[color,background-color,border-color,opacity]",
+          // `overflow-hidden` so a section's full-width hover fill keeps the card's corners. The
+          // dividers take the card edge's own ink: on a dark theme the card is lifted 11% toward
+          // the foreground, which lands it on `--border` and would erase a lighter divider.
+          "divide-y divide-border-strong overflow-hidden rounded-lg border border-border-strong bg-comment-surface font-sans text-foreground shadow-surface transition-[color,background-color,border-color,opacity]",
           // Answered findings recede so the open ones read as the work left. Not `hidden`
           // and not `line-through`: the first loses the review's own order and the second
           // makes prose unreadable at exactly the moment someone is re-checking whether the
           // mark was right. Full ink is one hover away, and the toolbar that unmarks it is
-          // on the same hover.
-          resolution !== null && "opacity-55 group-hover/comment:opacity-100",
+          // on the same hover. Focus inside the card counts as hover too: the postable's
+          // editor opens in here, and text being written must not fade to 55% the moment the
+          // pointer drifts off the card.
+          resolution !== null &&
+            "opacity-55 group-hover/comment:opacity-100 focus-within:opacity-100",
           // The jumped-to card wears the kit's own focus shape — a 1px accent edge
           // inside a soft accent halo, exactly what every control in the system does
           // on `focus-visible`.
           active && "border-primary ring-3 ring-primary/25",
         )}
       >
-        {outdated && (
-          // Drift is a warning about placement, not a chip: the badge fill used here
-          // before was `--selected`, the app's neutral selection tone, so a drifted
-          // comment read as a *selected* one. The glyph carries the state and the
-          // authored location follows it quietly — the same pairing the sidebar row uses
-          // for the same fact.
-          <div className="mb-1.5 flex min-w-0 items-center gap-1.5 text-xs">
-            <History aria-hidden="true" className="size-3 shrink-0 text-warning" />
-            <span className="shrink-0 text-warning">Outdated</span>
-            <span aria-hidden="true" className="shrink-0 text-text-faint">
-              ·
-            </span>
-            <TooltipHint content={location} whenTruncated side="top" align="start">
-              <span className="truncate text-text-muted tabular-nums select-text">{location}</span>
-            </TooltipHint>
-          </div>
-        )}
-        {/* Above the author's pills, because it is the reader's answer *to* them and the
+        <div className="px-4 py-3">
+          {outdated && (
+            // Drift is a warning about placement, not a chip: the badge fill used here
+            // before was `--selected`, the app's neutral selection tone, so a drifted
+            // comment read as a *selected* one. The glyph carries the state and the
+            // authored location follows it quietly — the same pairing the sidebar row uses
+            // for the same fact.
+            <div className="mb-1.5 flex min-w-0 items-center gap-1.5 text-xs">
+              <History aria-hidden="true" className="size-3 shrink-0 text-warning" />
+              <span className="shrink-0 text-warning">Outdated</span>
+              <span aria-hidden="true" className="shrink-0 text-text-faint">
+                ·
+              </span>
+              <TooltipHint content={location} whenTruncated side="top" align="start">
+                <span className="truncate text-text-muted tabular-nums select-text">
+                  {location}
+                </span>
+              </TooltipHint>
+            </div>
+          )}
+          {/* Above the author's pills, because it is the reader's answer *to* them and the
             first thing they need on a second pass ("did I already deal with this?"). It is
             greyscale where those are coloured, which is the whole visual grammar: hue is
             what the review said, ink is what the reader did — and it is what keeps the mark
             apart from the warning-toned drift row above it. */}
-        <CommentMark resolution={resolution} className="mb-1.5" />
-        {/* Above the body, on its own line, and only when the author set something: the
+          <CommentMark resolution={resolution} className="mb-1.5" />
+          {/* Above the body, on its own line, and only when the author set something: the
             pills are how the reader decides whether to read this card at all, so they come
             before the sentence rather than trailing it. Sharing the outdated row was the
             rejected alternative — drift is a warning about placement and these are the
             author's own vocabulary, and a row that mixes them reads as one claim. */}
-        <CommentMeta comment={comment} className="mb-1.5 flex-wrap" />
-        <CommentBody body={comment.body} />
+          <CommentMeta comment={comment} className="mb-1.5 flex-wrap" />
+          <CommentBody body={comment.body} />
+        </div>
+        {/* Straight under the finding, above its receipts: the author's text is the finding
+            rewritten, so it reads as the second half of the claim, and it is always open where
+            the evidence is a folded row — a fold between the two would split the claim from
+            its rewrite and push the visible text below a control the reader mostly skips. */}
+        <CommentPostable
+          comment={comment}
+          editing={editingPostable}
+          onEdit={() => onEdit("postable")}
+          onSave={onSavePostable}
+          onCancel={onCancelEdit}
+        />
         {comment.evidence !== undefined && <CommentEvidence evidence={comment.evidence} />}
       </div>
       {/* Its own popover surface, so it reads as hovering above the diff rather than
@@ -138,13 +180,13 @@ export function CommentThread({
             Copy, Edit and Discard under the hand that already knows where they are. */}
         <CommentMarkMenu resolution={resolution} onSetResolution={onSetResolution} />
         <CopyCommentPromptButton commentId={comment.id} />
-        <TooltipHint content="Edit comment" side="top" align="center">
+        <TooltipHint content="Edit finding" side="top" align="center">
           <Button
             variant="ghost"
             size="icon-xs"
-            aria-label="Edit comment"
+            aria-label="Edit finding"
             className="text-text-muted hover:bg-foreground/10 hover:text-foreground dark:hover:bg-foreground/10"
-            onClick={onEdit}
+            onClick={() => onEdit("body")}
           >
             <Pencil />
           </Button>

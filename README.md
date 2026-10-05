@@ -35,6 +35,14 @@ To read a diff that has no review, choose **File ▸ Open Repository…** (⌘O)
 
 **Settings** (⌘,) has the theme, the code font, and the editor that files open in.
 
+## Review someone else's pull request
+
+Choose **File ▸ Review Pull Request…** (⇧⌘P) and paste the pull request's address. Reviewer finds your checkout of that repository, fetches the pull request with your own git credentials, and puts it in a separate worktree, so your branch and your uncommitted work are not touched. It then copies a prompt for your agent: review in that worktree, then present the findings with `rvw`. The prompt is editable in Settings. If you add your GitHub username in Settings, the dialog also lists the open pull requests that request your review, from public repositories. Remove a worktree from the same dialog when you are done.
+
+`rvw emit --pr` records which pull request a review is of. It takes the URL, `owner/repo#123`, or a number. For a pull request, the agent also writes each finding the way it would be posted to the author, and the card shows that text under **For the author**. **Copy** puts it on the clipboard. **Copy & open on GitHub** also opens the pull request's changed files at the comment's lines, where you paste it.
+
+You can also let Reviewer post the comments you pick as **pending** review comments, which only you can see. Paste a fine-grained token (Pull requests: read and write, on the repositories you choose) in **Settings ▸ GitHub**. Reviewer never submits a review: you read the drafts on GitHub and submit them yourself. The token stays in memory until you quit, because the app is unsigned, and `rvw` never sees it.
+
 ## Install
 
 Reviewer runs on macOS. Download the `.dmg` from the [latest release](../../releases/latest).

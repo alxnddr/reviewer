@@ -1,6 +1,7 @@
 import * as z from "zod";
 import { errorMessage } from "./errors";
 import { CommitSha, type GitFailure, ReviewRef, RepoInfo, RepoPath } from "./git";
+import { PullRequest } from "./pull-request";
 
 // The review domain contract: `.reviewer.json` is the single integration
 // point, defined here as zod schemas — the schema *is* the format, so every read
@@ -119,11 +120,25 @@ export function reservedTag(tag: string | undefined): ReservedTag | null {
  * `body` is the only required half. The three optional fields beside it are the review
  * vocabulary every shipping reviewer converged on, split by what the app may *do* with
  * each: `severity` is closed and acted on, `tag` is free text and only displayed, and
- * `evidence` is the receipts folded under the claim. Each carries its own
- * `.meta({ description })` because `rvw schema` is derived from this object and the
- * authoring skill names that output as the authority on field rules — an undescribed
- * field is a field an agent guesses at. A description states the field's rule and what the
- * app does with it, and stops: *when* to write one is the skill's
+ * `evidence` is the receipts folded under the claim.
+ *
+ * `postable` is the fourth optional field, and it is split from the others by *audience*
+ * rather than by what the app does: `body` and `evidence` are written to the reader of the
+ * review — a briefing, blunt, with the receipts attached — and `postable` is written to the
+ * change's author, the comment as it would be posted on the pull request. Two readers who
+ * want different things in a different tone, so two fields, written while the agent still
+ * has the context, rather than one body the app rewrites for the author mechanically (the
+ * tone and the content both differ, and no transform gets from one to the other). Nothing
+ * ever posts `body`: every way a comment leaves the app for its author reads `postable`
+ * alone (`shared/postable-comment.ts`), and the rail preview and the fix prompt keep
+ * reading `body` untouched. The gate checks the file references in it as it checks the
+ * overview's (`tools/review-validator.ts`), because a dead reference in `postable` is a
+ * broken link on the code host, not a muted chip in the app.
+ *
+ * Each of the four carries its own `.meta({ description })` because `rvw schema` is derived
+ * from this object and the authoring skill names that output as the authority on field
+ * rules — an undescribed field is a field an agent guesses at. A description states the
+ * field's rule and what the app does with it, and stops: *when* to write one is the skill's
  * (`skills/present-review/SKILL.md`), and saying it in both places made every agent that
  * fetched the schema pay for the same advice twice (912 bytes of it, measured).
  *
@@ -149,10 +164,20 @@ export const ReviewComment = ReviewAnchor.extend({
     description:
       "What you ran or read to confirm the finding — the command and the lines of output that show it — as markdown, rendered folded under the body. Put it here rather than in `body`, which stays the sentence.",
   }),
+  postable: z.string().min(1).optional().meta({
+    description:
+      "The comment as it should be posted to the change's author on the code host: self-contained markdown that never refers to the agent, the review, the evidence or the tour. The app shows it apart from `body` and copies or posts exactly it.",
+  }),
 }).meta({
   description: `${anchorDescription} \`body\` says why, never what, and is markdown (CommonMark + GFM).`,
 });
 export type ReviewComment = z.infer<typeof ReviewComment>;
+
+/** The two prose fields of a comment the reader may rewrite in the app: the finding, and the
+ * text for the author. `evidence` is not one of them — it is the author's receipts, and a
+ * receipt the reader edited is no longer a receipt. Closed, so the editor, the store action
+ * and the slot that says which one is open all switch on the same two words. */
+export type CommentProse = "body" | "postable";
 
 /** The in-app comment: the authored shape plus the app-assigned `id` stamped by
  * `importReview`. Non-optional — once imported a comment always has identity, so
@@ -231,7 +256,7 @@ export type ReviewLayerRange = z.infer<typeof ReviewLayerRange>;
  * layer sits, either — ordering is the author's call everywhere else in this format.
  *
  * This object is a `strictObject`, so `skim` is the kind of addition an older build *refuses*
- * the whole artifact over rather than dropping (contrast `ReviewComment`'s optional three,
+ * the whole artifact over rather than dropping (contrast `ReviewComment`'s optional fields,
  * which are plain `z.object` keys and silently vanish). It ships with `reviewedHead` for that
  * reason: one compatibility break, decided once, instead of two. */
 export const ReviewLayerInput = z
@@ -390,6 +415,25 @@ export const ReviewArtifact = z.strictObject({
     description:
       "The full commit sha `head` resolved to at emit time — provenance, so the app can tell a reader their branch has moved on since the review was written. `rvw emit` fills this in; do not write it by hand.",
   }),
+  /** The pull request this review is of, on the code host — absent on every review that is
+   * not of one, which is every review of the reader's own branch. Like `reviewedHead` it is
+   * an address and not content: placement, coverage and the pin never read it. What reads it
+   * is everything that sends a comment *to* that pull request — the postable text's file
+   * references become blob links at `reviewedHead`, and a comment can open the PR's Files
+   * view at its lines (`renderer/src/lib/github-links.ts`). The shape and its parsers are
+   * `shared/pull-request.ts`, a union on `host` so a second host is a new arm.
+   *
+   * `rvw emit --pr` is the only writer; it records what it was told and checks nothing online.
+   *
+   * This object is a `strictObject`, so `pr` is the same trade `skim` and `reviewedHead` made:
+   * an older build *refuses* an artifact carrying it rather than dropping the key. Accepted for
+   * the same reason — an artifact that knows its pull request read by a build that cannot act
+   * on it would silently lose the one thing it was emitted with `--pr` for — and it costs only
+   * the reviews that carry it, which are new by construction. */
+  pr: PullRequest.optional().meta({
+    description:
+      'The pull request this review is of: `{ host: "github.com", owner, repo, number }`. The app uses it to link comments to the pull request\'s lines. `rvw emit` fills this in from `--pr`; do not write it by hand.',
+  }),
   patch: z.string().min(1).optional(),
   /** The tour doc the review opens on; absent on an artifact that has none. */
   overview: ReviewOverview.optional(),
@@ -499,6 +543,9 @@ export type ImportedReview = {
   /** The commit the review was written against, or null for an artifact that predates the
    * field — modelled as a real value, like `patch` and `overview` beside it. */
   reviewedHead: CommitSha | null;
+  /** The pull request the review is of, or null for one that names none — a real value, like
+   * `reviewedHead` beside it. */
+  pr: PullRequest | null;
   /** The authored tour doc, or null for an artifact that carries none — modelled as
    * a real value (not an optional key) so consumers branch on it, like `patch`. */
   overview: ReviewOverview | null;
@@ -529,6 +576,12 @@ export const ReviewOrigin = z.object({
    * existed still parses strictly rather than falling to the salvage tier, which would take
    * the whole origin with it and strand an open review with nothing to export. */
   reviewedHead: CommitSha.nullable().default(null),
+  /** The pull request the artifact said it was of. On the origin for `reviewedHead`'s reason
+   * — the comment cards' GitHub link and the round-trip export both read it from here, long
+   * after the bytes are gone — and `.default(null)` for the same one: a session persisted
+   * before the field existed still parses strictly instead of losing its whole origin to the
+   * salvage tier. */
+  pr: PullRequest.nullable().default(null),
 });
 export type ReviewOrigin = z.infer<typeof ReviewOrigin>;
 
@@ -542,6 +595,7 @@ export function reviewOriginFor(review: ImportedReview): ReviewOrigin {
     head: review.head,
     patch: review.patch,
     reviewedHead: review.reviewedHead,
+    pr: review.pr,
   };
 }
 
@@ -709,6 +763,7 @@ export function importReview(bytes: string, stamp: ReviewStamp): ImportReviewRes
       head: artifact.head,
       patch: artifact.patch ?? null,
       reviewedHead: artifact.reviewedHead ?? null,
+      pr: artifact.pr ?? null,
       overview: artifact.overview ?? null,
       comments,
       layers: flattenLayers(artifact.layers, stamp),

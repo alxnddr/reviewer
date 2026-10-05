@@ -11,7 +11,7 @@ import { ANALYSIS_CACHE_KEY, parsePatch } from "./patch";
 // a comment that shares its line. Everything is driven off real detection over a real patch
 // rather than hand-built blocks, so a change to either half shows up here.
 
-const NO_UI: CommentUiState = { editingId: null, draft: null };
+const NO_UI: CommentUiState = { editing: null, draft: null };
 
 const FILES = parsePatch(MOVED_BLOCK_PATCH, ANALYSIS_CACHE_KEY);
 const BLOCKS = detectMovedBlocks(FILES);

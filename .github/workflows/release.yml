@@ -82,6 +82,15 @@ jobs:
           CSC_IDENTITY_AUTO_DISCOVERY: "false"
         run: bun run build:mac
 
+      # The same assertions ci.yml's package job makes on its `--dir` build, made again on the
+      # .app this release ships — build:mac leaves it unpacked under dist/mac-arm64 beside the
+      # .dmg. The ones that matter most here are the Electron fuses and `codesign --verify`: a
+      # fuse electron-builder silently stopped writing reopens ELECTRON_RUN_AS_NODE, and a
+      # signature the fuse flip invalidated is an app macOS will not launch. Both are bytes in a
+      # Mach-O that nothing else checks, so without this step a bricked .dmg reaches the draft.
+      - name: Verify packaged contents
+        run: bun run check:package
+
       - name: Fetch rvw tarball
         uses: actions/download-artifact@v4
         with:

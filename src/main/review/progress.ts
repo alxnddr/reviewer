@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { access, mkdir, readdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
 import { errnoCode } from "../../shared/errors";
+import { GitHubPostRecord } from "../../shared/github-posting";
 import {
   NO_PROGRESS,
   ReviewProgressFile,
@@ -24,6 +25,12 @@ import {
 //   **A bad record is "no progress", never an error.** Every read failure — missing, corrupt,
 //   a version from a build that does not exist yet — answers `NO_PROGRESS`. A reader who
 //   loses their place should see an unread review, not a dialog.
+//
+//   **One writer at a time per record.** Two things write a record: the session mirror (`write`,
+//   from every renderer write-back that moved the marks) and Layer C's poster (`writePosted`,
+//   after each comment GitHub accepts). Each keeps the other's half — `write` carries the
+//   `github` key through, `writePosted` the marks — which is a read and then a write, so the two
+//   are queued per file (`serially`) and can never interleave into a record that lost one half.
 //
 //   **Never delete on failure.** An unparseable record is left exactly where it is: the build
 //   that can read it may be the next one, and it is the only copy. It is overwritten only
@@ -55,6 +62,19 @@ export type ProgressStore = {
   /** Ratios for a list of artifacts, for the picker rows. Absent from the map means no
    * record; the caller renders nothing rather than an empty ring. */
   summaries: (artifactPaths: readonly string[]) => Promise<Map<string, ReviewProgressSummary>>;
+  /** What was posted from this review to its pull request (Layer C): `record` null for none yet,
+   * or `ok: false` for a record on disk this build cannot read — the whole file, or just its
+   * `github` value. Unlike the read marks, "unreadable" is not folded into "nothing": a poster
+   * that read it as nothing would post again what the record says is already out. */
+  readPosted: (
+    artifactPath: string,
+  ) => Promise<{ ok: true; record: GitHubPostRecord | null } | { ok: false }>;
+  /** Replace the posted record, keeping the read marks beside it. Answers whether it landed —
+   * and refuses, writing nothing, when the record on disk cannot be read: it is never replaced by
+   * one that has lost what it held (the "never delete on failure" rule above). A failed write is
+   * logged; the poster reports what GitHub accepted either way, and the next post still finds
+   * those comments on GitHub by their text (`main/github/posting.ts`). */
+  writePosted: (artifactPath: string, record: GitHubPostRecord | null) => Promise<boolean>;
   /** Drop records whose artifact is gone from disk. `liveNames` is a fast path, not the
    * rule: a record named there is known live without a stat, and every other record is
    * checked against the path it carries rather than assumed orphaned. Called from the one
@@ -68,12 +88,88 @@ export function createProgressStore(dir: string): ProgressStore {
   // debounces at 500ms and every mutation goes through it, so without this a reader
   // scrolling a long diff would rewrite this file continuously.
   const lastWritten = new Map<string, string>();
+  /** The tail of each record's write queue, by filename. */
+  const queues = new Map<string, Promise<unknown>>();
+
+  /** `task` run after every earlier one queued for `name` has settled — a failed one included —
+   * so a read-then-write of one record never interleaves with another. The map holds only the
+   * tail and lets it go once nothing is queued behind it. */
+  function serially<T>(name: string, task: () => Promise<T>): Promise<T> {
+    const previous = queues.get(name) ?? Promise.resolve();
+    const run = previous.then(task, task);
+    const tail = run.catch(() => {});
+    queues.set(name, tail);
+    void tail.then(() => {
+      if (queues.get(name) === tail) {
+        queues.delete(name);
+      }
+    });
+    return run;
+  }
+
+  /** Write a whole record, temp file then rename. Answers whether it landed. The `github` value
+   * may be carried raw (`unknown`): see `write`. */
+  async function writeRecord(
+    name: string,
+    record: Omit<ReviewProgressFile, "github"> & { github?: unknown },
+  ): Promise<boolean> {
+    const file = join(dir, name);
+    // Write-then-rename: a crash mid-write leaves the previous record intact rather than a
+    // truncated one. The temp name is per record, and the queue keeps two writes of one record
+    // from sharing it.
+    const temp = `${file}.tmp`;
+    try {
+      await mkdir(dir, { recursive: true });
+      await writeFile(temp, `${JSON.stringify(record, null, 2)}\n`, "utf8");
+      await rename(temp, file);
+      return true;
+    } catch (error) {
+      console.error("Review progress could not be persisted:", error);
+      await rm(temp, { force: true }).catch(() => {});
+      return false;
+    }
+  }
 
   /** One record by its *filename*, whole — including the `path` only the sweep reads. `null`
    * is every failure collapsed into one answer, because both callers want the same thing
    * from all of them: missing (the overwhelmingly common case — a review nobody has read
    * yet), unreadable, not JSON, or a format this build predates. The reader sees no
    * progress; the sweep sees a record it does not understand and therefore may not touch. */
+  /** One record's file as it stands: missing, there but unreadable (not JSON, not a record this
+   * build parses, or a `github` value that does not parse — which the record's own schema would
+   * quietly drop), or a record, with its `github` value exactly as it was on disk. */
+  async function readFileState(
+    name: string,
+  ): Promise<
+    | { kind: "missing" }
+    | { kind: "unreadable" }
+    | { kind: "record"; record: ReviewProgressFile; rawGithub: unknown; githubReadable: boolean }
+  > {
+    let bytes: string;
+    try {
+      bytes = await readFile(join(dir, name), "utf8");
+    } catch (error) {
+      return errnoCode(error) === "ENOENT" ? { kind: "missing" } : { kind: "unreadable" };
+    }
+    let json: unknown;
+    try {
+      json = JSON.parse(bytes);
+    } catch {
+      return { kind: "unreadable" };
+    }
+    const parsed = ReviewProgressFile.safeParse(json);
+    if (!parsed.success) {
+      return { kind: "unreadable" };
+    }
+    const rawGithub = (json as { github?: unknown }).github;
+    return {
+      kind: "record",
+      record: parsed.data,
+      rawGithub,
+      githubReadable: rawGithub === undefined || GitHubPostRecord.safeParse(rawGithub).success,
+    };
+  }
+
   async function readFileRecord(name: string): Promise<ReviewProgressFile | null> {
     let bytes: string;
     try {
@@ -142,34 +238,77 @@ export function createProgressStore(dir: string): ProgressStore {
 
     write: async (artifactPath, progress) => {
       const name = progressFileName(artifactPath);
-      const record: ReviewProgressFile = {
-        version: 1,
-        path: artifactPath,
-        updated: new Date().toISOString(),
-        ...progress,
-      };
       // The staleness check is over the *marks*, not the serialized record — `updated` moves
       // on every call and would defeat it.
       const fingerprint = JSON.stringify(progress);
       if (lastWritten.get(name) === fingerprint) {
         return;
       }
-      const file = join(dir, name);
-      // Write-then-rename: a crash mid-write leaves the previous record intact rather than a
-      // truncated one. The temp name is per record, so two reviews saving at once cannot
-      // collide on it.
-      const temp = `${file}.tmp`;
-      try {
-        await mkdir(dir, { recursive: true });
-        await writeFile(temp, `${JSON.stringify(record, null, 2)}\n`, "utf8");
-        await rename(temp, file);
-        lastWritten.set(name, fingerprint);
-      } catch (error) {
-        console.error("Review progress could not be persisted:", error);
-        // The fingerprint is deliberately not recorded on failure, so the next write-back
-        // retries rather than assuming this one landed.
-        await rm(temp, { force: true }).catch(() => {});
+      await serially(name, async () => {
+        // What main posted rides through: the renderer's write-back knows nothing of it. Carried
+        // as it was on disk, unparsed, so a value this build cannot read is not dropped by a
+        // write about something else. (A record unreadable as a whole is overwritten with the
+        // reader's real progress, as before — this file's stated rule.)
+        const existing = await readFileState(name);
+        const github = existing.kind === "record" ? existing.rawGithub : undefined;
+        const landed = await writeRecord(name, {
+          version: 1,
+          path: artifactPath,
+          updated: new Date().toISOString(),
+          ...progress,
+          ...(github === undefined ? {} : { github }),
+        });
+        // Recorded only when it landed, so the next write-back retries rather than assuming
+        // this one did.
+        if (landed) {
+          lastWritten.set(name, fingerprint);
+        }
+      });
+    },
+
+    readPosted: async (artifactPath) => {
+      const state = await readFileState(progressFileName(artifactPath));
+      switch (state.kind) {
+        case "missing":
+          return { ok: true, record: null };
+        case "unreadable":
+          return { ok: false };
+        case "record":
+          return state.githubReadable
+            ? { ok: true, record: state.record.github ?? null }
+            : { ok: false };
       }
+    },
+
+    writePosted: (artifactPath, posted) => {
+      const name = progressFileName(artifactPath);
+      return serially(name, async () => {
+        const existing = await readFileState(name);
+        if (
+          existing.kind === "unreadable" ||
+          (existing.kind === "record" && !existing.githubReadable)
+        ) {
+          console.error("A review's progress record could not be read, so it was not replaced.");
+          return false;
+        }
+        const marks: ReadProgress =
+          existing.kind === "missing"
+            ? NO_PROGRESS
+            : {
+                readFiles: existing.record.readFiles,
+                collapsedFiles: existing.record.collapsedFiles,
+                foldsSeeded: existing.record.foldsSeeded,
+                readTotal: existing.record.readTotal,
+                resolvedComments: existing.record.resolvedComments,
+              };
+        return writeRecord(name, {
+          version: 1,
+          path: artifactPath,
+          updated: new Date().toISOString(),
+          ...marks,
+          ...(posted === null ? {} : { github: posted }),
+        });
+      });
     },
 
     summaries: async (artifactPaths) => {

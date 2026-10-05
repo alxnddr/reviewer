@@ -78,6 +78,7 @@ describe("SHORTCUT_SHEET", () => {
       "⌘O",
       "⇧⌘O",
       "⇧⌘R",
+      "⇧⌘P",
       "⌘,",
       "⌘B",
       "⌘T",

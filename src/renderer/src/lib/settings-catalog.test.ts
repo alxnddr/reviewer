@@ -1,8 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { SETTING_KEYS } from "../../../shared/settings";
+import { PROMPT_TEMPLATE_MAX, SETTING_KEYS, Settings } from "../../../shared/settings";
 import { EDITOR_CHOICES } from "../../../shared/editors";
 import { THEME_IDS } from "../../../shared/themes";
+import { PROMPT_PLACEHOLDERS } from "./pull-request-prompt";
 import {
+  acceptGitHubLogin,
   filterSettings,
   SETTING_ENTRIES,
   SETTING_GROUPS,
@@ -43,6 +45,37 @@ describe("SETTING_ENTRIES", () => {
     expect(editor?.kind).toBe("select");
     if (editor?.kind === "select") {
       expect(editor.options.map((option) => option.value)).toEqual([...EDITOR_CHOICES]);
+    }
+  });
+
+  it("offers the prompt template with exactly the placeholders it expands, named in its sentence", () => {
+    const prompt = SETTING_ENTRIES.find((entry) => entry.key === "pullRequestPrompt");
+    expect(prompt?.kind).toBe("text");
+    if (prompt?.kind === "text") {
+      expect(prompt.placeholders).toEqual([...PROMPT_PLACEHOLDERS]);
+      // The field stops where the schema would refuse, rather than the save silently resetting.
+      expect(prompt.maxLength).toBe(PROMPT_TEMPLATE_MAX);
+      expect(Settings.safeParse({ pullRequestPrompt: "x".repeat(prompt.maxLength) }).data).toEqual({
+        pullRequestPrompt: "x".repeat(prompt.maxLength),
+      });
+      for (const placeholder of PROMPT_PLACEHOLDERS) {
+        expect(prompt.description).toContain(placeholder);
+      }
+    }
+  });
+
+  it("offers the GitHub username as a line that stores only what the schema keeps", () => {
+    const row = SETTING_ENTRIES.find((entry) => entry.key === "githubUsername");
+    expect(row?.kind).toBe("line");
+    expect(acceptGitHubLogin("  @octo-cat ")).toBe("octo-cat");
+    for (const typed of ["octocat", "@octocat", "Octo_Cat"]) {
+      const accepted = acceptGitHubLogin(typed);
+      // Whatever the field commits, the stored record reads back unchanged — never a value that
+      // silently turns into "never chosen".
+      expect(Settings.parse({ githubUsername: accepted }).githubUsername, typed).toBe(accepted);
+    }
+    for (const typed of ["octo cat", "is:pr", "-x", "a/b", ""]) {
+      expect(acceptGitHubLogin(typed), typed).toBeNull();
     }
   });
 

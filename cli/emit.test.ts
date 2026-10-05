@@ -14,7 +14,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { ReviewArtifact } from "../src/shared/review";
 import { emitReviewArtifact } from "../src/tools/review-emit";
 import { capturePatch } from "./git";
-import { FIXTURE_ENV, fixtureGit, runCli } from "./fixtures";
+import { FIXTURE_ENV, fixtureGit, minimalRepo, runCli, type ForeignRepo } from "./fixtures";
 
 // `rvw emit` driven against a real git fixture — the only honest proof of the contract: bytes
 // reach disk only on a clean gate pass, exit 0/1/2 hold, the written artifact is byte-identical
@@ -194,6 +194,39 @@ describe("rvw emit", () => {
     );
     expect(refused.code).toBe(1);
     expect(refused.stderr).toContain("overview body links");
+    expect(existsSync(dead)).toBe(false);
+  });
+
+  it("carries a comment's postable into the artifact, and gates its links too", async () => {
+    const comment = {
+      file: "alpha.ts",
+      side: "additions",
+      startLine: 2,
+      endLine: 2,
+      body: "line 2 rewritten",
+    };
+    const out = outPath("postable.reviewer.json");
+    const postable = "Could [this line](alpha.ts:2) say why it changed?";
+    const result = await runCli(
+      explicit({ ...VALID_DRAFT, comments: [{ ...comment, postable }] }, "--out", out),
+    );
+    expect(result.code).toBe(0);
+    expect(readArtifact(out).comments[0]?.postable).toBe(postable);
+
+    // Posted, a dead reference is a broken link in front of the change's author, so the gate
+    // refuses it in `postable` as it does in the overview — and nothing reaches disk.
+    const dead = outPath("dead-postable.reviewer.json");
+    const refused = await runCli(
+      explicit(
+        { ...VALID_DRAFT, comments: [{ ...comment, postable: "See [x](gone.ts)." }] },
+        "--out",
+        dead,
+      ),
+    );
+    expect(refused.code).toBe(1);
+    expect(refused.stderr).toContain(
+      "postable of the comment at alpha.ts additions 2-2 links [x](gone.ts)",
+    );
     expect(existsSync(dead)).toBe(false);
   });
 
@@ -541,3 +574,195 @@ describe("rvw emit — presenting it", () => {
 function explicitOpen(draft: Draft, ...extra: readonly string[]): string[] {
   return explicit(draft, ...extra).filter((arg) => arg !== "--no-open");
 }
+
+describe("rvw emit --pr", () => {
+  // Each case gets a repo of its own, because what is under test is the `origin` remote a bare
+  // number is completed from, and a remote added to the shared fixture would leak into every
+  // other case in the file.
+  const repos: string[] = [];
+  afterAll(() => {
+    for (const path of repos) {
+      rmSync(path, { recursive: true, force: true });
+    }
+  });
+
+  function repoWithOrigin(origin: string | null): ForeignRepo {
+    const made = minimalRepo();
+    repos.push(made.path);
+    if (origin !== null) {
+      fixtureGit(made.path, "remote", "add", "origin", origin);
+    }
+    return made;
+  }
+
+  const anchor = { file: "a.txt", side: "additions", startLine: 2, endLine: 2 } as const;
+  const POSTED: Draft = {
+    comments: [
+      { ...anchor, body: "first", postable: "Could this line say why it changed?" },
+      { ...anchor, body: "second" },
+      { ...anchor, body: "third" },
+    ],
+  };
+
+  function emitPr(target: ForeignRepo, pr: string, draft: Draft, ...extra: string[]): string[] {
+    return [
+      "emit",
+      "--repo",
+      target.path,
+      "--base",
+      target.base,
+      "--head",
+      target.head,
+      "--draft",
+      draftFile(draft),
+      "--no-open",
+      "--pr",
+      pr,
+      ...extra,
+    ];
+  }
+
+  it("completes a bare number from an ssh origin, records it, and echoes it", async () => {
+    const target = repoWithOrigin("git@github.com:acme/widgets.git");
+    const out = outPath("pr.reviewer.json");
+    const result = await runCli(emitPr(target, "42", POSTED, "--out", out));
+    expect(result.code).toBe(0);
+    expect(readArtifact(out).pr).toEqual({
+      host: "github.com",
+      owner: "acme",
+      repo: "widgets",
+      number: 42,
+    });
+    // Echoed like the range: the owner and repo were worked out, not typed.
+    expect(result.stdout).toContain("pull request: https://github.com/acme/widgets/pull/42\n");
+  });
+
+  it("takes a URL or owner/repo#n as written, with no origin to consult", async () => {
+    const target = repoWithOrigin(null);
+    for (const pr of ["https://github.com/other/thing/pull/7/files", "other/thing#7"]) {
+      const out = outPath("named.reviewer.json");
+      const result = await runCli(emitPr(target, pr, POSTED, "--out", out));
+      expect(result.code, pr).toBe(0);
+      expect(readArtifact(out).pr).toEqual({
+        host: "github.com",
+        owner: "other",
+        repo: "thing",
+        number: 7,
+      });
+    }
+  });
+
+  it("says how many comments have no postable text — on stdout, and without moving the exit code", async () => {
+    const target = repoWithOrigin("https://github.com/acme/widgets");
+    const result = await runCli(
+      emitPr(target, "42", POSTED, "--out", outPath("gap.reviewer.json")),
+    );
+    expect(result.code).toBe(0);
+    expect(result.stdout).toContain("2 of 3 comments have no postable text\n");
+    expect(result.stderr).toBe("");
+
+    // Under --json it is a field of the success document, never a line beside it.
+    const asJson = await runCli(
+      emitPr(target, "42", POSTED, "--out", outPath("gap-json.reviewer.json"), "--json"),
+    );
+    expect(asJson.code).toBe(0);
+    expect(JSON.parse(asJson.stdout)).toMatchObject({
+      ok: true,
+      pr: { host: "github.com", owner: "acme", repo: "widgets", number: 42 },
+      withoutPostable: 2,
+    });
+  });
+
+  it("is silent about postable text when every comment has some, and without --pr at all", async () => {
+    const target = repoWithOrigin("https://github.com/acme/widgets");
+    const allPosted: Draft = {
+      comments: [{ ...anchor, body: "first", postable: "Could this say why?" }],
+    };
+    const posted = await runCli(
+      emitPr(target, "42", allPosted, "--out", outPath("all.reviewer.json")),
+    );
+    expect(posted.code).toBe(0);
+    expect(posted.stdout).not.toContain("postable");
+
+    // A review of one's own branch posts nothing, so its missing postables are not news.
+    const own = await runCli(
+      explicit(VALID_DRAFT, "--out", outPath("own.reviewer.json"), "--json"),
+    );
+    expect(JSON.parse(own.stdout)).toMatchObject({ ok: true, pr: null, withoutPostable: null });
+    expect(readArtifact(JSON.parse(own.stdout).out)).not.toHaveProperty("pr");
+  });
+
+  it("exits 2 with badPullRequest when a bare number has no origin to complete it from", async () => {
+    const target = repoWithOrigin(null);
+    const out = outPath("none.reviewer.json");
+    const result = await runCli(emitPr(target, "42", POSTED, "--out", out, "--json"));
+    expect(result.code).toBe(2);
+    const envelope = JSON.parse(result.stdout);
+    expect(envelope).toMatchObject({ ok: false, error: { code: "badPullRequest" } });
+    expect(envelope.error.message).toContain("origin");
+    expect(envelope.error.message).toContain("owner/repo#42");
+    expect(existsSync(out)).toBe(false);
+  });
+
+  it("exits 2 when origin is not on github.com, without echoing a credential in its URL", async () => {
+    const target = repoWithOrigin("https://oauth2:s3cret@gitlab.com/acme/widgets.git");
+    const out = outPath("gitlab.reviewer.json");
+    const result = await runCli(emitPr(target, "42", POSTED, "--out", out));
+    expect(result.code).toBe(2);
+    expect(result.stderr).toContain("https://gitlab.com/acme/widgets.git");
+    expect(result.stderr).toContain("only github.com is supported");
+    expect(result.stderr).not.toContain("s3cret");
+    expect(existsSync(out)).toBe(false);
+  });
+
+  it("exits 2 when origin is on github.com but names no owner/repo", async () => {
+    const target = repoWithOrigin("https://github.com/acme");
+    const result = await runCli(emitPr(target, "42", POSTED, "--json"));
+    expect(result.code).toBe(2);
+    const envelope = JSON.parse(result.stdout);
+    expect(envelope).toMatchObject({ ok: false, error: { code: "badPullRequest" } });
+    expect(envelope.error.message).toContain("names no github.com owner/repo");
+    expect(envelope.error.message).toContain("owner/repo#42");
+  });
+
+  it("redacts a password holding an @ in its entirety, not up to the first one", async () => {
+    const target = repoWithOrigin("https://user:p@ss@gitlab.com/acme/widgets.git");
+    const result = await runCli(emitPr(target, "42", POSTED));
+    expect(result.code).toBe(2);
+    expect(result.stderr).toContain("origin is https://gitlab.com/acme/widgets.git,");
+    expect(result.stderr).not.toContain("ss@");
+  });
+
+  it("never echoes a credential carried in the --pr value it refuses", async () => {
+    const target = repoWithOrigin(null);
+    const result = await runCli(
+      emitPr(target, "https://glpat-SECRET@gitlab.com/o/r/-/merge_requests/1", POSTED),
+    );
+    expect(result.code).toBe(2);
+    expect(result.stderr).toContain("--pr https://gitlab.com/o/r/-/merge_requests/1 is not");
+    expect(result.stderr).not.toContain("SECRET");
+  });
+
+  it("exits 2 on a value that names no pull request, before reading the draft", async () => {
+    const target = repoWithOrigin("git@github.com:acme/widgets.git");
+    for (const pr of ["acme/widgets", "0", "https://gitlab.com/acme/widgets/-/merge_requests/1"]) {
+      const result = await runCli([
+        "emit",
+        "--repo",
+        target.path,
+        "--draft",
+        join(root, "no-such-draft.json"),
+        "--no-open",
+        "--pr",
+        pr,
+        "--json",
+      ]);
+      expect(result.code, pr).toBe(2);
+      // The flag is refused, not the draft that was never read.
+      expect(JSON.parse(result.stdout), pr).toMatchObject({
+        ok: false,
+        error: { code: "badPullRequest" },
+      });
+    }
+  });
+});

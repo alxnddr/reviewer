@@ -104,6 +104,17 @@ export function installApplicationMenu(): void {
           accelerator: "CmdOrCtrl+Shift+R",
           click: () => requestMenuCommand(IpcEvent.menuOpenRecentReviews),
         },
+        // The third way to a review, and the only door to this one: a pull request someone
+        // else wrote. Here and in the `?` sheet, and deliberately not on the start screen,
+        // which names two things and stays at two (`StartScreen.tsx`). ⇧⌘P beside ⇧⌘O and ⇧⌘R
+        // — P for pull request, and free: no stock role, no other item and no window handler
+        // binds it. The ellipsis because it asks for something (the pull request) before it
+        // does anything. Through `requestMenuCommand`, so with no window open it makes one.
+        {
+          label: "Review Pull Request…",
+          accelerator: "CmdOrCtrl+Shift+P",
+          click: () => requestMenuCommand(IpcEvent.menuReviewPullRequest),
+        },
         // The ways out of the app and into the work. They sit in File rather than Edit
         // because in this app File *is* the review-artifact menu — open one, list them,
         // export one — and a prompt is that same family of projection, one step shorter

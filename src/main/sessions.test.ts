@@ -97,6 +97,7 @@ describe("createSessionStore", () => {
       head: "a".repeat(40),
       patch: null,
       reviewedHead: null,
+      pr: null,
       overview: null,
       comments: [
         {
@@ -143,6 +144,7 @@ describe("createSessionStore", () => {
       head: "a".repeat(40),
       patch: "diff --git a/src/a.ts b/src/a.ts\n",
       reviewedHead: null,
+      pr: null,
       overview: null,
       comments: [],
       layers: [],

@@ -8,7 +8,7 @@ import {
   RepoInfo,
   type BranchList,
   type CommitLog,
-  type CommitSha,
+  CommitSha,
   type DiffSelection,
   type FileAtRef,
   type FileContentsRequest,
@@ -22,6 +22,7 @@ import {
   type ReviewRef,
 } from "../../shared/git";
 import type { GitRunFailure, GitRunner } from "./runner";
+import { redactUrlCredentials } from "../../shared/pull-request";
 import { parseBranchList, parseCommitLog } from "./parse";
 import { DIFF_ARGS, DIFF_CONFIG, committedDiffArgs, rangeSpec } from "../../shared/node/git-diff";
 
@@ -52,6 +53,8 @@ function mapRunFailure(runFailure: GitRunFailure, repoPath: string): GitFailure 
       return { code: "outputOverflow", limitBytes: runFailure.limitBytes };
     case "timeout":
       return { code: "timeout" };
+    case "cancelled":
+      return { code: "cancelled" };
     case "exited": {
       console.error(`git exited with ${runFailure.exitCode ?? "signal"}: ${runFailure.stderr}`);
       // The second phrasing is git's answer inside a `.git` directory or a bare
@@ -454,4 +457,521 @@ async function diffWorkingTree(
   }
 
   return { ok: true, value: { patch: parts.join("") } };
+}
+
+// ── Remotes, fetches and worktrees ──────────────────────────────────────────────────────────
+//
+// What Review Pull Request… asks of git (`main/pull-request/`): which remotes a checkout has, a
+// fetch of a pull request's head into its own ref, a clone when there is no checkout, and the
+// worktree the review is read in. Kept GitHub-agnostic like the rest of this module — the
+// pull request layer decides which remote is the right one and which refs to name; these run
+// what they are told, through the same argv-only runner, and answer in `GitFailure` codes.
+//
+// **What they write.** Unlike everything above, these write — and only what is the app's:
+//
+// - The fetch writes exactly the refs its refspecs name. `--refmap=` (empty) is what makes
+//   "exactly" true: without it git also applies the remote's *configured* fetch refspecs to
+//   whatever it fetched ("opportunistic remote-tracking update"), and a remote configured with
+//   a mirror-style `+refs/heads/*:refs/heads/*` would have the base's fetch force-move the
+//   reader's own local branch of that name. `--no-write-fetch-head` leaves FETCH_HEAD as their
+//   last fetch wrote it, `--no-tags` keeps the remote's tags out of their tag list.
+// - A worktree is a second working tree with its own HEAD and index, detached; adding,
+//   switching and removing one edit only its own directory and `<git dir>/worktrees/<name>`.
+// - The status and rev-list reads take no optional locks (`GIT_OPTIONAL_LOCKS=0`).
+//
+// **What they must not run.** A pull request's worktree is someone else's code checked out on
+// the reader's machine, so every one of these ops runs with `UNTRUSTED_TREE_CONFIG`, which pins
+// the three settings that make git execute a program *chosen by the working tree it is in*:
+//
+// - `core.hooksPath=/dev/null` — no hooks at all. A *relative* `core.hooksPath` (husky's
+//   `.husky/_`, a common setup) resolves against the working tree a hook runs in, so `git switch`
+//   in the worktree would run the pull request's own `.husky/post-checkout`; and `worktree add`
+//   runs the reader's post-checkout with the pull request as its cwd, where an "install on
+//   checkout" hook runs the pull request's install scripts. Nothing here needs a hook.
+// - `core.fsmonitor=false` — a relative fsmonitor command resolves against the worktree too.
+//   The built-in daemon is only a speed-up, and these ops touch one small tree.
+// - `submodule.recurse=false` — a checkout that recursed would act on the pull request's own
+//   `.gitmodules`.
+//
+// What is deliberately *not* pinned: filter and textconv drivers (`filter.<name>.*`,
+// `diff.<name>.textconv`). The pull request's `.gitattributes` can select one, but only one the
+// reader configured — git-lfs, most often — and a checkout without its smudge filter is a
+// checkout of pointer files the agent would review as if they were the code. The ordinary read
+// ops above stay as they were: none of them fires a hook, the diff already refuses external
+// drivers (`DIFF_ARGS`' `--no-ext-diff`), and the one working-tree read that could consult an
+// fsmonitor (the picker's `status`) only meets a pull request's tree if the reader opens the
+// worktree as a plain repository — the same exposure their own agent's `git status` in that
+// worktree has, and not one the app can remove for it. `DIFF_CONFIG` is not touched: its bytes
+// are the patch's, shared with the CLI's capture.
+
+/** The `-c` pins every Review Pull Request… operation runs under — see the section header. */
+const UNTRUSTED_TREE_CONFIG = [
+  "-c",
+  "core.hooksPath=/dev/null",
+  "-c",
+  "core.fsmonitor=false",
+  "-c",
+  "submodule.recurse=false",
+] as const;
+
+/** How long an operation that reaches a remote may take. Far past the runner's 30s default,
+ * which is sized for local reads: the first fetch of a pull request on a large repository moves
+ * real data, and a partial clone's checkout fetches every blob it writes. Still a bound, so a
+ * remote that stops answering surfaces as `timeout` rather than a dialog that spins forever. */
+const REMOTE_TIMEOUT_MS = 10 * 60 * 1000;
+
+/** A clone fetches every commit and tree of the repository before it can check anything out,
+ * which on a large one is minutes even blobless. */
+const CLONE_TIMEOUT_MS = 30 * 60 * 1000;
+
+/** The longest remote sentence `remoteFailed` carries — enough for one line of git's or the
+ * host's own explanation, short enough to sit in a dialog. */
+const REMOTE_DETAIL_MAX = 300;
+
+/** What is stripped from a remote's line before it is shown: C0 and C1 control characters
+ * (a terminal escape a remote sends must not reach a dialog as text), and the bidirectional
+ * overrides and isolates, which can make a line read as something other than what it says. */
+// oxlint-disable-next-line no-control-regex -- stripping control characters is the point
+const UNSHOWABLE = /[\u0000-\u0009\u000B-\u001F\u007F-\u009F؜‎‏‪-‮⁦-⁩]/gu;
+
+/** The one line of a failed remote operation's stderr worth showing a reader: the remote's own
+ * explanation (`remote: …`) when it gave one, else git's last `fatal:`/`error:` line, else the
+ * last line at all — unshowable characters stripped, URL credentials redacted (with the same
+ * over-redacting rule the CLI prints with, `redactUrlCredentials`), capped. Exported for its
+ * tests; the only caller is the mapping below. */
+export function remoteFailureDetail(stderr: string): string {
+  const lines = stderr
+    .replaceAll(UNSHOWABLE, "")
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0);
+  const remote = lines.find((line) => /^remote:\s*\S/u.test(line));
+  const fatal = lines.findLast((line) => /^(?:fatal|error):/u.test(line));
+  const chosen = redactUrlCredentials(remote ?? fatal ?? lines.at(-1) ?? "git gave no reason");
+  return chosen.length > REMOTE_DETAIL_MAX ? `${chosen.slice(0, REMOTE_DETAIL_MAX - 1)}…` : chosen;
+}
+
+/** A failure of an operation that may have talked to a remote. git's stderr is read
+ * conservatively, most specific first, and only on phrasings git and GitHub actually print.
+ * Order matters where messages overlap: GitHub's ssh answer to a repository it will not show is
+ * "Repository not found" *followed by* the same "Could not read from remote repository" an ssh
+ * key refusal ends with, so not-found is asked before auth.
+ *
+ * What matches none of them depends on what the operation mostly is. A fetch or clone is about
+ * the remote, so the remote's own line comes back as `remoteFailed`. A worktree add or switch
+ * only *may* reach the remote (a partial clone's lazy blob fetch) and is otherwise local — a
+ * path that already exists, a lock — so its unknowns map as any local operation's do, and never
+ * read "could not talk to the remote" about something that never left the disk. Everything that
+ * is not an `exited` failure (a timeout, a cancel, a missing cwd) maps as any other operation's
+ * would. Exported for its tests. */
+export function mapRemoteFailure(
+  runFailure: GitRunFailure,
+  repoPath: string,
+  unknown: "remote" | "local" = "remote",
+): GitFailure {
+  if (runFailure.code !== "exited") {
+    return mapRunFailure(runFailure, repoPath);
+  }
+  const { stderr } = runFailure;
+  const missingRef = /couldn't find remote ref (\S+)/iu.exec(stderr)?.[1];
+  if (missingRef !== undefined) {
+    console.error(`git (remote) exited with ${runFailure.exitCode ?? "signal"}: ${stderr}`);
+    return { code: "remoteRefMissing", ref: missingRef.slice(0, 512) };
+  }
+  if (
+    /repository not found|repository '[^']*' not found|does not appear to be a git repository|returned error: 404/iu.test(
+      stderr,
+    )
+  ) {
+    console.error(`git (remote) exited with ${runFailure.exitCode ?? "signal"}: ${stderr}`);
+    return { code: "remoteNotFound" };
+  }
+  if (
+    /terminal prompts disabled|could not read (?:username|password)|authentication failed|invalid username or (?:password|token)|permission denied \(|host key verification failed|returned error: 40[13]/iu.test(
+      stderr,
+    )
+  ) {
+    console.error(`git (remote) exited with ${runFailure.exitCode ?? "signal"}: ${stderr}`);
+    return { code: "authFailed" };
+  }
+  if (
+    /could not resolve host|failed to connect to|connection (?:timed out|refused|reset)|network is unreachable|operation timed out|no route to host/iu.test(
+      stderr,
+    )
+  ) {
+    console.error(`git (remote) exited with ${runFailure.exitCode ?? "signal"}: ${stderr}`);
+    return { code: "network" };
+  }
+  if (unknown === "local") {
+    return mapRunFailure(runFailure, repoPath);
+  }
+  console.error(`git (remote) exited with ${runFailure.exitCode ?? "signal"}: ${stderr}`);
+  if (/not a git repository|must be run in a work tree/iu.test(stderr)) {
+    return { code: "notARepo", path: repoPath };
+  }
+  return { code: "remoteFailed", detail: remoteFailureDetail(stderr) };
+}
+
+/** One remote of a checkout: its name, and every URL it is known by — the URL as configured,
+ * and as git will actually fetch it once `url.<base>.insteadOf` has rewritten it. Both, because
+ * either may be the one that names the repository: a reader whose `gh:` shorthand expands to
+ * github.com is only recognizable after the rewrite, and one whose github.com remote is
+ * rewritten to a mirror only before it. */
+export type GitRemote = { name: BranchName; urls: string[] };
+
+/** The checkout's remotes. Two reads: `git config --get-regexp` for the configured URLs
+ * (NUL-separated, so a URL is never split) and `git remote -v` for the rewritten ones. A remote
+ * whose name is not a safe argv element (`BranchName`'s deny-list — git's own rules for remote
+ * names, which also refuse a leading `-`) is dropped and logged rather than offered to a fetch. */
+export async function listRemotes(
+  runner: GitRunner,
+  repoPath: string,
+): Promise<GitResult<GitRemote[]>> {
+  const configured = await runner.run({
+    cwd: repoPath,
+    args: ["config", "-z", "--get-regexp", String.raw`^remote\..+\.url$`],
+    // 1 is `--get-regexp`'s "no such key": a checkout with no remotes, not a failure.
+    okExitCodes: [0, 1],
+  });
+  if (!configured.ok) return failure(mapRunFailure(configured.failure, repoPath));
+  const effective = await runner.run({ cwd: repoPath, args: ["remote", "-v"] });
+  if (!effective.ok) return failure(mapRunFailure(effective.failure, repoPath));
+
+  const urls = new Map<string, Set<string>>();
+  const add = (name: string, url: string): void => {
+    const set = urls.get(name) ?? new Set<string>();
+    set.add(url);
+    urls.set(name, set);
+  };
+  for (const record of configured.stdout.split("\0")) {
+    // `remote.<name>.url\n<value>` — and a remote's name may itself hold dots.
+    const match = /^remote\.(.+)\.url\n(.*)$/su.exec(record);
+    if (match?.[1] !== undefined && match[2] !== undefined) {
+      add(match[1], match[2]);
+    }
+  }
+  for (const line of effective.stdout.split("\n")) {
+    const match = /^(\S+)\t(.*) \(fetch\)$/u.exec(line);
+    if (match?.[1] !== undefined && match[2] !== undefined) {
+      add(match[1], match[2]);
+    }
+  }
+
+  const remotes: GitRemote[] = [];
+  for (const [name, set] of urls) {
+    const parsed = BranchName.safeParse(name);
+    if (parsed.success) {
+      remotes.push({ name: parsed.data, urls: [...set] });
+    } else {
+      console.error(`Ignoring a remote whose name is not a safe argument: ${JSON.stringify(name)}`);
+    }
+  }
+  return { ok: true, value: remotes };
+}
+
+/** The branch a remote's HEAD names (`refs/remotes/<remote>/HEAD`, which `git clone` and
+ * `git remote set-head` write), or null when the checkout has never recorded one. */
+export async function remoteDefaultBranch(
+  runner: GitRunner,
+  repoPath: string,
+  remote: BranchName,
+): Promise<GitResult<BranchName | null>> {
+  const result = await runner.run({
+    cwd: repoPath,
+    args: ["symbolic-ref", "--quiet", `refs/remotes/${remote}/HEAD`],
+    // `--quiet` makes "not a symbolic ref" exit 1 with nothing printed: git's answer, not a failure.
+    okExitCodes: [0, 1],
+  });
+  if (!result.ok) return failure(mapRunFailure(result.failure, repoPath));
+  const prefix = `refs/remotes/${remote}/`;
+  const target = result.stdout.trim();
+  if (!target.startsWith(prefix)) {
+    return { ok: true, value: null };
+  }
+  const parsed = BranchName.safeParse(target.slice(prefix.length));
+  return { ok: true, value: parsed.success ? parsed.data : null };
+}
+
+/** The branch `listBranches` would preselect — the same detection order — for a caller that
+ * wants only that answer. */
+export async function defaultBranch(
+  runner: GitRunner,
+  repoPath: string,
+): Promise<GitResult<BranchName | null>> {
+  const branches = await listBranches(runner, repoPath);
+  return branches.ok ? { ok: true, value: branches.value.defaultBranch } : branches;
+}
+
+/** `git fetch <remote> <refspecs…>`, with the reader's own credentials and nothing else of
+ * theirs touched (the section header: `--refmap=`, `--no-write-fetch-head`, `--no-tags`), and
+ * `--no-recurse-submodules` keeping it to this repository. `detached` so ssh cannot sit on a
+ * terminal prompt (see `GitRunRequest.detached`), and cancellable through `signal`. Every
+ * refspec is built by the caller from validated names; the remote is a validated `BranchName`,
+ * so neither can become a flag. */
+export async function fetchRefspecs(
+  runner: GitRunner,
+  repoPath: string,
+  remote: BranchName,
+  refspecs: readonly string[],
+  signal?: AbortSignal,
+): Promise<GitResult<void>> {
+  const result = await runner.run({
+    cwd: repoPath,
+    args: [
+      ...UNTRUSTED_TREE_CONFIG,
+      "fetch",
+      "--quiet",
+      "--no-tags",
+      "--no-write-fetch-head",
+      "--no-recurse-submodules",
+      "--refmap=",
+      remote,
+      ...refspecs,
+    ],
+    timeoutMs: REMOTE_TIMEOUT_MS,
+    detached: true,
+    ...(signal === undefined ? {} : { signal }),
+  });
+  return result.ok
+    ? { ok: true, value: undefined }
+    : failure(mapRemoteFailure(result.failure, repoPath));
+}
+
+/** `git clone --filter=blob:none <url> <name>` inside `parentDir`: a partial clone, whose
+ * commits and trees arrive now, along with the files of the commit it checks out; every other
+ * file's contents arrive the first time a checkout or a diff needs them. `--` ends the options,
+ * so neither the URL nor the name can be read as one. Answers the new checkout's toplevel. */
+export async function clonePartial(
+  runner: GitRunner,
+  parentDir: string,
+  url: string,
+  name: string,
+  signal?: AbortSignal,
+): Promise<GitResult<RepoInfo>> {
+  const result = await runner.run({
+    cwd: parentDir,
+    args: [...UNTRUSTED_TREE_CONFIG, "clone", "--quiet", "--filter=blob:none", "--", url, name],
+    timeoutMs: CLONE_TIMEOUT_MS,
+    detached: true,
+    ...(signal === undefined ? {} : { signal }),
+  });
+  if (!result.ok) return failure(mapRemoteFailure(result.failure, parentDir));
+  return validateRepo(runner, join(parentDir, name));
+}
+
+/** The commit `ref` names, or null when it names none. `--quiet --verify` answers "no such
+ * commit" as exit 1 with nothing on stdout — git's defined answer, not a failure. `ref` is
+ * built by the caller from validated parts. */
+export async function resolveCommit(
+  runner: GitRunner,
+  repoPath: string,
+  ref: string,
+): Promise<GitResult<CommitSha | null>> {
+  const result = await runner.run({
+    cwd: repoPath,
+    args: ["rev-parse", "--quiet", "--verify", `${ref}^{commit}`],
+    okExitCodes: [0, 1],
+  });
+  if (!result.ok) return failure(mapRunFailure(result.failure, repoPath));
+  const sha = CommitSha.safeParse(result.stdout.trim());
+  return { ok: true, value: sha.success ? sha.data : null };
+}
+
+/** One entry of `git worktree list`: where it is, what it has checked out, and what git says
+ * about its state. `main` is the repository's own entry, which git always lists first — a
+ * working tree, or for a bare repository the bare directory itself (`bare`); `branch` is the
+ * branch checked out there, null when detached; `prunable` is a registration whose directory
+ * is gone; `locked` is git's lock and its reason (`""` when locked without one, null when not
+ * locked) — `initializing` is the lock `worktree add` holds while it writes the tree, so a
+ * worktree still locked that way is one whose checkout never finished. */
+export type WorktreeEntry = {
+  path: string;
+  head: CommitSha | null;
+  branch: string | null;
+  main: boolean;
+  bare: boolean;
+  prunable: boolean;
+  locked: string | null;
+};
+
+/** Every worktree of the repository `repoPath` belongs to — the same list from any of them,
+ * main first. `--porcelain -z` (git 2.36) so a path is never split on a newline. */
+export async function listWorktrees(
+  runner: GitRunner,
+  repoPath: string,
+): Promise<GitResult<WorktreeEntry[]>> {
+  const result = await runner.run({
+    cwd: repoPath,
+    args: ["worktree", "list", "--porcelain", "-z"],
+  });
+  if (!result.ok) return failure(mapRunFailure(result.failure, repoPath));
+  const entries: WorktreeEntry[] = [];
+  // Records are attribute lines, each NUL-terminated, separated by an empty one.
+  for (const record of result.stdout.split("\0\0")) {
+    const lines = record.split("\0").filter((line) => line.length > 0);
+    const path = lines.find((line) => line.startsWith("worktree "))?.slice("worktree ".length);
+    if (path === undefined) {
+      continue;
+    }
+    const head = CommitSha.safeParse(lines.find((line) => line.startsWith("HEAD "))?.slice(5));
+    const branch = lines.find((line) => line.startsWith("branch "))?.slice("branch ".length);
+    entries.push({
+      path,
+      head: head.success ? head.data : null,
+      branch: branch === undefined ? null : branch.replace(/^refs\/heads\//u, ""),
+      main: entries.length === 0,
+      bare: lines.includes("bare"),
+      prunable: lines.some((line) => line === "prunable" || line.startsWith("prunable ")),
+      locked: lockReason(lines),
+    });
+  }
+  return { ok: true, value: entries };
+}
+
+/** A porcelain record's `locked` line: its reason, `""` for a bare `locked`, null for none. */
+function lockReason(lines: readonly string[]): string | null {
+  const line = lines.find((candidate) => candidate === "locked" || candidate.startsWith("locked "));
+  return line === undefined ? null : line.slice("locked".length).trim();
+}
+
+/** Points `ref` at `sha` — a ref the caller owns (under `refs/rvw/`), never one of the
+ * reader's. */
+export async function updateRef(
+  runner: GitRunner,
+  repoPath: string,
+  ref: string,
+  sha: CommitSha,
+): Promise<GitResult<void>> {
+  const result = await runner.run({ cwd: repoPath, args: ["update-ref", ref, sha] });
+  return result.ok
+    ? { ok: true, value: undefined }
+    : failure(mapRunFailure(result.failure, repoPath));
+}
+
+/** Deletes `ref` — again one the caller owns. A ref that is already gone is not a failure. */
+export async function deleteRef(
+  runner: GitRunner,
+  repoPath: string,
+  ref: string,
+): Promise<GitResult<void>> {
+  const result = await runner.run({ cwd: repoPath, args: ["update-ref", "-d", ref] });
+  return result.ok
+    ? { ok: true, value: undefined }
+    : failure(mapRunFailure(result.failure, repoPath));
+}
+
+/** Whether a working tree has anything a removal or a checkout would lose in its files:
+ * modified or staged tracked files, or untracked ones. Ignored files do not count — they are
+ * what `git worktree remove` itself deletes without asking (a build output, an installed
+ * `node_modules`), which is why the dialog's confirmation says so. */
+export async function hasUncommittedChanges(
+  runner: GitRunner,
+  worktreePath: string,
+): Promise<GitResult<boolean>> {
+  // `--untracked-files=normal` spelled out: a reader's `status.showUntrackedFiles=no` would
+  // otherwise hide exactly the files an agent leaves behind, and call the tree clean.
+  const result = await runner.run({
+    cwd: worktreePath,
+    args: [...UNTRUSTED_TREE_CONFIG, "status", "--porcelain", "-z", "--untracked-files=normal"],
+  });
+  if (!result.ok) return failure(mapRunFailure(result.failure, worktreePath));
+  return { ok: true, value: result.stdout.length > 0 };
+}
+
+/** Whether the worktree's HEAD has commits no ref holds: no branch, tag or remote-tracking
+ * branch, and no `safeRefsGlob` ref (`refs/rvw`, the fetched pull request heads). A clean
+ * status says nothing about these — an agent that *committed* on the detached HEAD leaves a
+ * clean tree — and they are lost the moment the worktree is removed or moved (they become
+ * unreachable, and `gc` takes them). `--glob` with no wildcard implies `/*`, and its match
+ * crosses `/`, so the nested `refs/rvw/pr/<owner>/<repo>/<n>` refs count. */
+export async function hasUnreachableCommits(
+  runner: GitRunner,
+  worktreePath: string,
+  safeRefsGlob: string,
+): Promise<GitResult<boolean>> {
+  const result = await runner.run({
+    cwd: worktreePath,
+    args: [
+      "rev-list",
+      "-1",
+      "HEAD",
+      "--not",
+      "--branches",
+      "--tags",
+      "--remotes",
+      `--glob=${safeRefsGlob}`,
+    ],
+  });
+  if (!result.ok) return failure(mapRunFailure(result.failure, worktreePath));
+  return { ok: true, value: result.stdout.trim().length > 0 };
+}
+
+/** `git worktree add --detach <path> <ref>` from `repoPath`: a new working tree at `path` on
+ * `ref`'s commit, on no branch, with no hook run (`UNTRUSTED_TREE_CONFIG`). `path` is absolute
+ * (it cannot be read as a flag) and `ref` is built by the caller. Detached, because in a
+ * partial clone the checkout fetches the blobs it writes — but deliberately *not* cancellable:
+ * a checkout stopped halfway is a truncated tree an agent could be sent to review, so Cancel
+ * waits for it (only the timeout stops it, gracefully — `KILL_GRACE_MS`). */
+export async function addDetachedWorktree(
+  runner: GitRunner,
+  repoPath: string,
+  path: string,
+  ref: string,
+): Promise<GitResult<void>> {
+  const result = await runner.run({
+    cwd: repoPath,
+    args: [...UNTRUSTED_TREE_CONFIG, "worktree", "add", "--quiet", "--detach", path, ref],
+    timeoutMs: REMOTE_TIMEOUT_MS,
+    detached: true,
+  });
+  return result.ok
+    ? { ok: true, value: undefined }
+    : failure(mapRemoteFailure(result.failure, repoPath, "local"));
+}
+
+/** Moves a worktree's detached HEAD to `ref` — `git switch --detach`, run inside it, so the
+ * repository's other working trees are untouched, and with no hook run: this is the step that
+ * would otherwise run the pull request's own `post-checkout`. The caller has already
+ * established that the worktree has nothing to lose; git would refuse to overwrite local
+ * changes anyway. */
+export async function switchDetached(
+  runner: GitRunner,
+  worktreePath: string,
+  ref: string,
+): Promise<GitResult<void>> {
+  // Not cancellable, for `addDetachedWorktree`'s reason: half a switch is a tree that is
+  // neither the old head nor the new one.
+  const result = await runner.run({
+    cwd: worktreePath,
+    args: [...UNTRUSTED_TREE_CONFIG, "switch", "--quiet", "--detach", ref],
+    timeoutMs: REMOTE_TIMEOUT_MS,
+    detached: true,
+  });
+  return result.ok
+    ? { ok: true, value: undefined }
+    : failure(mapRemoteFailure(result.failure, worktreePath, "local"));
+}
+
+/** `git worktree remove <path>` from `repoPath`, never `--force`: git itself refuses a worktree
+ * with modified or untracked files, and that refusal is answered as `dirty` — a value, because
+ * "it has changes, so it stays" is the policy working, not git failing. A registration whose
+ * directory was deleted by hand is cleared the same way (git removes its bookkeeping). A local
+ * operation, mapped as one. */
+export async function removeWorktree(
+  runner: GitRunner,
+  repoPath: string,
+  path: string,
+): Promise<GitResult<"removed" | "dirty">> {
+  const result = await runner.run({
+    cwd: repoPath,
+    args: [...UNTRUSTED_TREE_CONFIG, "worktree", "remove", path],
+  });
+  if (result.ok) return { ok: true, value: "removed" };
+  if (
+    result.failure.code === "exited" &&
+    /contains modified or untracked files/iu.test(result.failure.stderr)
+  ) {
+    return { ok: true, value: "dirty" };
+  }
+  return failure(mapRunFailure(result.failure, repoPath));
 }

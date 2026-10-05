@@ -6,8 +6,10 @@ import { settingPatch, type SettingEntry } from "@/lib/settings-catalog";
 import {
   BooleanControl,
   FontControl,
+  LineControl,
   NumberControl,
   SelectControl,
+  TextControl,
 } from "@/components/settings/SettingControl";
 
 // One settings row: the label and its sentence on the left, the control on the right, and a
@@ -72,6 +74,28 @@ function control(
           onChange={(value) => onChange(settingPatch(entry.key, value))}
         />
       );
+    case "text":
+      return (
+        <TextControl
+          value={resolved[entry.key]}
+          placeholders={entry.placeholders}
+          maxLength={entry.maxLength}
+          label={entry.label}
+          onChange={(value) => onChange(settingPatch(entry.key, value))}
+        />
+      );
+    case "line":
+      return (
+        <LineControl
+          value={resolved[entry.key]}
+          placeholder={entry.placeholder}
+          accept={entry.accept}
+          invalid={entry.invalid}
+          label={entry.label}
+          // An emptied field is the reset: the key comes off the stored record.
+          onChange={(value) => onChange(settingPatch(entry.key, value ?? undefined))}
+        />
+      );
     default:
       return assertNever(entry);
   }
@@ -85,8 +109,15 @@ export function SettingRow({
   onChange,
 }: SettingRowProps): ReactElement {
   const modified = stored[entry.key] !== undefined;
+  // A paragraph of text does not fit the column the other controls sit in: it goes under the
+  // sentence, full width, and the row stacks.
+  const stacked = entry.kind === "text";
   return (
-    <div className="flex items-start justify-between gap-6 py-3">
+    <div
+      className={
+        stacked ? "flex flex-col gap-2 py-3" : "flex items-start justify-between gap-6 py-3"
+      }
+    >
       <div className="min-w-0 flex-1">
         <div className="flex items-baseline gap-2">
           <span className="text-base font-medium text-foreground">{entry.label}</span>
@@ -106,7 +137,7 @@ export function SettingRow({
           {entry.description}
         </p>
       </div>
-      <div className="flex shrink-0 items-center self-center">
+      <div className={stacked ? "flex" : "flex shrink-0 items-center self-center"}>
         {control(entry, resolved, fonts, onChange)}
       </div>
     </div>

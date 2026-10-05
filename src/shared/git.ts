@@ -39,6 +39,27 @@ export const BranchName = z
   });
 export type BranchName = z.infer<typeof BranchName>;
 
+/** Whether git itself would accept `name` as a branch — the whole of `git check-ref-format
+ * --branch`, which `BranchName`'s deny-list is a safe subset of rather than equal to: the
+ * deny-list exists to keep a ref from becoming a flag or a second argument, and admits names
+ * git still refuses (`a/.b`, `a.lock/b`, `@`, `HEAD`). Where a name is *about to be created or
+ * fetched* rather than merely read back, the difference is the difference between a field
+ * that says "not a branch name" and a git error from the remote end of a fetch, so the stricter
+ * check is offered separately rather than tightening `BranchName` under every persisted
+ * session and artifact that already parses with it.
+ *
+ * The rules, per component (between `/`s): not empty, not starting with `.`, not ending with
+ * `.lock`; and for the whole name: no `..`, no `@{`, not `@` alone, not ending in `.` — on top
+ * of the deny-list's control bytes, space, `~ ^ : ? * [ \`, leading `-` and the slashes. */
+export function isGitBranchName(name: string): boolean {
+  if (!BranchName.safeParse(name).success || name === "@" || name === "HEAD") {
+    return false;
+  }
+  return name
+    .split("/")
+    .every((part) => part.length > 0 && !part.startsWith(".") && !part.endsWith(".lock"));
+}
+
 /** A diff endpoint that names either a branch or a full sha. Lives here (not in
  * review.ts) so the review artifact and the diff request that reproduces it share
  * one ref schema — and either form still fails the same spawn boundary a branch
@@ -96,7 +117,18 @@ export const DiffSelection = z.discriminatedUnion("kind", [
 export type DiffSelection = z.infer<typeof DiffSelection>;
 
 /** Why a git operation could not produce a value. stderr never crosses IPC — main
- * logs it and maps the failure to one of these codes. */
+ * logs it and maps the failure to one of these codes — with one bounded exception, below.
+ *
+ * The last five are the answers of an operation that reaches a remote (Review Pull Request…'s
+ * fetch and clone, `main/git/ops.ts`), read conservatively off git's stderr: a pattern that is
+ * not certain stays out of the specific codes and lands in `remoteFailed`.
+ *
+ * `remoteFailed` is the exception to "stderr never crosses". A local git failure is the app's
+ * own business and a code says all a reader can act on; a remote's is open-ended — a proxy, a
+ * TLS interception, an organization enforcing SAML single sign-on — and the remote's own
+ * sentence is the only actionable thing there is. So it carries one line of it, chosen and
+ * scrubbed in main (`remoteFailureDetail`): control bytes gone, any URL's credentials redacted,
+ * capped in length. */
 export const GitFailure = z.discriminatedUnion("code", [
   z.object({ code: z.literal("gitMissing") }),
   z.object({ code: z.literal("notARepo"), path: z.string() }),
@@ -105,6 +137,21 @@ export const GitFailure = z.discriminatedUnion("code", [
   z.object({ code: z.literal("outputOverflow"), limitBytes: z.number().int().positive() }),
   z.object({ code: z.literal("timeout") }),
   z.object({ code: z.literal("unexpected") }),
+  /** The remote refused the reader's credentials, or git had none to offer without a prompt. */
+  z.object({ code: z.literal("authFailed") }),
+  /** The remote says there is no such repository — which is also what GitHub answers for a
+   * private one the credentials cannot see. */
+  z.object({ code: z.literal("remoteNotFound") }),
+  /** The remote is there and has no `ref` — a pull request number it never issued, a base
+   * branch it does not have. `ref` is the remote-side name git reported, e.g.
+   * `refs/pull/12/head`. */
+  z.object({ code: z.literal("remoteRefMissing"), ref: z.string().max(512) }),
+  /** The remote could not be reached at all: no route, no DNS, no connection. */
+  z.object({ code: z.literal("network") }),
+  z.object({ code: z.literal("remoteFailed"), detail: z.string().max(400) }),
+  /** The reader stopped it (Review Pull Request…'s Cancel): not a failure of git's, and shown as
+   * nothing more than that. */
+  z.object({ code: z.literal("cancelled") }),
 ]);
 export type GitFailure = z.infer<typeof GitFailure>;
 

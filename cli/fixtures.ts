@@ -31,6 +31,22 @@ import { normalizeExitCode, type LocalContext } from "./context";
 // root that way.
 export const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
+/** The per-test *and* per-hook budget of every suite that spawns `rvw` as a real process —
+ * `exit-gate`, `install-cli`, `portability`, `stdout`, `index` — set once at the top of each
+ * file with `vi.setConfig`, so it covers that file's hooks and tests and no other file's.
+ *
+ * Vitest's 5s default is a budget for in-process code, and these suites are not that: a single
+ * test chains a dozen node and git children, and under a full parallel run every one of them
+ * queues behind every other worker's. Worse, macOS's `syspolicyd` scans an executable the first
+ * time it runs, and `install-cli.test.ts` writes a fresh launcher into every throwaway home: a
+ * two-line shell script, newly written, was measured taking 13–38s to start. Neither is a defect
+ * in `rvw`, and both failed these suites intermittently at the default. 60s was tried first and
+ * still failed under a full run: the first-run scan alone was then measured at 40s for one test
+ * run in isolation, with the load on top. The number leaves twice that; it is per file rather
+ * than the global default so that a hang in an in-process suite still fails in 5s. Same reasoning as the 30s budget
+ * `src/main/pull-request/flow.test.ts` gives its git-heavy tests. */
+export const SPAWN_SUITE_TIMEOUT_MS = 120_000;
+
 /** A git repo the CLI is driven against: two commits, no dependencies, isolated from the
  * developer's git config. `path` is also the root to remove when the suite ends. */
 export type ForeignRepo = { readonly path: string; readonly base: string; readonly head: string };

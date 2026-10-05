@@ -1,3 +1,7 @@
+import { countLabel } from "../shared/plural";
+import { hasPostable } from "../shared/postable-comment";
+import type { PullRequest } from "../shared/pull-request";
+import type { ReviewArtifact } from "../shared/review";
 import { parseReviewArtifact, validatePlacement, type ValidationProblem } from "./review-validator";
 
 // The assembly half of the authoring skill: turn the agent's authored comments/layers into the
@@ -29,6 +33,11 @@ export type EmitInput = {
    * resolves refs — a caller assembling an artifact from something other than a live range
    * has no sha to offer, and an absent one is an absent key. */
   reviewedHead?: string;
+  /** The pull request the review is of, written through to the artifact's `pr` — already
+   * resolved by the shell (`cli/pull-request.ts`), which owns reading the `origin` remote a
+   * bare `--pr 123` needs. Provenance like `reviewedHead`: the gate never reads it. Absent on
+   * a review of the reader's own branch, and then absent from the file. */
+  pr?: PullRequest;
   patch: string;
   /** Carry the captured diff *in* the artifact, making it readable on a machine that does not
    * have the repo — the CI case, where the review is produced on a runner whose checkout path
@@ -50,8 +59,13 @@ export type EmitInput = {
 };
 
 /** Bytes ready to write, or the reasons the artifact is not fit to hand over — never
- * both. Mirrors the validation report so the shell can print problems with `describeProblem`. */
-export type EmitResult = { ok: true; bytes: string } | { ok: false; problems: ValidationProblem[] };
+ * both. Mirrors the validation report so the shell can print problems with `describeProblem`.
+ * A clean pass also hands back the artifact those bytes parse to, so what the shell reports
+ * about the review (`postableGap`) is read off the validated value rather than off the
+ * untrusted draft it came from. */
+export type EmitResult =
+  | { ok: true; bytes: string; artifact: ReviewArtifact }
+  | { ok: false; problems: ValidationProblem[] };
 
 /** Assemble the artifact and gate every anchor against the captured diff. Returns the exact
  * bytes only when every anchor places and every description link resolves — the load-bearing
@@ -72,6 +86,8 @@ export function emitReviewArtifact(input: EmitInput): EmitResult {
     // Undefined drops the key (`JSON.stringify`), which is the absent-optional shape the
     // schema wants — the same rule `overview` below relies on.
     reviewedHead: input.reviewedHead,
+    // The same absent-when-undefined rule: only a review emitted with `--pr` names one.
+    pr: input.pr,
     // Absent unless asked for, and absent rather than null when the capture came back empty:
     // the schema's `patch` is a non-empty string, and an empty one is not a diff the app
     // could freeze anyway — it would fall through to the refs form on open (`pinReview`),
@@ -93,5 +109,25 @@ export function emitReviewArtifact(input: EmitInput): EmitResult {
     return { ok: false, problems: parsed.problems };
   }
   const problems = validatePlacement(parsed.artifact, input.patch);
-  return problems.length === 0 ? { ok: true, bytes } : { ok: false, problems };
+  return problems.length === 0
+    ? { ok: true, bytes, artifact: parsed.artifact }
+    : { ok: false, problems };
+}
+
+/** How many of the review's comments carry no text for the change's author, out of how many.
+ * `rvw emit --pr` reports it as one informational line, never as a problem: a comment without
+ * `postable` is one the reader can still read, and may well be one they never meant to post —
+ * so the count changes no exit code and refuses nothing. */
+export function postableGap(artifact: ReviewArtifact): { missing: number; total: number } {
+  // `hasPostable`, so a whitespace-only `postable` counts as missing here exactly as the app
+  // reads it: no block on the card, nothing to copy.
+  const missing = artifact.comments.filter((comment) => !hasPostable(comment)).length;
+  return { missing, total: artifact.comments.length };
+}
+
+/** `3 of 7 comments have no postable text` — the verb agreeing with the count that has none,
+ * so one missing reads `1 of 7 comments has`. Beside the count it renders, so the sentence and
+ * the number cannot be maintained apart. */
+export function postableGapLine(gap: { missing: number; total: number }): string {
+  return `${gap.missing} of ${countLabel(gap.total, "comment")} ${gap.missing === 1 ? "has" : "have"} no postable text`;
 }

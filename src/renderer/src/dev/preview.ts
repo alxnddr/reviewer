@@ -18,7 +18,14 @@ import {
 import { initialFolds } from "../lib/initial-folds";
 import { NO_RESOLUTIONS, withResolution } from "../../../shared/comment-resolution";
 import { useOnboardingStore } from "../stores/onboarding";
+import { promptFor, usePullRequestStore } from "../stores/pull-request";
+import { useSettingsStore } from "../stores/settings";
+import { SETTINGS_DEFAULTS } from "../../../shared/settings";
+import type { PullRequestWorktree } from "../../../shared/pull-request-ipc";
+import type { GitHubInbox } from "../../../shared/github-ipc";
 import { useRecentReviewsStore } from "../stores/recent-reviews";
+import { useGitHubStore } from "../stores/github";
+import { NO_POSTING } from "../lib/github-posting";
 import { createSessionSlice, useReviewStore, type SessionSlice } from "../stores/review";
 
 const HOUR_MS = 3600 * 1000;
@@ -81,6 +88,12 @@ function fixtureComments(): Comment[] {
       body: "Extract this into a `formatGreeting` helper — `shout` and `greet` will both want it.",
       severity: "minor",
       tag: "refactor",
+      // The agent's text for the change's author, with a reference in it, so the postable
+      // block and its Copy can be eyeballed beside a finding written to the reader. The other
+      // two comments carry none, and show nothing for it — a comment the agent wrote no
+      // postable for is not for posting.
+      postable:
+        "Could the greeting live in a `formatGreeting` helper? [`shout`](greet.ts:5-7) will want the same string, and one helper keeps the two from drifting.",
       id: "c0000000-0000-4000-8000-000000000001",
     },
     {
@@ -328,7 +341,14 @@ function siblingSlice(ordinal: number, spec: SiblingSpec): SessionSlice {
       reviewOrigin:
         review === null
           ? null
-          : { repo, base: review.base, head: review.head, patch: null, reviewedHead: null },
+          : {
+              repo,
+              base: review.base,
+              head: review.head,
+              patch: null,
+              reviewedHead: null,
+              pr: null,
+            },
       overview: title === undefined ? null : { title, body: "" },
     },
   );
@@ -481,6 +501,137 @@ function seedSession(overrides: Partial<SessionSlice>): void {
   });
 }
 
+/** The inbox's rows (B5): four pull requests waiting on the reader, one a draft, one opened by
+ * an app, aged from minutes to weeks. */
+function fixtureInbox(): GitHubInbox {
+  const ago = (hours: number): string => new Date(Date.now() - hours * HOUR_MS).toISOString();
+  const pr = (owner: string, repo: string, number: number) =>
+    ({ host: "github.com", owner, repo, number }) as const;
+  return {
+    items: [
+      {
+        pullRequest: pr("acme", "widget", 482),
+        title: "Retry flaky uploads with exponential backoff",
+        author: "mira",
+        updatedAt: ago(0.3),
+        draft: false,
+      },
+      {
+        pullRequest: pr("acme", "gadget", 97),
+        title: "Move the settings schema into shared and validate it on read",
+        author: "alex",
+        updatedAt: ago(5),
+        draft: true,
+      },
+      {
+        pullRequest: pr("tooling", "lint-rules", 1204),
+        title: "Bump @typescript/native-preview from 7.0.0-dev.20260901 to 7.0.0-dev.20260929",
+        author: "dependabot[bot]",
+        updatedAt: ago(30),
+        draft: false,
+      },
+      {
+        pullRequest: pr("acme", "widget", 455),
+        title: "Document the worktree layout",
+        author: "sam",
+        updatedAt: ago(24 * 16),
+        draft: false,
+      },
+    ],
+    total: 4,
+    incomplete: false,
+  };
+}
+
+/** Review Pull Request…'s dialog over the start screen, in one of its states: the pull request
+ * found and prepared (the prompt, a worktree list with a clean row and one kept for its
+ * changes), no checkout known (Locate and the clone), or a refusal under the fetch. GitHub's
+ * answer rides along: the prepared scene has the title, state and base from GitHub; the failure
+ * scene has GitHub's refusal (a private repository) under the local guess. */
+function seedPullRequestDialog(kind: "prepared" | "not-found" | "failure" | "busy"): void {
+  useReviewStore.setState({ boot: "ready", sessions: {}, tabs: [], activeSessionId: null });
+  useOnboardingStore.setState({
+    open: false,
+    cli: { supported: true, installed: true, path: "/usr/local/bin/rvw", shadowedBy: null },
+  });
+  seedRecents(fixtureRecents(), 14);
+  const pr = { host: "github.com", owner: "acme", repo: "widget", number: 482 } as const;
+  const root = "/Users/you/Library/Application Support/Reviewer/worktrees";
+  const rows: PullRequestWorktree[] = [
+    {
+      path: `${root}/acme/widget-482`,
+      pullRequest: pr,
+      checkout: "/Users/you/code/widget",
+      head: "4f1c2a9b7d3e5f60718293a4b5c6d7e8f9012345",
+      changes: "none",
+      branch: null,
+      locked: null,
+    },
+    {
+      path: `${root}/acme/widget-471`,
+      pullRequest: { ...pr, number: 471 },
+      checkout: "/Users/you/code/widget",
+      head: "9a8b7c6d5e4f30211203948576afbecd01234567",
+      changes: "commits",
+      branch: null,
+      locked: null,
+    },
+    {
+      path: `${root}/acme/widget-455`,
+      pullRequest: { ...pr, number: 455 },
+      checkout: "/Users/you/code/widget",
+      head: "1a2b3c4d5e6f708192a3b4c5d6e7f80912345678",
+      changes: "uncommitted",
+      branch: null,
+      locked: null,
+    },
+  ];
+  const checkout = {
+    repo: { path: "/Users/you/code/widget", name: "widget" },
+    remote: "upstream",
+  };
+  const result = {
+    worktree: `${root}/acme/widget-482`,
+    head: "4f1c2a9b7d3e5f60718293a4b5c6d7e8f9012345",
+    // GitHub named the base in the prepared scene, so the prompt compares against it.
+    base: kind === "prepared" ? "upstream/release/2.4" : "upstream/main",
+    change: "created",
+  } as const;
+  usePullRequestStore.setState({
+    open: true,
+    input: "https://github.com/acme/widget/pull/482",
+    target: pr,
+    checkout:
+      kind === "not-found"
+        ? { kind: "notFound" }
+        : { kind: "found", checkout, suggested: { name: "main", from: "remoteHead" } },
+    base: kind === "prepared" ? "release/2.4" : "main",
+    info:
+      kind === "failure"
+        ? { phase: "failed", failure: { code: "notFound" } }
+        : {
+            phase: "loaded",
+            info: {
+              title: "Retry flaky uploads with exponential backoff",
+              state: "open",
+              draft: kind === "busy",
+              base: kind === "prepared" ? "release/2.4" : "main",
+              head: "4f1c2a9b7d3e5f60718293a4b5c6d7e8f9012345",
+            },
+          },
+    inbox: { phase: "idle" },
+    busy: kind === "busy" ? "preparing" : null,
+    // The busy scene also asks to confirm a removal, so both in-place states are in one shot.
+    confirmingRemoval: kind === "busy" ? `${root}/acme/widget-482` : null,
+    failure: kind === "failure" ? { code: "git", failure: { code: "authFailed" } } : null,
+    prepared:
+      kind === "prepared"
+        ? { result, prompt: promptFor(SETTINGS_DEFAULTS.pullRequestPrompt, pr, result) }
+        : null,
+    worktrees: { phase: "loaded", rows: kind === "not-found" ? [] : rows },
+  });
+}
+
 /** Dev-only: `?state=<name>` seeds the store with a fixture so every diff-area state
  * is reachable by URL for the visual gates (shoot/checks run in a plain browser,
  * where no bridge and no repository exist). Dead code in production builds — the
@@ -596,6 +747,130 @@ export function applyPreviewState(): void {
             id: "c0000000-0000-4000-8000-000000000031",
           },
         ],
+      });
+      break;
+    }
+    case "comments-pr": {
+      // The same comments on a review that names its pull request: the postable block gains
+      // "Copy & open on GitHub" beside Copy. The reviewed head is two commits back in
+      // `fixtureEntries`, so the button's tooltip carries the moved-branch warning.
+      const files = parsePatch(MULTI_STATUS_PATCH, "preview:comments-pr");
+      seedSession({
+        diff: { phase: "loaded", loadId: 1, files },
+        selectedFilePath: files[0]?.path ?? null,
+        comments: fixtureComments(),
+        reviewDiff: { kind: "refs", base: "main", head: "feature/brush-selection" },
+        reviewOrigin: {
+          repo: { path: "/preview/fixture", name: "fixture" },
+          base: "main",
+          head: "feature/brush-selection",
+          patch: null,
+          reviewedHead: "2".repeat(40),
+          pr: { host: "github.com", owner: "acme", repo: "fixture", number: 42 },
+        },
+      });
+      break;
+    }
+    case "comments-pr-github": {
+      // `comments-pr` after GitHub answered the check (B4) at the reviewed commit: its diff
+      // leaves the first comment's lines out, so that card's postable block carries the note
+      // beside Copy & open on GitHub. The reviewed head is GitHub's head, so the button's tooltip
+      // drops the moved-branch warning — GitHub outranks the local branch.
+      const files = parsePatch(MULTI_STATUS_PATCH, "preview:comments-pr-github");
+      const reviewedHead = "2".repeat(40);
+      seedSession({
+        diff: { phase: "loaded", loadId: 1, files },
+        selectedFilePath: files[0]?.path ?? null,
+        comments: fixtureComments(),
+        reviewDiff: { kind: "refs", base: "main", head: "feature/brush-selection" },
+        reviewOrigin: {
+          repo: { path: "/preview/fixture", name: "fixture" },
+          base: "main",
+          head: "feature/brush-selection",
+          patch: null,
+          reviewedHead,
+          pr: { host: "github.com", owner: "acme", repo: "fixture", number: 42 },
+        },
+        githubCheck: {
+          status: "checked",
+          check: {
+            kind: "compared",
+            head: reviewedHead,
+            outside: ["c0000000-0000-4000-8000-000000000001"],
+          },
+          staleBecause: null,
+        },
+      });
+      break;
+    }
+    case "comments-pr-posting":
+    case "comments-pr-head-moved": {
+      // Layer C on the same review, with a token for its owner held in main: one comment
+      // pending on GitHub (with Remove), one whose last post failed (the quiet "Not posted" note,
+      // beside its Post), and one that went out with a submitted review. The rail's foot carries
+      // Post all (1) and Open on GitHub. `-head-moved` adds the one
+      // question posting asks: the pull request moved past the reviewed commit.
+      const files = parsePatch(MULTI_STATUS_PATCH, `preview:${state}`);
+      const reviewedHead = "2".repeat(40);
+      const [first, second, third] = fixtureComments();
+      const comments: Comment[] = [
+        ...(first === undefined ? [] : [first]),
+        ...(second === undefined
+          ? []
+          : [
+              {
+                ...second,
+                postable:
+                  "Opening the file before writing the header would keep a failed open from leaving a half-written file behind.",
+              },
+            ]),
+        ...(third === undefined
+          ? []
+          : [{ ...third, postable: "Does this still hold after the block moved?" }]),
+      ];
+      useGitHubStore.setState({
+        status: {
+          tokens: [{ kind: "fineGrained", login: "you", owner: "acme", expiresAt: null }],
+          exposedBy: [],
+        },
+      });
+      seedSession({
+        diff: { phase: "loaded", loadId: 1, files },
+        selectedFilePath: files[0]?.path ?? null,
+        comments,
+        reviewDiff: { kind: "refs", base: "main", head: "feature/brush-selection" },
+        reviewOrigin: {
+          repo: { path: "/preview/fixture", name: "fixture" },
+          base: "main",
+          head: "feature/brush-selection",
+          patch: null,
+          reviewedHead,
+          pr: { host: "github.com", owner: "acme", repo: "fixture", number: 42 },
+        },
+        // A review opened from its file — the one kind that can post (`noRecord` otherwise).
+        reviewPath: "/preview/fixture.reviewer.json",
+        posting: {
+          ...NO_POSTING,
+          posted: {
+            comments: {
+              ...(first === undefined
+                ? {}
+                : { [first.id]: { state: "pending" as const, postable: null } }),
+              ...(third === undefined
+                ? {}
+                : { [third.id]: { state: "submitted" as const, postable: null } }),
+            },
+            unverified: null,
+          },
+          outcomes:
+            second === undefined
+              ? {}
+              : { [second.id]: { kind: "failed", failure: { code: "network" } } },
+          headMoved:
+            state === "comments-pr-head-moved" && second !== undefined
+              ? { head: "9".repeat(40), ids: [second.id] }
+              : null,
+        },
       });
       break;
     }
@@ -791,6 +1066,7 @@ export function applyPreviewState(): void {
           // Two commits back in `fixtureEntries`, so the doc says the branch has moved twice
           // since — the case the field exists for.
           reviewedHead: "2".repeat(40),
+          pr: null,
         },
         layers: skimLayers,
         // What the first diff load would have written (`lib/initial-folds.ts`): the harness
@@ -879,7 +1155,7 @@ export function applyPreviewState(): void {
         brush: { anchor: 2, focus: 3 },
         comments: fixtureComments(),
         layers: fixtureLayers(),
-        reviewOrigin: { ...source, patch: null, reviewedHead: null },
+        reviewOrigin: { ...source, patch: null, reviewedHead: null, pr: null },
         reviewDiff: { kind: "refs", base: source.base, head: source.head },
         reviewSubrange:
           first !== undefined &&
@@ -944,6 +1220,7 @@ export function applyPreviewState(): void {
           head: "feature/brush-selection",
           patch: null,
           reviewedHead: null,
+          pr: null,
         },
         reviewDiff: { kind: "refs", base: "main", head: "feature/brush-selection" },
       });
@@ -1046,6 +1323,7 @@ export function applyPreviewState(): void {
           head: "feature/brush-selection",
           patch: null,
           reviewedHead: null,
+          pr: null,
         },
         reviewDiff: { kind: "refs", base: "main", head: "feature/brush-selection" },
       });
@@ -1103,6 +1381,73 @@ export function applyPreviewState(): void {
       useOnboardingStore.setState({
         open: false,
         cli: { supported: true, installed: false, path: "/usr/local/bin/rvw", shadowedBy: null },
+      });
+      break;
+    }
+    case "settings": {
+      // The settings sheet over the start screen, for eyeballing a row's control. Two tokens
+      // held — a fine-grained one for an organisation with an expiry, and a classic public_repo
+      // one — so Settings ▸ GitHub shows both kinds of row.
+      seedPullRequestDialog("not-found");
+      usePullRequestStore.setState({ open: false });
+      useGitHubStore.setState({
+        status: {
+          tokens: [
+            {
+              kind: "fineGrained",
+              login: "you",
+              owner: "acme",
+              expiresAt: new Date(Date.now() + 40 * 24 * HOUR_MS).toISOString(),
+            },
+            { kind: "classic", login: "you", owner: null, expiresAt: null },
+          ],
+          exposedBy: [],
+        },
+      });
+      useSettingsStore.getState().openDialog();
+      break;
+    }
+    case "pr-dialog":
+      seedPullRequestDialog("prepared");
+      break;
+    case "pr-dialog-not-found":
+      seedPullRequestDialog("not-found");
+      break;
+    case "pr-dialog-failure":
+      seedPullRequestDialog("failure");
+      break;
+    case "pr-dialog-busy":
+      seedPullRequestDialog("busy");
+      break;
+    case "pr-dialog-inbox":
+    case "pr-dialog-inbox-limited":
+    case "pr-dialog-no-username": {
+      // The dialog as it opens, before anything is pasted: the inbox under the address — its
+      // rows; a spent search limit over the last rows it had; or, with no username in
+      // Settings, the one-line pointer there. No bridge in the browser, so the store's own
+      // refresh stands down and the seeded state is what shows.
+      seedPullRequestDialog("not-found");
+      if (state !== "pr-dialog-no-username") {
+        void useSettingsStore.getState().update({ githubUsername: "you" });
+      }
+      usePullRequestStore.setState({
+        input: "",
+        target: null,
+        checkout: { kind: "none" },
+        info: { phase: "idle" },
+        inbox:
+          state === "pr-dialog-inbox-limited"
+            ? {
+                phase: "failed",
+                login: "you",
+                rows: fixtureInbox(),
+                failure: {
+                  code: "rateLimited",
+                  resetAt: Date.now() + 7 * 60 * 1000,
+                  scope: "anonymous",
+                },
+              }
+            : { phase: "loaded", login: "you", rows: fixtureInbox(), fetchedAt: Date.now() },
       });
       break;
     }

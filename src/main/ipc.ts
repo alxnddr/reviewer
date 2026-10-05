@@ -2,9 +2,13 @@ import { IpcChannel } from "../shared/ipc";
 import { withStoredPin } from "../shared/session";
 import { cliStatus, installCli } from "./cli-install";
 import { registerGitIpcHandlers } from "./git/handlers";
+import type { GitHubClient } from "./github/client";
+import { registerGitHubIpcHandlers } from "./github/handlers";
 import { registerIpcHandler } from "./ipc-registry";
 import { hasOnboarded, markOnboarded } from "./onboarding";
 import { openInEditor } from "./open-in-editor";
+import type { PullRequestDeps } from "./pull-request/flow";
+import { registerPullRequestIpcHandlers } from "./pull-request/handlers";
 import { registerReviewIpcHandlers, type ReviewOpenDeps } from "./review/handlers";
 import { registerReviewSaveHandlers } from "./review/save";
 import { getUserSettings, setUserSettings } from "./user-settings";
@@ -15,6 +19,8 @@ export function registerIpcHandlers(
   /** Settles once restored reviews are re-pinned (`review/source.ts`). `sessions:list` answers
    * after it, so the renderer never hydrates a pin that is about to change underneath it. */
   sessionsRepinned: Promise<void>,
+  pullRequestDeps: PullRequestDeps,
+  github: GitHubClient,
 ): void {
   const { runner: gitRunner, store: sessionStore, progress: progressStore } = reviewDeps;
 
@@ -49,6 +55,13 @@ export function registerIpcHandlers(
   registerGitIpcHandlers(gitRunner);
   registerReviewIpcHandlers(reviewDeps);
   registerReviewSaveHandlers();
+  registerPullRequestIpcHandlers(pullRequestDeps);
+  registerGitHubIpcHandlers({
+    client: github,
+    sessions: () => sessionStore.list().sessions,
+    progress: progressStore,
+    settings: () => getUserSettings(),
+  });
 
   registerIpcHandler(IpcChannel.sessionsList, async () => {
     await sessionsRepinned;

@@ -7,9 +7,10 @@ import { buildContext, normalizeExitCode, EXIT_CANNOT_RUN } from "./context";
 // The interpreter named here must be `node`, not `bun`, and the reason is not preference:
 // `bun build` treats a `#!/usr/bin/env bun` entrypoint as a bun-only artifact, stamps the
 // output `// @bun`, and emits a bundle that throws inside Stricli's router under any other
-// runtime. The distributed `dist/rvw.js` must run under the Node that Electron embeds, so the
-// shebang stays `node` — which bun honors too, since `bun run cli` and `bun dist/rvw.js` name
-// the interpreter themselves.
+// runtime. The distributed `dist/rvw.js` runs under the reader's own `node` — the one on their
+// PATH, which both launchers exec (`src/main/cli-install.ts`, `scripts/install-cli.sh`); never
+// the app's binary, whose `runAsNode` fuse is off — so the shebang stays `node`, which bun honors
+// too, since `bun run cli` and `bun dist/rvw.js` name the interpreter themselves.
 
 // The single agent-facing entrypoint (`rvw`): the thin effectful shell over the Stricli
 // application and the reused review cores. Stricli scans the args, routes to a command, and

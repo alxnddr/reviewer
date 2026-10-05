@@ -1,4 +1,10 @@
-import type { BranchName, CommitSelection, DiffSelection, RepoInfo } from "../../../../shared/git";
+import type {
+  BranchName,
+  CommitSelection,
+  CommitSha,
+  DiffSelection,
+  RepoInfo,
+} from "../../../../shared/git";
 import type {
   Comment,
   ReviewDiff,
@@ -18,6 +24,8 @@ import {
   type PendingScroll,
 } from "../../lib/scroll";
 import type { BranchesState, DiffState, LogState } from "../../lib/load-state";
+import type { GitHubCheckState } from "../../lib/github-links";
+import type { PostingState } from "../../lib/github-posting";
 import type { ReviewState } from "./state";
 
 // The shape every action in this directory is about, and the two combinators every one of
@@ -112,6 +120,36 @@ export type SessionSlice = {
    * curated review still exports to its authored `base..head` after navigation.
    * Null for a plain repo session (nothing to export as a review). */
   reviewOrigin: ReviewOrigin | null;
+  /** The pull request's head as last fetched into this review's repository — the sha
+   * the pull request's ref (`pullRequestRef`) names there — or null: a review that names no pull request, one whose
+   * repository has never fetched it, or one not yet derived. What Copy & open on GitHub
+   * compares with `reviewedHead` to warn that the pull request has moved on
+   * (`lib/github-links.ts`'s `prHeadDrift`).
+   *
+   * Derived, never persisted, the way `log` is: read when the session first derives
+   * (`deriveSession`) and again after Review Pull Request… fetches (`refreshPullRequestHeads`),
+   * which is the only thing in the app that moves the ref. Not re-read on a timer or a focus,
+   * because nothing else changes it — a `git fetch` the reader runs by hand does not touch
+   * `refs/rvw/`. */
+  prHead: CommitSha | null;
+  /** What GitHub said about the review's pull request (B4): its head, and — at the reviewed
+   * commit — which comments its own diff leaves out, or why it could not be asked. Null until it
+   * answers, and for a review that is not checked (`checkGitHubDiff` says which). Read by the
+   * postable block's note and Copy & open on GitHub's tooltip (`lib/github-links.ts`).
+   *
+   * Derived, never persisted, like `prHead`: asked when the session first derives and again
+   * after Review Pull Request… fetches (`refreshPullRequestHeads`), and never on a timer, a focus
+   * or a tab switch — the unauthenticated limit is 60 requests an hour per network. Asked with
+   * the reader's token for the owner when main holds one (a private repository then answers),
+   * and asked again when one is added (`recheckWithToken`). */
+  githubCheck: GitHubCheckState | null;
+  /** Posting this review's comments to its pull request as pending review comments (Layer C):
+   * where each comment stands on GitHub as main last said, the last post's outcome per comment, and the head-moved question while it is open
+   * (`lib/github-posting.ts` has the shape and the rules).
+   *
+   * Derived and ephemeral, never persisted: what was posted is main's record (the review's
+   * progress file), asked for when the session derives (`refreshPosted`). */
+  posting: PostingState;
   /** The soloed layer, or null for the full diff. Derived view state: it
    * never persists (absent from `persistedSession`) and its setters schedule no
    * write-back, so layer navigation is additive over the session, never a

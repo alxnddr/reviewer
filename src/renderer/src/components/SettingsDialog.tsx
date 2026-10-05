@@ -3,6 +3,7 @@ import { Dialog as DialogPrimitive } from "@base-ui/react/dialog";
 import { SearchIcon } from "lucide-react";
 import { Dialog, DialogContent } from "@/components/ui/dialog";
 import { InputGroup, InputGroupAddon, InputGroupInput } from "@/components/ui/input-group";
+import { GitHubTokens } from "@/components/settings/GitHubTokens";
 import { SettingRow } from "@/components/settings/SettingRow";
 import { listMonospaceFonts } from "@/lib/local-fonts";
 import {
@@ -13,6 +14,7 @@ import {
   type SettingGroupId,
 } from "@/lib/settings-catalog";
 import { cn } from "@/lib/utils";
+import { useGitHubStore } from "@/stores/github";
 import { useSettingsStore } from "@/stores/settings";
 
 // The app's settings, in one sheet: a search box, the sections as tabs down the left, and the
@@ -30,8 +32,10 @@ import { useSettingsStore } from "@/stores/settings";
 // diff does repaint live behind the overlay as a font size is committed, which is the one
 // reason the overlay is as light as it is.
 //
-// Every row is `lib/settings-catalog`; nothing about a setting is decided in here. The store
-// is read directly (`useSettingsStore`), the way a rail section reads the review store: this
+// Every row is `lib/settings-catalog`; nothing about a setting is decided in here. The one block
+// that is not a row is GitHub's tokens (`settings/GitHubTokens.tsx`), drawn under that section's
+// rows: a token is not a setting and never touches the settings store. The tokens' status is
+// re-asked of main on each opening. The store is read directly (`useSettingsStore`), the way a rail section reads the review store: this
 // dialog is mounted once and names its own state, and the rows take props.
 
 export function SettingsDialog(): ReactElement {
@@ -46,6 +50,7 @@ export function SettingsDialog(): ReactElement {
   const [active, setActive] = useState<SettingGroupId>(SETTING_GROUPS[0].id);
   const [fonts, setFonts] = useState<readonly string[]>([resolved.diffFontFamily]);
 
+  const loadGitHub = useGitHubStore((state) => state.load);
   const sections = useMemo(() => settingSections(filterSettings(SETTING_ENTRIES, query)), [query]);
   const current = sections.find((section) => section.id === active) ?? sections[0] ?? null;
 
@@ -57,6 +62,12 @@ export function SettingsDialog(): ReactElement {
       setActive(SETTING_GROUPS[0].id);
     }
   }, [open]);
+
+  useEffect(() => {
+    if (open) {
+      void loadGitHub();
+    }
+  }, [open, loadGitHub]);
 
   // The installed fonts are read on each opening, not once: a font installed while the app is
   // running is exactly the one the reader is opening this sheet to pick. The stale-answer
@@ -167,6 +178,7 @@ export function SettingsDialog(): ReactElement {
                     />
                   ))}
                 </div>
+                {current.id === "github" && <GitHubTokens />}
               </section>
             )}
           </div>

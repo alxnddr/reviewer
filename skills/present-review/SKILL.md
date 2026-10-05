@@ -46,9 +46,9 @@ One JSON object. You author exactly three keys: `overview`, `comments`, `layers`
 }
 ```
 
-In a comment, `severity`, `tag` and `evidence` are optional. `rvw schema --json` is the authority on field rules; read it rather than guessing.
+In a comment, `severity`, `tag`, `evidence` and `postable` are optional. `rvw schema --json` is the authority on field rules; read it rather than guessing.
 
-Every prose field (the overview body, a layer description, a comment's body and evidence) is markdown: CommonMark plus GFM. A link to a path is a file reference and must name a file in the diff, or the gate refuses the draft. An `https://` link opens in the browser.
+Every prose field (the overview body, a layer description, a comment's body, evidence and postable) is markdown: CommonMark plus GFM. A link to a path is a file reference. In the overview body, a layer description and a comment's `postable`, the gate checks every reference: it must name a file in the diff, or the gate refuses the draft. Write references inline, `[label](path)`; the gate refuses a reference-style definition (`[label]: path`) in those fields. An `https://` link opens in the browser.
 
 A reference can name lines too: `[the caller](src/worker.ts:88)`, a range with `[…](src/worker.ts:88-91)`, and the pre-change side with `[…](src/worker.ts:88-91@deletions)` (additions is the default). The gate places that range against the diff exactly as it places a comment anchor, and the reader lands on the line. Any other suffix is refused.
 
@@ -64,6 +64,7 @@ Each part of a review has one job and a length. A part that runs past its length
 | Range `note` | What one file contributes to its chapter | one line, at most 120 characters |
 | Comment `body` | One finding: what breaks, and on what | a bold claim plus 20–80 words |
 | Comment `evidence` | What proves the finding | the command and the few output lines that show it |
+| Comment `postable` | One finding, for the change's author | 20–100 words; a fenced fix snippet is allowed |
 
 Pseudocode, a trace table or a diagram sits outside these counts; its own section says when one earns its place.
 
@@ -119,11 +120,17 @@ Anchor to the smallest span that carries the point; `side` is `additions` or `de
 - One comment per issue. Anchor it to the clearest instance and name the other sites as references (`[the same check in the worker](src/worker.ts:88-91)`) instead of repeating the paragraph. A finding that spans two places, such as where a value is produced and where it is misused, is also one comment: one end is the anchor and the other is a reference.
 - A finding in code this change did not touch is still a finding, and the reader must not blame the change for it. Anchor it to the nearest changed or context line in the same file and tag it `pre-existing`. Any line inside a hunk places, context lines included.
 
-Three optional fields sharpen a comment. Absent is a real answer for each of them.
+Four optional fields sharpen a comment. Absent is a real answer for each of them.
 
 - **`tag`** is a short free-form label, shown as a pill. Use one only when it changes how the reader reads the comment; a tag on every comment is noise. The app knows three: `pre-existing`, `decision` (a call the reader has to make, such as a threshold, a default, a name or a dropped case; nothing is broken yet) and `question` (you could not tell from the diff, and the answer decides whether this is a finding). Anything else is your own vocabulary and is printed as written. The label goes here, never in bold at the head of the body, which belongs to the claim.
 - **`severity`** is `blocking`, `important` or `minor`, and only if your review already ranks findings. P0, critical, must-fix → `blocking`; P1, major, high → `important`; P2 and below, nit, info → `minor`. Unset is honest, and every comment at one level says the same as none. Severity never reorders the review; the order is yours.
 - **`evidence`** is what you ran or read to confirm the finding. It renders folded under the body, so the body stays the sentence and the receipts wait for a reader who doubts you.
+- **`postable`** is the comment as it would be posted to the author of the change. When the review is of someone else's change (a pull request, which you emit with `--pr`, or the user asked for postable comments), write it on every comment the reader might post. When you review the user's own branch, leave it out, because nobody posts those. The app shows it on its own under the finding, and copies or posts exactly it, never `body`.
+  - Write it to the author, the way a careful human reviewer writes on a pull request: the problem, why it matters, and what to do, in the second person or impersonally. Make it courteous and specific. It is not a copy of `body`, and it never mentions how the finding was reached: no agent, no review, no tour, no evidence, no "I ran".
+  - If the user gave you a writing guide or tone rules for comments to authors, follow them for `postable`, ahead of the advice in this bullet.
+  - Write it now or not at all. The reader can refine or remove a `postable` in the app, but cannot add one, so a comment without it is a comment they will not post.
+  - A file reference such as `[the caller](src/worker.ts:88-91)` is fine. The gate checks it like any other reference, and the app rewrites it into a form that works where the comment is posted.
+  - On a `question`-tagged comment, `postable` asks the author the question.
 
 ## Layers
 
@@ -161,6 +168,8 @@ JSON
 If your shell refuses the heredoc, write the draft to a file inside the working directory and pass `--draft <file>`. `--open` is the default; pass `--no-open` to write without opening. Run `rvw <verb> --help` for flags.
 
 The range is auto-detected (the cwd's repo, the current branch, the fork point against its upstream or the default branch) and echoed back so you can check it. Pass `--repo`, `--base` or `--head` only to override, and name a branch when a branch is what you mean: a local branch is recorded as written and the review follows it, while a tag, `HEAD`, `main~3`, `origin/main` or a sha is pinned to the commit it resolved to. Any revision git understands is accepted.
+
+When the review is of a pull request, pass `--pr` with its URL, `owner/repo#123` or its number (a bare number takes the repository from the `origin` remote, so when `origin` is a fork, pass `owner/repo#123` or the URL), and write `postable` on each comment (see Comments). The app then links every comment to its lines on the pull request.
 
 Without `--out` the artifact lands in `~/.rvw/reviews/`, where the app's Recent Reviews picker (⇧⌘R) finds it. Pass `--out` only when someone asked for the file somewhere specific.
 

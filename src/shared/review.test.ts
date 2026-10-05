@@ -11,7 +11,9 @@ import {
   ReviewArtifact,
   ReviewComment,
   ReviewLayerRange,
+  ReviewOrigin,
   ReviewOverview,
+  reviewOriginFor,
   type ReviewStamp,
 } from "./review";
 
@@ -425,6 +427,7 @@ describe("pinReview", () => {
     head: SHA_40,
     patch: PATCH,
     reviewedHead: null,
+    pr: null,
   };
   const refsOnly = { ...withPatch, patch: null };
   const REFS = { kind: "refs", base: "main", head: SHA_40 };
@@ -532,9 +535,16 @@ describe("the comment vocabulary", () => {
     ]);
   });
 
-  it("refuses an empty tag or evidence — an absent key is how you say you have none", () => {
+  it("refuses an empty tag, evidence or postable — an absent key is how you say you have none", () => {
     expect(ReviewComment.safeParse({ ...anchor, body: "why", tag: "" }).success).toBe(false);
     expect(ReviewComment.safeParse({ ...anchor, body: "why", evidence: "" }).success).toBe(false);
+    expect(ReviewComment.safeParse({ ...anchor, body: "why", postable: "" }).success).toBe(false);
+  });
+
+  it("parses postable beside the body, and leaves it absent on a comment that has none", () => {
+    const parsed = ReviewComment.parse({ ...anchor, body: "why", postable: "for the author" });
+    expect(parsed.postable).toBe("for the author");
+    expect("postable" in ReviewComment.parse({ ...anchor, body: "why" })).toBe(false);
   });
 
   it("keeps the three off ReviewAnchor, which the validator and coverage report on", () => {
@@ -646,5 +656,51 @@ describe("the overview verdict", () => {
     // key no schema will ever know, so the claim stays true once `verdict` is old news.
     const parsed = ReviewOverview.parse({ ...overview, fromTheFuture: "a later field" });
     expect("fromTheFuture" in parsed).toBe(false);
+  });
+});
+
+describe("the pull request a review is of", () => {
+  const PR = { host: "github.com", owner: "acme", repo: "widgets", number: 42 } as const;
+
+  it("parses on the artifact and reaches the imported review and its origin verbatim", () => {
+    const result = importReview(JSON.stringify(validArtifact({ pr: PR })), fixedStamp());
+    expect(result.ok).toBe(true);
+    if (!result.ok) {
+      return;
+    }
+    expect(result.review.pr).toEqual(PR);
+    // The origin is what the session keeps of the artifact, and the card's GitHub link and
+    // the export both read the pull request from there.
+    expect(reviewOriginFor(result.review).pr).toEqual(PR);
+  });
+
+  it("models an artifact that names none as null, never undefined", () => {
+    const result = importReview(JSON.stringify(validArtifact()), fixedStamp());
+    expect(result.ok && result.review.pr).toBe(null);
+  });
+
+  it("refuses a host it does not know, a bad owner, and a number that is not a PR's", () => {
+    for (const pr of [
+      { ...PR, host: "gitlab.com" },
+      { ...PR, owner: "../etc" },
+      { ...PR, repo: ".." },
+      { ...PR, number: 0 },
+      { ...PR, number: 1.5 },
+    ]) {
+      expect(ReviewArtifact.safeParse(validArtifact({ pr })).success).toBe(false);
+    }
+  });
+
+  it("parses a persisted origin from before the field, as one that names no pull request", () => {
+    // `.default(null)`, the `reviewedHead` precedent: a session written by an older build has
+    // no `pr` key, and must still parse strictly rather than lose its whole origin.
+    const origin = ReviewOrigin.parse({
+      repo: { path: "/repos/app", name: "app" },
+      base: "main",
+      head: SHA_40,
+      patch: null,
+    });
+    expect(origin.pr).toBe(null);
+    expect(origin.reviewedHead).toBe(null);
   });
 });

@@ -1,15 +1,19 @@
 import { rmSync } from "node:fs";
 import { join } from "node:path";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import {
   BULK_COVERABLE_LINES,
   bulkyRepo,
   installBundle,
   rvw,
+  SPAWN_SUITE_TIMEOUT_MS,
   type ForeignRepo,
   type InstalledCli,
 } from "./fixtures";
 import { capturePatch } from "./git";
+
+// Real processes, so not the 5s default — see `SPAWN_SUITE_TIMEOUT_MS` for why and how long.
+vi.setConfig({ testTimeout: SPAWN_SUITE_TIMEOUT_MS, hookTimeout: SPAWN_SUITE_TIMEOUT_MS });
 
 // Everything a verb writes has to survive the pipe. This is the one property the rest of the
 // CLI suite cannot check: on macOS — the only platform Reviewer ships for — stdout to a *pipe*
@@ -37,7 +41,7 @@ beforeAll(() => {
   cli = installBundle();
   bulky = bulkyRepo();
   roots.push(cli.root, bulky.path);
-}, 60_000);
+});
 
 afterAll(() => {
   for (const root of roots) {

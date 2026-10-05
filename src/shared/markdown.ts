@@ -18,7 +18,7 @@ import remarkParse from "remark-parse";
 import { unified, type Plugin, type PluggableList } from "unified";
 import { visit } from "unist-util-visit";
 import { toString } from "mdast-util-to-string";
-import type { Nodes, Root } from "mdast";
+import type { Definition, Link, Nodes, Root } from "mdast";
 import type { ReviewSide } from "./review";
 
 /** The grammar every surface reads: CommonMark plus GFM — tables, task lists,
@@ -119,31 +119,115 @@ export function readLinkTarget(url: string): LinkTarget {
   return isExternalUrl(url) ? { kind: "external" } : { kind: "malformed" };
 }
 
+/** Why a link that meant to be a reference is not one:
+ *
+ * - `suffix` — the target reached for the line grammar and missed (`src/app.ts:abc`).
+ * - `definition` — a reference-style definition (`[r]: src/app.ts:12`) whose target is a
+ *   path. Only an inline `[label](path)` is a reference this app reads: the gate checks
+ *   inline links, and the postable rewrite replaces them by their offsets, so a path behind
+ *   `[label][r]`, `[label][]` or a bare `[label]` would slip past both and be posted as a
+ *   repo-relative link that breaks on the code host. Refusing the form is cheaper than
+ *   teaching two more walkers to resolve identifiers, and the fix — write it inline — is one
+ *   an author makes in seconds.
+ *
+ * A closed pair, so the gate's sentence for each is a compile-time obligation. */
+export type MalformedForm = "suffix" | "definition";
+
 /** A link that meant to be a reference and is not one yet — reported with the target as
- * written, since the thing to fix is the text inside the parentheses. */
-export type MalformedReference = { label: string; url: string };
+ * written, since the thing to fix is the text inside the parentheses (or after the colon,
+ * for a definition). */
+export type MalformedReference = { label: string; url: string; why: MalformedForm };
+
+/** Every link and link definition in a body, in document order, with the one reading of its
+ * target — the walk both callers below go through, so the gate's references and the ones the
+ * postable text rewrites are the same links read the same way. */
+function visitTargets(
+  text: string,
+  onTarget: (node: Link | Definition, target: LinkTarget) => void,
+): void {
+  visit(parseMarkdown(text), ["link", "definition"], (node) => {
+    if (node.type === "link" || node.type === "definition") {
+      onTarget(node, readLinkTarget(node.url));
+    }
+  });
+}
 
 /** Every reference in a body, in document order, and every link that tried to be one and
  * missed — what `rvw check` walks to enforce that a reference names a file present in the
  * diff, and a line present in that file, since one that does not renders inert in the app.
- * External links are not references and are left alone. One walk for both answers: they are
- * two outcomes of the same reading, and a caller that reported only the first would pass a
- * draft whose chips are dead. */
+ * External links are not references and are left alone, and so is a definition of one. One
+ * walk for both answers: they are two outcomes of the same reading, and a caller that
+ * reported only the first would pass a draft whose chips are dead. */
 export function proseReferences(text: string): {
   references: FileReference[];
   malformed: MalformedReference[];
 } {
   const references: FileReference[] = [];
   const malformed: MalformedReference[] = [];
-  visit(parseMarkdown(text), "link", (node) => {
-    const target = readLinkTarget(node.url);
-    if (target.kind === "reference") {
+  visitTargets(text, (node, target) => {
+    if (node.type === "definition") {
+      // A path behind a definition, readable or not, is refused as a form (`MalformedForm`).
+      if (target.kind !== "external") {
+        malformed.push({ label: node.label ?? node.identifier, url: node.url, why: "definition" });
+      }
+    } else if (target.kind === "reference") {
       references.push({ label: toString(node), path: target.path, span: target.span });
     } else if (target.kind === "malformed") {
-      malformed.push({ label: toString(node), url: node.url });
+      malformed.push({ label: toString(node), url: node.url, why: "suffix" });
     }
   });
   return { references, malformed };
+}
+
+/** A reference together with where its link sits in the source: the half-open
+ * `[start, end)` of the whole `[label](target)`, and the label as its author wrote it —
+ * markup included, so `` [`retry()`](src/a.ts:12) `` keeps its code span when the link
+ * around it is rewritten. `title` is the link's optional `"title"`, null when it has none. */
+export type PlacedReference = FileReference & {
+  start: number;
+  end: number;
+  labelSource: string;
+  title: string | null;
+};
+
+/** Every reference in a body with its place in the source, for a caller that rewrites the
+ * text rather than reading it — the postable comment, whose repo-relative links would break
+ * once posted (`shared/postable-comment.ts`). Offsets rather than a re-serialized tree: the
+ * rewrite has to leave every other byte the author wrote alone, and remark-stringify would
+ * re-spell the whole document (list markers, emphasis, escapes) on the way back out.
+ *
+ * Positions come from the parse, so a link-shaped run inside a code span or a fence is never
+ * here — it was never a link. Malformed targets and reference-style definitions are left
+ * out: there is no location to rewrite them to, and the gate has already refused both in an
+ * authored draft. */
+export function placedReferences(text: string): PlacedReference[] {
+  const placed: PlacedReference[] = [];
+  visitTargets(text, (node, target) => {
+    const start = node.position?.start.offset;
+    const end = node.position?.end.offset;
+    // A definition is never placed: the form is refused (`MalformedForm`), so there is no
+    // second spelling of a reference for the rewrite to know about.
+    if (
+      node.type !== "link" ||
+      target.kind !== "reference" ||
+      start === undefined ||
+      end === undefined
+    ) {
+      return;
+    }
+    const first = node.children.at(0)?.position?.start.offset;
+    const last = node.children.at(-1)?.position?.end.offset;
+    placed.push({
+      label: toString(node),
+      path: target.path,
+      span: target.span,
+      start,
+      end,
+      labelSource: first === undefined || last === undefined ? "" : text.slice(first, last),
+      title: node.title ?? null,
+    });
+  });
+  return placed;
 }
 
 /** Promote a `` `code` `` span that names a file in the diff to a real link, so the one

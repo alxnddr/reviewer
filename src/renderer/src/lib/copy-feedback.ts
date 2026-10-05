@@ -1,11 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
-// The copied check, in one place. Four controls in the app put something on the clipboard —
+// The copied check, in one place. Six controls in the app put something on the clipboard —
 // a file's path on its diff header, the agent prompt on the start screen, a comment as a
-// prompt, and every comment as a prompt — and each of them answers the same way: the copy
-// glyph becomes a check for a moment and then goes back. That is the only feedback any of
-// them gets, which is also what makes it load-bearing: a failed write shows nothing, so a
-// check means it happened and its absence means it did not.
+// prompt, every comment as a prompt, a comment's text for the change's author, and that same
+// text on its way to the pull request (Copy & open on GitHub) — and each of them answers the
+// same way: the copy glyph becomes a check for a moment and then goes back. That is the only
+// feedback any of them gets, which is also what makes it load-bearing: a failed write shows
+// nothing, so a check means it happened and its absence means it did not.
 //
 // It was two copies of the same effect and two definitions of the same duration before the
 // prompt copies would have made it four.

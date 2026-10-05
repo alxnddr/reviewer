@@ -1,14 +1,17 @@
 import type { EditorChoice, ThemeId } from "../../../shared/contracts";
 import { EDITORS } from "../../../shared/editors";
+import { GitHubOwner } from "../../../shared/pull-request";
 import {
   DIFF_FONT_SIZE,
   DIFF_LINE_HEIGHT,
   DIFF_TAB_SIZE,
   type NumberRange,
+  PROMPT_TEMPLATE_MAX,
   type Settings,
   type SettingsPatch,
 } from "../../../shared/settings";
 import { THEMES } from "../../../shared/themes";
+import { PROMPT_PLACEHOLDERS } from "./pull-request-prompt";
 
 // What the settings dialog shows, as data: every setting's row — its group, label, the sentence
 // under it, and which control edits it. The dialog renders this and nothing else, so adding a
@@ -26,6 +29,9 @@ export const SETTING_GROUPS = [
   { id: "appearance", title: "Appearance" },
   { id: "diff", title: "Diff" },
   { id: "editor", title: "Editor" },
+  { id: "comments", title: "Comments" },
+  { id: "pullRequests", title: "Pull requests" },
+  { id: "github", title: "GitHub" },
 ] as const;
 export type SettingGroupId = (typeof SETTING_GROUPS)[number]["id"];
 
@@ -74,13 +80,46 @@ export type NumberEntry = Row<KeysOf<number>> & {
  * the dialog opens. */
 export type FontEntry = Row<KeysOf<string>> & { readonly kind: "font" };
 export type BooleanEntry = Row<KeysOf<boolean>> & { readonly kind: "boolean" };
+/** Free text over several lines — a prompt template. Drawn under its sentence rather than
+ * beside it, because a paragraph does not fit the column the other controls sit in.
+ * `placeholders` are the tokens the text may carry, shown with the field so the reader does
+ * not have to remember them. */
+export type TextEntry = Row<KeysOf<string>> & {
+  readonly kind: "text";
+  readonly placeholders: readonly string[];
+  /** The schema's own cap, so the field cannot take text the schema would read back as "never
+   * chosen" — a reset nobody asked for. */
+  readonly maxLength: number;
+};
+
+/** One line of text the schema holds to a format — a login. Drawn beside its sentence like the
+ * short controls, and committed the way the number field is (blur, ⏎). An empty field is the
+ * row's reset; a value `accept` refuses is not committed, and the field says why under it rather
+ * than storing something the schema would read back as never chosen. */
+export type LineEntry = Row<KeysOf<string>> & {
+  readonly kind: "line";
+  readonly placeholder: string;
+  /** The value to store for what was typed, or null when the schema would refuse it. */
+  readonly accept: (text: string) => string | null;
+  /** The sentence under the field while `accept` refuses what is in it. */
+  readonly invalid: string;
+};
 
 export type SettingEntry =
   | SelectEntry<"theme">
   | SelectEntry<"editor">
   | NumberEntry
   | FontEntry
-  | BooleanEntry;
+  | BooleanEntry
+  | TextEntry
+  | LineEntry;
+
+/** A GitHub login as a reader types it: trimmed, with the `@` a mention carries taken off, then
+ * held to the schema's own charset (`GitHubOwner`) — the parse the stored value goes through. */
+export function acceptGitHubLogin(text: string): string | null {
+  const parsed = GitHubOwner.safeParse(text.trim().replace(/^@/u, ""));
+  return parsed.success ? parsed.data : null;
+}
 
 const THEME_OPTIONS: readonly SelectOption<ThemeId>[] = THEMES.map((theme) => ({
   value: theme.id,
@@ -172,6 +211,35 @@ export const SETTING_ENTRIES: readonly SettingEntry[] = [
     description:
       "Where a file goes when you open it from the diff: the button beside its name, the one on a comment, or E. Needs that editor installed, and a review that reads your checkout rather than its own copy of the diff.",
     options: EDITOR_OPTIONS,
+  },
+  {
+    kind: "boolean",
+    key: "postableIncludesEvidence",
+    group: "comments",
+    label: "Include evidence for the author",
+    description:
+      "Add the evidence, folded, to comments you copy or post for the author. Off by default: evidence is written for you.",
+  },
+  {
+    kind: "line",
+    key: "githubUsername",
+    group: "github",
+    label: "GitHub username",
+    description:
+      "Review Pull Request… lists the pull requests that request your review. Public repositories only.",
+    placeholder: "octocat",
+    accept: acceptGitHubLogin,
+    invalid: "Not a GitHub username: letters, digits, hyphens and underscores.",
+  },
+  {
+    kind: "text",
+    key: "pullRequestPrompt",
+    group: "pullRequests",
+    label: "Prompt for your agent",
+    description:
+      "Review Pull Request… copies this when the worktree is ready. Paste it into your agent. {pr} is the pull request's URL, {worktree} the folder, {base} the base branch, {head} the commit. The folder path has a space in it, so quote {worktree} in shell commands.",
+    placeholders: PROMPT_PLACEHOLDERS,
+    maxLength: PROMPT_TEMPLATE_MAX,
   },
 ];
 

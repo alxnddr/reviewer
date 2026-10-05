@@ -1,7 +1,9 @@
+import { spawnSync } from "node:child_process";
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
-import { dirname, join, resolve } from "node:path";
+import { dirname, join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import asar from "@electron/asar";
+import { FuseV1Options, getCurrentFuseWire } from "@electron/fuses";
 
 // Asserts on the *packaged* app — what electron-builder actually produced, not what
 // `electron-builder.yml` says it should. Run it after `electron-builder --mac --dir`:
@@ -14,9 +16,20 @@ import asar from "@electron/asar";
 // that makes it runnable. Both are properties of the artifact, so only the artifact can
 // disprove them.
 //
-// Two halves, because the app has two: `app.asar` is the allowlist from `files:`, and the
-// `Contents/Resources` tree beside it is the `extraResources` copy list — the CLI never enters
-// the archive, so listing the asar alone would say nothing about whether `rvw` shipped.
+// Three parts. Two because the app's contents have two halves: `app.asar` is the allowlist from
+// `files:`, and the `Contents/Resources` tree beside it is the `extraResources` copy list — the
+// CLI never enters the archive, so listing the asar alone would say nothing about whether `rvw`
+// shipped. The third is the Electron binary itself: the `electronFuses:` that close the ways to
+// run code as Reviewer other than its own asar, and the signature flipping them invalidates.
+// Those are bytes in a Mach-O, invisible from the yaml and from every test — a renamed option is
+// silently ignored and an app with a broken signature does not launch.
+//
+// An explicit path checks that `.app` instead of the one under dist/:
+//
+//   node scripts/check-package.mjs /tmp/Reviewer.app
+//
+// which is how a check that is supposed to fail can be shown to: copy the build, break the copy
+// (flip a fuse back with @electron/fuses' `flipFuses`), and point this at it.
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const DIST = join(REPO_ROOT, "dist");
@@ -48,7 +61,11 @@ function packagedApp() {
   return apps[0];
 }
 
-const app = packagedApp();
+const app = process.argv[2] === undefined ? packagedApp() : resolve(process.argv[2]);
+if (!existsSync(join(app, "Contents", "Resources", "app.asar"))) {
+  console.error(`${app} is not a packaged Reviewer.app (no Contents/Resources/app.asar)`);
+  process.exit(1);
+}
 const resources = join(app, "Contents", "Resources");
 const problems = [];
 const checked = [];
@@ -135,7 +152,90 @@ if (manifest !== null) {
   }
 }
 
-console.log(`\nPackaged app — ${app.slice(REPO_ROOT.length + 1)}`);
+// --- The Electron binary: fuses -----------------------------------------------------------
+// What `electronFuses:` in electron-builder.yml asks for, by @electron/fuses' own names so the
+// index into the wire comes from the library rather than a number copied here. The yaml says why
+// each is set; this says only that the packaged binary agrees. Read programmatically, not by
+// parsing `electron-fuses read`: Electron's wire is longer than the enum this @electron/fuses
+// knows (43 has a ninth fuse), and the CLI prints that one as "undefined is Enabled".
+const FUSE_OFF = 48; // ASCII "0"
+const FUSE_ON = 49; // ASCII "1"
+const REQUIRED_FUSES = [
+  ["RunAsNode", false],
+  ["EnableNodeOptionsEnvironmentVariable", false],
+  ["EnableNodeCliInspectArguments", false],
+  ["OnlyLoadAppFromAsar", true],
+  ["EnableEmbeddedAsarIntegrityValidation", true],
+];
+
+/** One fuse's reported state in words — a byte that is neither "0" nor "1" (114, "removed" by
+ * Electron; or absent past the end of the wire) is named as such rather than read as off. */
+function fuseState(byte) {
+  if (byte === FUSE_ON) return "on";
+  if (byte === FUSE_OFF) return "off";
+  return byte === undefined ? "absent from the wire" : `in state ${byte}, neither on nor off`;
+}
+
+// getCurrentFuseWire reads the first wire in the Electron Framework binary. electron-builder
+// builds one arch per `.app` here (mac-arm64); a universal build carries a second slice it
+// would not look at.
+let wire = null;
+try {
+  wire = await getCurrentFuseWire(app);
+} catch (error) {
+  problems.push(
+    `could not read the Electron fuse wire: ${error instanceof Error ? error.message : error}`,
+  );
+}
+if (wire !== null && wire.version !== "1") {
+  problems.push(`the Electron fuse wire is version ${wire.version}; this check reads version 1`);
+} else if (wire !== null) {
+  const wrong = [];
+  for (const [name, want] of REQUIRED_FUSES) {
+    const index = FuseV1Options[name];
+    if (index === undefined) {
+      wrong.push(`${name} is not a fuse @electron/fuses knows`);
+      continue;
+    }
+    const got = fuseState(wire[index]);
+    if (got !== (want ? "on" : "off")) {
+      wrong.push(`${name} is ${got}, want ${want ? "on" : "off"}`);
+    }
+  }
+  if (wrong.length > 0) {
+    problems.push(
+      `Electron fuses are not what electron-builder.yml's electronFuses: asks for — ` +
+        wrong.join("; "),
+    );
+  } else {
+    checked.push(
+      `Electron fuses: ${REQUIRED_FUSES.map(([name, want]) => `${name} ${want ? "on" : "off"}`).join(", ")}`,
+    );
+  }
+}
+
+// --- The Electron binary: signature -------------------------------------------------------
+// Flipping a fuse edits the Electron Framework after the linker signed it ad hoc. With no
+// signing identity electron-builder does not re-sign, so unless `resetAdHocDarwinSignature`
+// re-signs it the bundle's seal no longer matches and `open` will not launch it — a build that
+// passes everything above and cannot start. `--deep` because the edited binary is nested code.
+const codesign = spawnSync("/usr/bin/codesign", ["--verify", "--deep", "--strict", app], {
+  encoding: "utf8",
+});
+if (codesign.error !== undefined) {
+  problems.push(`could not run codesign: ${codesign.error.message}`);
+} else if (codesign.status === 0) {
+  checked.push("codesign --verify --deep --strict accepts the bundle's signature");
+} else {
+  problems.push(
+    `codesign --verify rejects the bundle (exit ${codesign.status}) — macOS will not launch it: ` +
+      codesign.stderr.trim().replaceAll("\n", " / "),
+  );
+}
+
+// Repo-relative for the usual dist/ build, absolute for an explicit path outside the repo.
+const shown = app.startsWith(REPO_ROOT + sep) ? app.slice(REPO_ROOT.length + 1) : app;
+console.log(`\nPackaged app — ${shown}`);
 for (const line of checked) {
   console.log(`  ✓ ${line}`);
 }

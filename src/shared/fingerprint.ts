@@ -45,7 +45,10 @@ export type FingerprintedComment = Pick<
  *
  * **What it deliberately leaves out:** `tag`, `severity` and `evidence`. Those are the
  * author's labels on the same finding; a re-labelled comment is not a new finding, and
- * hashing them would drop the reader's mark every time an author adjusts a pill. The
+ * hashing them would drop the reader's mark every time an author adjusts a pill. `postable`
+ * is out for the same reason from the other side: it is the same finding worded for the
+ * change's author, and the reader rewrites it in the app as part of deciding to post it —
+ * an act that must not unmark the comment it is about. The
  * app-assigned `id` is out for the opposite reason — it is what this exists to replace.
  *
  * **What breaks it, and this is the property callers will be surprised by:** any edit to

@@ -128,6 +128,8 @@ const SHORTCUTS = {
   "repo.open": { group: "windows", keys: ["⌘O"], label: "Open a repository" },
   "review.open": { group: "windows", keys: ["⇧⌘O"], label: "Open a review" },
   "recents.open": { group: "windows", keys: ["⇧⌘R"], label: "Recent reviews" },
+  // A menu accelerator like its neighbours, and the dialog's one way in besides File.
+  "pr.review": { group: "windows", keys: ["⇧⌘P"], label: "Review a pull request" },
   "settings.open": { group: "windows", keys: ["⌘,"], label: "Settings" },
   // A menu accelerator, like the four rows above it and unlike the reading keys: putting the
   // rail away is something a reader wants *while* typing a comment, which is the one moment

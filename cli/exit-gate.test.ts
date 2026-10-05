@@ -1,6 +1,6 @@
 import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import {
   pinReview,
   ReviewArtifact,
@@ -18,11 +18,15 @@ import type { CheckReport } from "./commands/check";
 import {
   installBundle,
   rvw,
+  SPAWN_SUITE_TIMEOUT_MS,
   walkthroughRepo,
   type ForeignRepo,
   type InstalledCli,
   type RvwResult,
 } from "./fixtures";
+
+// Real processes, so not the 5s default — see `SPAWN_SUITE_TIMEOUT_MS` for why and how long.
+vi.setConfig({ testTimeout: SPAWN_SUITE_TIMEOUT_MS, hookTimeout: SPAWN_SUITE_TIMEOUT_MS });
 
 // The exit gate. What is proven here is the composed claim: an agent, with nothing but the
 // distributed `rvw` bundle, presents a **complete** and **valid** review of a repo that is not
@@ -124,7 +128,7 @@ beforeAll(() => {
   expect(existsSync(cli.bundle)).toBe(true);
   expect(existsSync(join(cli.root, "node_modules"))).toBe(false);
   expect(existsSync(join(repo.path, "node_modules"))).toBe(false);
-}, 60_000);
+});
 
 afterAll(() => {
   rmSync(cli.root, { recursive: true, force: true });
@@ -195,7 +199,7 @@ function stamp(): ReviewStamp {
   return { newId: () => `id-${(n += 1)}` };
 }
 
-const UI: CommentUiState = { editingId: null, draft: null };
+const UI: CommentUiState = { editing: null, draft: null };
 
 /** Where the app's render path put a comment: `lineNumber` is the placed line (0 = pinned to the
  * file header) and `outdated` is the resolver verdict CodeView renders. */
@@ -502,5 +506,30 @@ describe("exit gate: the agent's toolchain, end to end in a foreign repo", () =>
     // Layer order is reading order — the app re-sorts nothing, so the walkthrough steps
     // in the sequence the agent authored, changelog last because coverage put it there.
     expect(review.layers.map((layer) => layer.label)).toEqual(["Engine", "Util", "Changelog"]);
+  });
+
+  it("opens a review emitted with --pr, and keeps the pull request it names", async () => {
+    // `pr` is a key the app's strict artifact schema has to know, so this is the claim that the
+    // importer and the bundle agree about it: the CLI writes it, the app's own open path reads
+    // it back, and it reaches the review the comment cards link from.
+    const out = "pull-request.reviewer.json";
+    const result = emit(
+      COMPLETE_DRAFT,
+      "--out",
+      out,
+      "--pr",
+      "https://github.com/acme/widgets/pull/42",
+    );
+    expect(result.status, output(result)).toBe(0);
+
+    const opened = await importReviewFromPath(join(repo.path, out), stamp());
+    expect(opened.ok).toBe(true);
+    if (!opened.ok) return;
+    expect(opened.review.pr).toEqual({
+      host: "github.com",
+      owner: "acme",
+      repo: "widgets",
+      number: 42,
+    });
   });
 });

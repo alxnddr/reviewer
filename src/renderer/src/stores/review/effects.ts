@@ -1,4 +1,7 @@
 import { parsePatch, type PatchFile } from "../../../../shared/diff/patch";
+import type { GitHubDiffCheckResponse } from "../../../../shared/github-ipc";
+import { hasPostable } from "../../../../shared/postable-comment";
+import { settleGitHubCheck } from "../../lib/github-links";
 import type { SessionId } from "../../../../shared/session";
 import { planDiff, sameSelection } from "../../lib/diff-plan";
 import { initialFolds } from "../../lib/initial-folds";
@@ -6,10 +9,13 @@ import { brushAfterWalk, logRangeFor, recoverReviewBrush } from "../../lib/log-r
 import { withCollapsed } from "../../lib/read-progress";
 import { setSlice, type Getter, type SessionSlice, type Setter } from "./slice";
 
-// The three git errands: a diff load, a log re-walk, and a session's first derivation. Each
-// one is a `(set, get, sessionId)` function rather than an action because more than one slice
-// starts it: the picker reloads the log, the tab strip and both opening paths derive a session,
-// and every one of those ends in a diff load.
+// The four git errands: a diff load, a log re-walk, a session's first derivation, and the read
+// of a pull request's fetched head — and one errand to GitHub, the check of a review's anchors
+// against GitHub's own diff of its pull request (`checkGitHubDiff`). Each one is a
+// `(set, get, sessionId)` function rather than an action because more than one slice starts it:
+// the picker reloads the log, the tab strip and both opening paths derive a session, and every
+// one of those ends in a diff load; the head and the GitHub check are started by the derivation
+// and again by `refreshPullRequestHeads` (boot.ts).
 //
 // One thing that is not a git errand rides along with the diff load anyway: the one-time
 // initial fold seed (`seedFolds`). It is here because this is where a session first holds its
@@ -203,6 +209,98 @@ export async function reloadLog(set: Setter, get: Getter, sessionId: SessionId):
   await runDiffLoad(set, get, sessionId);
 }
 
+/** The pull request's head as last fetched into the session's repository (`pullRequestRef`: `refs/rvw/pr/<owner>/<repo>/<n>`),
+ * onto `prHead`. Only a live review that names a pull request asks: a plain repo session has no
+ * pull request, and a frozen review's repo path is a label nothing git-backed may run against
+ * (`deriveSession`). A failed read is the same as no ref — null, and the drift warning falls
+ * back to the branch (`prHeadDrift`) — because it only ever decides a tooltip.
+ *
+ * Applied only to a slice that still exists and still names the same repository and pull
+ * request; there is no ticket because nothing else writes this field in between. */
+export async function readPrHead(set: Setter, get: Getter, sessionId: SessionId): Promise<void> {
+  const bridge = window.reviewer;
+  const slice = get().sessions[sessionId];
+  const pr = slice?.reviewOrigin?.pr ?? null;
+  if (!bridge || slice === undefined || pr === null || slice.reviewDiff?.kind === "frozenPatch") {
+    return;
+  }
+  const response = await bridge.getPullRequestHead({
+    repoPath: slice.repo.path,
+    pullRequest: pr,
+  });
+  const current = get().sessions[sessionId];
+  if (current === undefined || current.repo.path !== slice.repo.path) {
+    return;
+  }
+  const prHead = response.ok ? response.value : null;
+  if (current.prHead !== prHead) {
+    setSlice(set, get, sessionId, { prHead });
+  }
+}
+
+/** Ask GitHub, through main, whether its own diff of the review's pull request carries each
+ * comment's lines (B4), onto `githubCheck`. Only a review that can be checked asks: one that
+ * names a pull request, records the commit it read (`reviewedHead` — GitHub's diff is compared
+ * only at that commit), and has at least one comment written for the author, because the
+ * postable block is the only surface that reads the answer — a review of the reader's own branch
+ * never spends a request. Frozen reviews ask too: the question is about GitHub's diff, not this
+ * machine's checkout.
+ *
+ * A failure is not an error here: it is stored as `unchecked` — or, when an earlier check did
+ * answer, that answer is kept and marked stale (`settleGitHubCheck`) — the local diff stays
+ * trusted, and the tooltip mentions it quietly. Applied only to a slice that still exists and
+ * still holds the very origin it was asked for (a re-seat rebuilds the origin, and re-derives);
+ * there is no ticket because two answers for the same question agree. */
+export async function checkGitHubDiff(
+  set: Setter,
+  get: Getter,
+  sessionId: SessionId,
+  /** `fresh`: read the pull request's head from GitHub now, past main's memo — the check after a
+   * fetch, when a remembered head would hide that the pull request moved. */
+  options: { fresh?: boolean } = {},
+): Promise<void> {
+  const bridge = window.reviewer;
+  const slice = get().sessions[sessionId];
+  const pr = slice?.reviewOrigin?.pr ?? null;
+  const reviewedHead = slice?.reviewOrigin?.reviewedHead ?? null;
+  if (
+    !bridge ||
+    slice === undefined ||
+    pr === null ||
+    reviewedHead === null ||
+    !slice.comments.some(hasPostable)
+  ) {
+    return;
+  }
+  let response: GitHubDiffCheckResponse;
+  try {
+    response = await bridge.checkGitHubDiff({
+      pullRequest: pr,
+      reviewedHead,
+      ...(options.fresh === true ? { fresh: true } : {}),
+      anchors: slice.comments.map(({ id, file, side, startLine, endLine }) => ({
+        id,
+        file,
+        side,
+        startLine,
+        endLine,
+      })),
+    });
+  } catch (error) {
+    // The IPC call itself failed (main threw past its own guard, or the answer did not parse):
+    // the same "not checked" as any other failure, never a promise left rejected.
+    console.error("The check against GitHub's diff failed:", error);
+    response = { ok: false, failure: { code: "unexpected" } };
+  }
+  // The slice must still be the one asked about: closed tabs drop the answer, and a slice main
+  // re-seated in the meantime (`reseatedSlice`) carries a new origin and asks for itself.
+  const current = get().sessions[sessionId];
+  if (current === undefined || current.reviewOrigin !== slice.reviewOrigin) {
+    return;
+  }
+  setSlice(set, get, sessionId, { githubCheck: settleGitHubCheck(current.githubCheck, response) });
+}
+
 /** First activation of a restored slice: fetch log + branches, re-locate the
  * SHA-anchored brush in the fresh log, then load the diff. Never runs twice for
  * one slice — later activations render what is already there. */
@@ -211,6 +309,16 @@ export async function deriveSession(set: Setter, get: Getter, sessionId: Session
   const slice = get().sessions[sessionId];
   if (!bridge || slice === undefined || !slice.needsDerive) {
     return;
+  }
+  // GitHub's answer lands on its own, like the head below: it decides a note and a tooltip, and
+  // nothing here waits on it. Asked for a frozen review too — the question is about GitHub's
+  // diff, not this machine's checkout.
+  void checkGitHubDiff(set, get, sessionId);
+  // Where its comments stand on GitHub, for a review that could have posted any (Layer C): one
+  // question to main, which asks GitHub only when it has a record of a pending review and a token
+  // to ask with — the "re-query on open" of C3, bounded to one request per open.
+  if (slice.reviewOrigin?.pr != null && slice.comments.some(hasPostable)) {
+    void get().refreshPosted(sessionId);
   }
   // A frozen review is not backed by a repo that has to exist: its diff comes out of the
   // artifact, and the two things git would answer here are things it has no use for — the
@@ -236,6 +344,9 @@ export async function deriveSession(set: Setter, get: Getter, sessionId: Session
   // whichever branch its picker was left on. The pin still renders the diff, so a
   // failed ranged log only costs the reviewer the ability to narrow, never the review.
   const range = logRangeFor(slice);
+  // The pull request's head rides beside the two reads it is no less cheap than, and lands on
+  // its own: it decides one tooltip, and nothing below waits on it.
+  void readPrHead(set, get, sessionId);
   const [log, branches] = await Promise.all([
     bridge.getCommitLog({ repoPath: slice.repo.path, range }),
     bridge.listBranches({ repoPath: slice.repo.path }),

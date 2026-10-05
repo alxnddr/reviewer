@@ -24,6 +24,8 @@ import { EXIT_CANNOT_RUN, type LocalContext } from "./context";
  * - `gitFailed` — git ran and refused (absent repo, oversized diff): fix the range or the cwd.
  * - `draftUnreadable` — the draft could not be read or is not a JSON object: fix the input.
  * - `draftEmpty` — the draft is well-formed and presents nothing: there is no review to show.
+ * - `badPullRequest` — a `--pr` that names no github.com pull request, or a bare number whose
+ *   `origin` remote cannot say which repository it is in: pass the PR's URL or `owner/repo#n`.
  * - `badArtifactPath` — a path that is not a usable `.reviewer.json`.
  * - `artifactUnreadable` — the artifact file itself could not be read.
  * - `writeFailed` — the gate passed but the bytes could not land.
@@ -37,6 +39,7 @@ export type CliErrorCode =
   | "gitFailed"
   | "draftUnreadable"
   | "draftEmpty"
+  | "badPullRequest"
   | "badArtifactPath"
   | "artifactUnreadable"
   | "writeFailed"

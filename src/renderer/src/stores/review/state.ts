@@ -3,12 +3,13 @@ import type { CurationSlice } from "./curation";
 import type { ExportSlice } from "./export";
 import type { OpenSlice } from "./open";
 import type { PickerSlice } from "./picker";
+import type { PostingSlice } from "./posting";
 import type { ProgressSlice } from "./progress";
 import type { TabsSlice } from "./tabs";
 import type { WalkthroughSlice } from "./walkthrough";
 import type { WriteBackSlice } from "./write-back";
 
-/** The whole store, as the intersection of the nine slices that make it up. Each of them is
+/** The whole store, as the intersection of the ten slices that make it up. Each of them is
  * declared beside the actions that maintain it, so a field's prose sits with its code; this is
  * the one place that says what the set of them adds up to.
  *
@@ -24,4 +25,5 @@ export type ReviewState = BootSlice &
   CurationSlice &
   WalkthroughSlice &
   ExportSlice &
+  PostingSlice &
   WriteBackSlice;

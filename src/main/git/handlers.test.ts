@@ -13,6 +13,8 @@ type IpcHandler = (event: unknown, request: unknown) => Promise<unknown>;
 const handlers = new Map<string, IpcHandler>();
 
 vi.mock("electron", () => ({
+  // The registry reads it to decide whether a dev server's page may invoke.
+  app: { isPackaged: false },
   ipcMain: {
     handle: (channel: string, handler: IpcHandler): void => {
       handlers.set(channel, handler);

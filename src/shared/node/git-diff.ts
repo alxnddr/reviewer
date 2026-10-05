@@ -54,10 +54,18 @@ export function rangeDiffArgs(base: string, head: string): string[] {
   return committedDiffArgs([rangeSpec(base, head)]);
 }
 
-/** The env vars every spawned git is pinned to: never let it hang on a credential prompt or
- * take an optional lock (all our operations are read-only), and pin stderr to English so a
- * failure message — including the `Binary files … differ` marker — parses the same regardless
- * of the caller's locale. */
+/** The env vars every spawned git is pinned to: never let it hang on a credential prompt, never
+ * take an *optional* lock (the index refresh a `git status` would otherwise write back into a
+ * repository it was only asked to read), and pin stderr to English so a failure message —
+ * including the `Binary files … differ` marker — parses the same regardless of the caller's
+ * locale.
+ *
+ * Most of what is spawned under this env only reads: everything the CLI runs, and the app's
+ * diff, log, branch and file reads. The exceptions are the app's Review Pull Request… operations
+ * (`src/main/git/ops.ts`, "Remotes, fetches and worktrees"), which write — but only what is the
+ * app's: the fetched pull request's ref under `refs/rvw/`, the base's remote-tracking ref, and
+ * the worktrees the app made and their `.git/worktrees/<name>` bookkeeping. Those take the
+ * locks git requires for writing regardless of this pin; it only waives the optional ones. */
 export const GIT_ENV_PINS = {
   GIT_TERMINAL_PROMPT: "0",
   GIT_OPTIONAL_LOCKS: "0",

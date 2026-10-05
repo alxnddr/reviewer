@@ -275,8 +275,117 @@ describe("parseReviewArtifact + validatePlacement", () => {
         site: { at: "layer", layer: "1" },
         label: "the caller",
         url: "src/bar.ts:forty",
+        why: "suffix",
       },
     ]);
+  });
+
+  // Only an inline `[label](path)` is a reference the gate checks and the postable rewrite
+  // replaces, so a path behind a definition would pass both and post as a broken link. The form
+  // is refused at every prose site, whichever way the definition is used.
+  it("refuses a reference-style definition to a path, in every prose site", () => {
+    const anchor = { file: "src/foo.ts", side: "additions", startLine: 11, endLine: 13 } as const;
+    const artifact = validArtifact({
+      overview: {
+        title: "Tour",
+        body: "See [x][r] and [docs][].\n\n[r]: src/foo.ts:11\n[docs]: https://example.com",
+      },
+      comments: [
+        { ...anchor, body: "note", postable: "See [src/foo.ts][].\n\n[src/foo.ts]: src/foo.ts" },
+      ],
+      layers: [
+        {
+          label: "Leaf",
+          description: "See [lbl].\n\n[lbl]: src/gone.ts:x",
+          ranges: [{ file: "src/bar.ts", side: "additions", startLine: 2, endLine: 2 }],
+        },
+      ],
+    });
+
+    const report = validate(JSON.stringify(artifact));
+    expect(report.ok).toBe(false);
+    if (report.ok) return;
+    // The web definition is no reference and passes; each path one is refused as a form.
+    expect(report.problems).toEqual([
+      {
+        kind: "malformedReference",
+        site: { at: "overview" },
+        label: "r",
+        url: "src/foo.ts:11",
+        why: "definition",
+      },
+      {
+        kind: "malformedReference",
+        site: { at: "comment", anchor },
+        label: "src/foo.ts",
+        url: "src/foo.ts",
+        why: "definition",
+      },
+      {
+        kind: "malformedReference",
+        site: { at: "layer", layer: "1" },
+        label: "lbl",
+        url: "src/gone.ts:x",
+        why: "definition",
+      },
+    ]);
+    expect(describeProblem(report.problems[0]!)).toBe(
+      "overview body defines [r]: src/foo.ts:11 — write the reference inline: [label](path:lines)",
+    );
+  });
+
+  // `postable` is the one comment prose the gate reads: once posted, a dead reference there is
+  // a broken link on the code host rather than a muted chip in the app.
+  it("holds a comment's postable to the reference rules, located by the comment's anchor", () => {
+    const anchor = { file: "src/foo.ts", side: "additions", startLine: 11, endLine: 13 } as const;
+    const artifact = validArtifact({
+      comments: [
+        {
+          ...anchor,
+          body: "A [dead chip](src/gone.ts) in the body is the reader's to see past.",
+          postable:
+            "See [foo](src/foo.ts:11), [nowhere](src/gone.ts), [far](src/foo.ts:50) and [typo](src/foo.ts:x).",
+        },
+      ],
+    });
+
+    const report = validate(JSON.stringify(artifact));
+    expect(report.ok).toBe(false);
+    if (report.ok) return;
+    const site = { at: "comment", anchor };
+    expect(report.problems).toEqual([
+      { kind: "malformedReference", site, label: "typo", url: "src/foo.ts:x", why: "suffix" },
+      { kind: "unresolvedLink", site, label: "nowhere", path: "src/gone.ts" },
+      {
+        kind: "referenceOutdated",
+        site,
+        anchor: { file: "src/foo.ts", side: "additions", startLine: 50, endLine: 50 },
+        nearestHunks: [{ startLine: 10, endLine: 14 }],
+      },
+    ]);
+    expect(report.problems.map(describeProblem)).toEqual([
+      "postable of the comment at src/foo.ts additions 11-13 links [typo](src/foo.ts:x) — a line reference reads path:12, path:12-20 or path:12-20@deletions",
+      "postable of the comment at src/foo.ts additions 11-13 links [nowhere](src/gone.ts) — path is not in the diff",
+      "postable of the comment at src/foo.ts additions 11-13 references a line range that does not place in the diff: src/foo.ts additions 50-50 — it must sit inside one hunk; nearest on that side: 10-14",
+    ]);
+  });
+
+  it("passes a postable whose every reference resolves, and a comment with none", () => {
+    const artifact = validArtifact({
+      comments: [
+        {
+          file: "src/foo.ts",
+          side: "additions",
+          startLine: 11,
+          endLine: 13,
+          body: "note",
+          postable: "Could [this](src/foo.ts:11-13) await [the helper](src/bar.ts)?",
+        },
+        { file: "src/bar.ts", side: "additions", startLine: 2, endLine: 2, body: "no postable" },
+      ],
+    });
+
+    expect(validate(JSON.stringify(artifact)).ok).toBe(true);
   });
 
   it("flags a layer range outside any hunk and a layer range on an absent file as layerRangeOutdated", () => {

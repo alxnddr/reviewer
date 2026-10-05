@@ -1,12 +1,15 @@
-import { app, BrowserWindow } from "electron";
+import { app, BrowserWindow, net } from "electron";
 import { join } from "node:path";
 import { optimizer } from "@electron-toolkit/utils";
 import appIcon from "../../build/icon.png?asset";
 import { IpcEvent } from "../shared/ipc";
 import { crashLogPath, installCrashHandlers } from "./crash";
 import { createGitRunner } from "./git/runner";
+import { createGitHubClient } from "./github/client";
+import { netTransport } from "./github/net-transport";
 import { registerIpcHandlers } from "./ipc";
 import { installApplicationMenu } from "./menu";
+import { pullRequestDeps } from "./pull-request/handlers";
 import { reviewOpenFromArgv } from "./review/guard";
 import { importReviewSessionFromArg, type ReviewOpenDeps } from "./review/handlers";
 import { createReviewOpenQueue } from "./review/open-queue";
@@ -146,7 +149,22 @@ if (app.requestSingleInstanceLock()) {
 
     applyPersistedTheme();
     installApplicationMenu();
-    registerIpcHandlers(reviewDeps, sessionsRepinned);
+    // Review Pull Request…'s worktrees live beside the progress records, in userData, for the
+    // same reason: `~/.rvw` is the CLI's (`main/pull-request/worktrees.ts` has the layout).
+    //
+    // GitHub's API goes through Chromium's network stack (`net.request`, through
+    // `main/github/net-transport.ts`), not Node's `fetch`, so it honours the system proxy and
+    // trust store — `main/github/client.ts` says why that matters, and `net-transport.ts` why it
+    // is not `net.fetch`. Created after `ready`, which `net` requires.
+    registerIpcHandlers(
+      reviewDeps,
+      sessionsRepinned,
+      pullRequestDeps(reviewDeps, join(app.getPath("userData"), "worktrees")),
+      createGitHubClient({
+        transport: netTransport((options) => net.request(options)),
+        userAgent: `Reviewer/${app.getVersion()}`,
+      }),
+    );
 
     // A first-instance launch-by-file (`reviewer x.reviewer.json` cold start)
     // arrives on argv; queue it behind any `open-file` paths that landed early.

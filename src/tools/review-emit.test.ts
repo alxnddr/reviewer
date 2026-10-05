@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { ReviewArtifact } from "../shared/review";
 import { TWO_FILE_PATCH } from "../shared/diff/fixtures";
 import { parseReviewArtifact, validatePlacement } from "./review-validator";
-import { emitReviewArtifact, type EmitInput } from "./review-emit";
+import { emitReviewArtifact, postableGap, postableGapLine, type EmitInput } from "./review-emit";
 
 const COMMENTS = [
   { file: "src/foo.ts", side: "additions", startLine: 11, endLine: 13, body: "why" },
@@ -247,5 +247,71 @@ describe("emitReviewArtifact — carrying the diff", () => {
     const { patch, ...withoutPatch } = ReviewArtifact.parse(JSON.parse(embedded.bytes));
     expect(patch).toBeDefined();
     expect(withoutPatch).toEqual(ReviewArtifact.parse(JSON.parse(refs.bytes)));
+  });
+});
+
+describe("emitReviewArtifact — the pull request", () => {
+  const PR = { host: "github.com", owner: "acme", repo: "widgets", number: 42 } as const;
+
+  it("writes the pull request through, and changes nothing about the gate by doing it", () => {
+    // Provenance, like `reviewedHead`: the only difference it makes to the artifact is its key.
+    const plain = emitReviewArtifact(input());
+    const linked = emitReviewArtifact(input({ pr: PR }));
+    expect(plain.ok && linked.ok).toBe(true);
+    if (!plain.ok || !linked.ok) return;
+
+    expect(linked.artifact.pr).toEqual(PR);
+    expect(plain.bytes).not.toContain('"pr"');
+    const withoutKey = JSON.parse(linked.bytes) as Record<string, unknown>;
+    delete withoutKey.pr;
+    expect(withoutKey).toEqual(JSON.parse(plain.bytes));
+  });
+
+  it("hands back the artifact its bytes parse to, so the shell reports off validated values", () => {
+    const result = emitReviewArtifact(input());
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.artifact).toEqual(ReviewArtifact.parse(JSON.parse(result.bytes)));
+  });
+});
+
+describe("postableGap", () => {
+  const anchor = { file: "src/foo.ts", side: "additions", startLine: 11, endLine: 13 } as const;
+
+  it("counts the comments with no text for the change's author, out of all of them", () => {
+    const artifact = ReviewArtifact.parse({
+      repo: "/repo",
+      base: "main",
+      head: "feature",
+      comments: [
+        { ...anchor, body: "one", postable: "Could this say why?" },
+        { ...anchor, body: "two" },
+        { ...anchor, body: "three" },
+      ],
+    });
+    expect(postableGap(artifact)).toEqual({ missing: 2, total: 3 });
+  });
+
+  it("counts a whitespace-only postable as missing, as the app reads it", () => {
+    const artifact = ReviewArtifact.parse({
+      repo: "/repo",
+      base: "main",
+      head: "feature",
+      comments: [{ ...anchor, body: "one", postable: "  \n " }],
+    });
+    expect(postableGap(artifact)).toEqual({ missing: 1, total: 1 });
+  });
+
+  it("answers zero of zero for a review with no comments", () => {
+    const artifact = ReviewArtifact.parse({ repo: "/repo", base: "main", head: "feature" });
+    expect(postableGap(artifact)).toEqual({ missing: 0, total: 0 });
+  });
+});
+
+describe("postableGapLine", () => {
+  it("agrees the verb with the comments that have none, and the noun with all of them", () => {
+    expect(postableGapLine({ missing: 3, total: 7 })).toBe("3 of 7 comments have no postable text");
+    expect(postableGapLine({ missing: 1, total: 7 })).toBe("1 of 7 comments has no postable text");
+    expect(postableGapLine({ missing: 1, total: 1 })).toBe("1 of 1 comment has no postable text");
   });
 });

@@ -8,6 +8,7 @@ import type { PatchFile } from "../../../shared/diff/patch";
 import type { FitToContentRefs } from "@/lib/fit-panel";
 import { orderedComments, type CommentNavEntry } from "@/lib/diff/comment-navigation";
 import { CopyAllCommentsPromptButton } from "@/components/CopyPromptButton";
+import { PostAllFoot } from "@/components/GitHubPosting";
 import { FileTypeIcon } from "@/components/FileTypeIcon";
 import { TooltipHint } from "@/components/ui/tooltip";
 import { commentLocation } from "@/lib/comment-location";
@@ -269,6 +270,9 @@ export function CommentsPanel({
           </div>
         </div>
       )}
+      {/* Post all, to the pull request — under the list, open or folded (`GitHubPosting.tsx`
+          says why here). Draws nothing until there is something to post. */}
+      <PostAllFoot />
     </div>
   );
 }

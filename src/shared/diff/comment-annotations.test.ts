@@ -40,7 +40,7 @@ const FILES = parsePatch(PATCH, "test");
 // `src/old-pure.txt` → `src/pure.txt` (no hunks at all).
 const RENAMED = parsePatch(RENAMES_PATCH, "test");
 
-const NO_UI: CommentUiState = { editingId: null, draft: null };
+const NO_UI: CommentUiState = { editing: null, draft: null };
 
 function comment(overrides: Partial<Comment> = {}): Comment {
   return {
@@ -198,20 +198,35 @@ describe("buildDiffItems", () => {
     expect(after).not.toBe(before);
   });
 
-  it("bumps the item version when a comment opens for editing", () => {
+  it("bumps the item version when a comment's postable is written or edited", () => {
+    const none = annotationsOf([comment()]).item?.version;
+    const written = annotationsOf([comment({ postable: "for the author" })]).item?.version;
+    const edited = annotationsOf([comment({ postable: "for the author, kindly" })]).item?.version;
+    expect(new Set([none, written, edited]).size).toBe(3);
+  });
+
+  it("bumps the item version when a comment opens for editing, and says which field", () => {
     const target = comment();
     const idle = annotationsOf([target]).item?.version;
-    const editing = annotationsOf([target], { editingId: target.id, draft: null }).item?.version;
-    expect(editing).not.toBe(idle);
-    const slot = annotationsOf([target], { editingId: target.id, draft: null }).annotations[0]
-      ?.metadata as Extract<CommentSlot, { kind: "comment" }>;
-    expect(slot.editing).toBe(true);
+    const slotFor = (field: "body" | "postable") => {
+      const { item, annotations } = annotationsOf([target], {
+        editing: { commentId: target.id, field },
+        draft: null,
+      });
+      const slot = annotations[0]?.metadata as Extract<CommentSlot, { kind: "comment" }>;
+      return { version: item?.version, editing: slot.editing };
+    };
+    // Each field is its own rendering — the body's editor replaces the card, the postable's
+    // opens inside it — so switching from one to the other has to repaint too.
+    expect(new Set([idle, slotFor("body").version, slotFor("postable").version]).size).toBe(3);
+    expect(slotFor("body").editing).toBe("body");
+    expect(slotFor("postable").editing).toBe("postable");
   });
 
   it("adds a draft annotation on its file at the picked line and bumps the version", () => {
     const idle = annotationsOf([]).item?.version;
     const ui: CommentUiState = {
-      editingId: null,
+      editing: null,
       draft: {
         fileId: "src/foo.ts",
         anchor: { file: "src/foo.ts", side: "additions", startLine: 12, endLine: 12 },
@@ -226,7 +241,7 @@ describe("buildDiffItems", () => {
 
   it("keeps a draft off files other than the one it was opened on", () => {
     const ui: CommentUiState = {
-      editingId: null,
+      editing: null,
       draft: {
         fileId: "src/other.ts",
         anchor: { file: "src/other.ts", side: "additions", startLine: 3, endLine: 3 },

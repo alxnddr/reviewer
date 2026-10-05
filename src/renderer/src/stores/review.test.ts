@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import type { PullRequest } from "../../../shared/pull-request";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { BranchName, DiffResponse, LogEntry } from "../../../shared/git";
 import type { ReviewerBridge } from "../../../shared/ipc";
@@ -87,6 +88,28 @@ function patchActive(partial: Partial<SessionSlice>): void {
   });
 }
 
+/** Stand in for a comment the agent wrote a postable for. The store offers no way to start
+ * one — that is the rule under test below — so the agent's output is set on the slice directly,
+ * the way an imported comment would arrive carrying it. */
+function giveAgentPostable(commentId: string, postable: string): void {
+  const state = store.getState();
+  const current = active();
+  if (state.activeSessionId === null) {
+    throw new Error("no active session");
+  }
+  store.setState({
+    sessions: {
+      ...state.sessions,
+      [state.activeSessionId]: {
+        ...current,
+        comments: current.comments.map((comment) =>
+          comment.id === commentId ? { ...comment, postable } : comment,
+        ),
+      },
+    },
+  });
+}
+
 async function openFixtureRepo(bridge: ReviewerBridge): Promise<void> {
   vi.stubGlobal("window", { reviewer: bridge });
   await store.getState().openRepository();
@@ -125,6 +148,7 @@ function refsReviewSession(id: string, repoPath: string, base: string, head: str
       head,
       patch: null,
       reviewedHead: null,
+      pr: null,
     },
   });
 }
@@ -140,6 +164,7 @@ function frozenReviewSession(id: string, repoPath: string, patch: string): Sessi
       head: SHA_A,
       patch,
       reviewedHead: null,
+      pr: null,
     },
   });
 }
@@ -534,6 +559,7 @@ describe("the picker's two refs", () => {
             head: "b",
             patch: null,
             reviewedHead: null,
+            pr: null,
           },
         },
       },
@@ -2116,7 +2142,7 @@ describe("comment curation", () => {
     const before = active().comments[0];
     store.getState().setCommentResolution(before?.id ?? "", "addressed");
 
-    store.getState().editComment(before?.id ?? "", "second");
+    store.getState().editComment(before?.id ?? "", "body", "second");
 
     const after = active().comments[0];
     expect(resolutionOf(active().resolvedComments, after!)).toBeNull();
@@ -2144,7 +2170,7 @@ describe("comment curation", () => {
     store.getState().addComment(ANCHOR, "first");
     const original = active().comments[0];
 
-    store.getState().editComment(original?.id ?? "", "second");
+    store.getState().editComment(original?.id ?? "", "body", "second");
 
     const edited = active().comments[0];
     expect(edited?.body).toBe("second");
@@ -2161,9 +2187,88 @@ describe("comment curation", () => {
     await openFixtureRepo(bridge);
     store.getState().addComment(ANCHOR, "keep me");
 
-    store.getState().editComment(active().comments[0]?.id ?? "", "  ");
+    store.getState().editComment(active().comments[0]?.id ?? "", "body", "  ");
 
     expect(active().comments[0]?.body).toBe("keep me");
+  });
+
+  it("editComment refines the agent's postable, keeping identity, and persists", async () => {
+    vi.useFakeTimers();
+    const bridge = makeBridge({});
+    await openFixtureRepo(bridge);
+    store.getState().addComment(ANCHOR, "the finding");
+    giveAgentPostable(active().comments[0]?.id ?? "", "for the author");
+    const original = active().comments[0];
+
+    store.getState().editComment(original?.id ?? "", "postable", "  for the author, kindly  ");
+
+    const edited = active().comments[0];
+    expect(edited).toEqual({ ...original, postable: "for the author, kindly" });
+    await vi.advanceTimersByTimeAsync(WRITE_BACK_DEBOUNCE_MS);
+    expect(bridge.updateSession).toHaveBeenLastCalledWith(
+      expect.objectContaining({ comments: [edited] }),
+    );
+  });
+
+  it("editComment never starts a postable — a comment the agent wrote none for is not for posting", async () => {
+    vi.useFakeTimers();
+    const bridge = makeBridge({});
+    await openFixtureRepo(bridge);
+    store.getState().addComment(ANCHOR, "the finding");
+    await vi.advanceTimersByTimeAsync(WRITE_BACK_DEBOUNCE_MS);
+    vi.mocked(bridge.updateSession).mockClear();
+    const before = active().comments[0];
+
+    store.getState().editComment(before?.id ?? "", "postable", "the body, saved for the author");
+
+    expect(active().comments[0]).toBe(before);
+    await vi.advanceTimersByTimeAsync(WRITE_BACK_DEBOUNCE_MS);
+    expect(bridge.updateSession).not.toHaveBeenCalled();
+
+    // A blank one reads as none (`hasPostable`), so it cannot be filled in either.
+    giveAgentPostable(before?.id ?? "", "   ");
+    store.getState().editComment(before?.id ?? "", "postable", "filled in");
+    expect(active().comments[0]?.postable).toBe("   ");
+  });
+
+  it("editComment with an empty postable removes the key, persists it, and keeps the body", async () => {
+    // The reader decided the finding should not be posted. Removal is the absent key, never an
+    // empty string the schema would refuse.
+    vi.useFakeTimers();
+    const bridge = makeBridge({});
+    await openFixtureRepo(bridge);
+    store.getState().addComment(ANCHOR, "the finding");
+    const id = active().comments[0]?.id ?? "";
+    giveAgentPostable(id, "for the author");
+
+    store.getState().editComment(id, "postable", "  \n ");
+
+    const removed = active().comments[0];
+    expect(removed?.body).toBe("the finding");
+    expect(removed === undefined ? true : "postable" in removed).toBe(false);
+    await vi.advanceTimersByTimeAsync(WRITE_BACK_DEBOUNCE_MS);
+    expect(bridge.updateSession).toHaveBeenLastCalledWith(
+      expect.objectContaining({ comments: [removed] }),
+    );
+
+    // Removing what is not there writes nothing.
+    vi.mocked(bridge.updateSession).mockClear();
+    store.getState().editComment(id, "postable", "");
+    await vi.advanceTimersByTimeAsync(WRITE_BACK_DEBOUNCE_MS);
+    expect(bridge.updateSession).not.toHaveBeenCalled();
+  });
+
+  it("editing a comment's postable keeps its mark — the same finding, worded for the author", async () => {
+    const bridge = makeBridge({});
+    await openFixtureRepo(bridge);
+    store.getState().addComment(ANCHOR, "the finding");
+    giveAgentPostable(active().comments[0]?.id ?? "", "for the author");
+    const before = active().comments[0];
+    store.getState().setCommentResolution(before?.id ?? "", "addressed");
+
+    store.getState().editComment(before?.id ?? "", "postable", "for the author, kindly");
+
+    expect(resolutionOf(active().resolvedComments, active().comments[0]!)).toBe("addressed");
   });
 
   it("discardComment removes the comment, leaving no trace, and persists the removal", async () => {
@@ -2943,6 +3048,7 @@ describe("review export actions", () => {
     head: SHA_A,
     patch: null,
     reviewedHead: null,
+    pr: null,
   };
   const COMMENT: Comment = {
     file: "src/a.ts",
@@ -2979,6 +3085,19 @@ describe("review export actions", () => {
   function seed(reviewOrigin: ReviewOrigin | null): void {
     seedSlice(reviewOrigin === null ? {} : { reviewOrigin, comments: [COMMENT], layers: [LAYER] });
   }
+
+  it("re-emits the pull request the review was opened with", async () => {
+    // The export reads it off the origin, which is all the session keeps of the artifact.
+    const bridge = makeBridge({});
+    vi.stubGlobal("window", { reviewer: bridge });
+    const pr = { host: "github.com", owner: "acme", repo: "widgets", number: 42 } as const;
+    seed({ ...ORIGIN, pr });
+
+    await store.getState().exportReviewJson();
+
+    const request = vi.mocked(bridge.saveReviewJson).mock.calls[0]?.[0];
+    expect(ReviewArtifact.parse(JSON.parse(request?.content ?? "")).pr).toEqual(pr);
+  });
 
   it("serializes the curated review and hands schema-valid JSON to the save seam", async () => {
     const bridge = makeBridge({});
@@ -3120,7 +3239,14 @@ describe("exit gate", () => {
     base: "main",
     head: SHA_A,
     comments: [
-      { file: "src/keep.ts", side: "additions", startLine: 5, endLine: 6, body: "authored: guard" },
+      {
+        file: "src/keep.ts",
+        side: "additions",
+        startLine: 5,
+        endLine: 6,
+        body: "authored: guard",
+        postable: "authored: for the author",
+      },
       { file: "src/gone.ts", side: "additions", startLine: 3, endLine: 3, body: "authored: gone" },
     ],
     layers: [
@@ -3241,7 +3367,8 @@ describe("exit gate", () => {
         { file: "src/keep.ts", side: "additions", startLine: 9, endLine: 9 },
         "curated: added",
       );
-    store.getState().editComment(editId, "curated: edited guard");
+    store.getState().editComment(editId, "body", "curated: edited guard");
+    store.getState().editComment(editId, "postable", "curated: for the author");
     store.getState().discardComment(discardId);
 
     // Export through the real serializer, then re-import the emitted bytes.
@@ -3259,7 +3386,8 @@ describe("exit gate", () => {
     expect(bodies).not.toContain("authored: gone"); // the discard survived
     expect(bodies).not.toContain("authored: guard"); // the pre-edit body is gone
 
-    // The edited comment kept its authored anchor — only the body changed.
+    // The edited comment kept its authored anchor — only the prose changed, and the agent's
+    // text for the author, as the reader refined it, is in the file they would hand on.
     const edited = reopened.review.comments.find(
       (comment) => comment.body === "curated: edited guard",
     );
@@ -3268,6 +3396,7 @@ describe("exit gate", () => {
       side: "additions",
       startLine: 5,
       endLine: 6,
+      postable: "curated: for the author",
     });
 
     // Layers round-trip verbatim in authored order (identity is re-stamped on each open,
@@ -3306,7 +3435,7 @@ describe("exit gate", () => {
 
     // The comment on the surviving file keeps its authored range but pins to the
     // file header (lineNumber 0), flagged outdated — never misplaced, never dropped.
-    const items = buildDiffItems(files, current.comments, { editingId: null, draft: null }, frozen);
+    const items = buildDiffItems(files, current.comments, { editing: null, draft: null }, frozen);
     const keep = commentAnnotationOn(items, "src/keep.ts");
     expect(keep?.lineNumber).toBe(0);
     expect(keep?.slot).toMatchObject({ kind: "comment", outdated: true });
@@ -3350,7 +3479,7 @@ describe("exit gate", () => {
     expect(bridge.getDiff).not.toHaveBeenCalled();
 
     // Every comment places on its authored line, none outdated.
-    const items = buildDiffItems(files, current.comments, { editingId: null, draft: null }, frozen);
+    const items = buildDiffItems(files, current.comments, { editing: null, draft: null }, frozen);
     const keep = commentAnnotationOn(items, "src/keep.ts");
     const gone = commentAnnotationOn(items, "src/gone.ts");
     expect(keep).toMatchObject({ lineNumber: 5, slot: { outdated: false } });
@@ -3891,6 +4020,7 @@ describe("locating a review's repository", () => {
     head: SHA_B,
     patch: MULTI_STATUS_PATCH,
     reviewedHead: null,
+    pr: null,
   };
 
   /** A review opened frozen, where the box's path does not exist. */
@@ -3992,5 +4122,292 @@ describe("locating a review's repository", () => {
 
     store.getState().clearReviewOpenFailure();
     expect(store.getState().reviewOpenFailure).toBeNull();
+  });
+});
+
+describe("the pull request's fetched head", () => {
+  const PR = { host: "github.com", owner: "acme", repo: "widget", number: 12 } as const;
+
+  function prReviewSession(id: string, repoPath: string): Session {
+    const session = refsReviewSession(id, repoPath, "origin/main", SHA_A);
+    return {
+      ...session,
+      reviewOrigin:
+        session.reviewOrigin === null
+          ? null
+          : { ...session.reviewOrigin, reviewedHead: SHA_A, pr: PR },
+    };
+  }
+
+  it("is read from the review's repository when it derives, and only for a review of a PR", async () => {
+    const bridge = makeBridge({
+      getPullRequestHead: vi.fn().mockResolvedValue({ ok: true, value: SHA_B }),
+    });
+    await hydrateWith(bridge, {
+      sessions: [
+        prReviewSession(ID_A, "/wt/acme/widget-12"),
+        refsReviewSession(ID_B, "/repo-b", "main", SHA_A),
+      ],
+      activeSessionId: ID_A,
+    });
+    await vi.waitFor(() => {
+      expect(slice(ID_A).prHead).toBe(SHA_B);
+    });
+    expect(bridge.getPullRequestHead).toHaveBeenCalledWith({
+      repoPath: "/wt/acme/widget-12",
+      pullRequest: PR,
+    });
+
+    store.getState().activateSession(ID_B);
+    await vi.waitFor(() => {
+      expect(slice(ID_B).diff.phase).toBe("loaded");
+    });
+    expect(bridge.getPullRequestHead).toHaveBeenCalledTimes(1);
+    expect(slice(ID_B).prHead).toBeNull();
+  });
+
+  it("is re-read for every derived review of a PR after a fetch, and not for the rest", async () => {
+    const getPullRequestHead = vi.fn().mockResolvedValue({ ok: true, value: null });
+    const bridge = makeBridge({ getPullRequestHead });
+    await hydrateWith(bridge, {
+      sessions: [
+        prReviewSession(ID_A, "/wt/acme/widget-12"),
+        prReviewSession(ID_B, "/code/widget"),
+      ],
+      activeSessionId: ID_A,
+    });
+    await vi.waitFor(() => {
+      expect(slice(ID_A).diff.phase).toBe("loaded");
+    });
+    expect(slice(ID_A).prHead).toBeNull();
+
+    getPullRequestHead.mockResolvedValue({ ok: true, value: SHA_B });
+    await store.getState().refreshPullRequestHeads(PR);
+    expect(slice(ID_A).prHead).toBe(SHA_B);
+    // Not derived yet: its own derive reads the ref when the reader gets there.
+    expect(getPullRequestHead).not.toHaveBeenCalledWith({
+      repoPath: "/code/widget",
+      pullRequest: PR,
+    });
+    expect(slice(ID_B).prHead).toBeNull();
+  });
+
+  it("reads a failed answer as no fetched head", async () => {
+    const bridge = makeBridge({
+      getPullRequestHead: vi.fn().mockResolvedValue({ ok: false, failure: { code: "timeout" } }),
+    });
+    await hydrateWith(bridge, {
+      sessions: [prReviewSession(ID_A, "/wt/acme/widget-12")],
+      activeSessionId: ID_A,
+    });
+    await vi.waitFor(() => {
+      expect(slice(ID_A).diff.phase).toBe("loaded");
+    });
+    expect(slice(ID_A).prHead).toBeNull();
+  });
+});
+
+describe("the check against GitHub's diff", () => {
+  const PR = { host: "github.com", owner: "acme", repo: "widget", number: 12 } as const;
+  const POSTABLE = {
+    id: "00000000-0000-4000-8000-000000000001",
+    file: "a.ts",
+    side: "additions",
+    startLine: 1,
+    endLine: 2,
+    body: "For the reader.",
+    postable: "For the author.",
+  } as const;
+  const COMPARED = {
+    ok: true,
+    value: { kind: "compared", head: SHA_A, outside: [POSTABLE.id] },
+  } as const;
+
+  function prReview(
+    id: string,
+    comments: Session["comments"],
+    reviewedHead: string | null = SHA_A,
+    pr: PullRequest = PR,
+  ): Session {
+    const session = refsReviewSession(id, `/repo-${id.slice(0, 4)}`, "origin/main", SHA_A);
+    return {
+      ...session,
+      comments,
+      reviewOrigin:
+        session.reviewOrigin === null ? null : { ...session.reviewOrigin, reviewedHead, pr },
+    };
+  }
+
+  /** A `checkGitHubDiff` whose first answer waits until the test gives it. */
+  function heldCheck() {
+    let answer: (response: unknown) => void = () => {};
+    const checkGitHubDiff = vi.fn().mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          answer = resolve;
+        }),
+    );
+    return { checkGitHubDiff, answer: (response: unknown) => answer(response) };
+  }
+
+  it("asks once when a review of a PR derives, with every comment's anchor, and keeps the answer", async () => {
+    const checkGitHubDiff = vi.fn().mockResolvedValue(COMPARED);
+    await hydrateWith(makeBridge({ checkGitHubDiff }), {
+      sessions: [prReview(ID_A, [POSTABLE])],
+      activeSessionId: ID_A,
+    });
+    await vi.waitFor(() => {
+      expect(slice(ID_A).githubCheck).toEqual({
+        status: "checked",
+        check: COMPARED.value,
+        staleBecause: null,
+      });
+    });
+    expect(checkGitHubDiff).toHaveBeenCalledWith({
+      pullRequest: PR,
+      reviewedHead: SHA_A,
+      anchors: [{ id: POSTABLE.id, file: "a.ts", side: "additions", startLine: 1, endLine: 2 }],
+    });
+    // Asked again after a fetch of this pull request — in any spelling GitHub would accept.
+    await store.getState().refreshPullRequestHeads({ ...PR, owner: "ACME", repo: "Widget" });
+    expect(checkGitHubDiff).toHaveBeenCalledTimes(2);
+    // Past main's memo: the fetch may just have seen the pull request move.
+    expect(checkGitHubDiff).toHaveBeenLastCalledWith(expect.objectContaining({ fresh: true }));
+    expect(checkGitHubDiff.mock.calls[0]?.[0]).not.toHaveProperty("fresh");
+  });
+
+  it("re-checks only the reviews of the pull request that was fetched", async () => {
+    const checkGitHubDiff = vi.fn().mockResolvedValue(COMPARED);
+    const getPullRequestHead = vi.fn().mockResolvedValue({ ok: true, value: null });
+    const other = { ...PR, number: 13 };
+    await hydrateWith(makeBridge({ checkGitHubDiff, getPullRequestHead }), {
+      sessions: [prReview(ID_A, [POSTABLE]), prReview(ID_B, [POSTABLE], SHA_A, other)],
+      activeSessionId: ID_A,
+    });
+    store.getState().activateSession(ID_B);
+    await vi.waitFor(() => {
+      expect(slice(ID_B).githubCheck?.status).toBe("checked");
+    });
+    expect(checkGitHubDiff).toHaveBeenCalledTimes(2);
+    getPullRequestHead.mockClear();
+
+    await store.getState().refreshPullRequestHeads(other);
+    expect(checkGitHubDiff).toHaveBeenCalledTimes(3);
+    expect(checkGitHubDiff).toHaveBeenLastCalledWith(
+      expect.objectContaining({ pullRequest: other }),
+    );
+    expect(getPullRequestHead).toHaveBeenCalledTimes(1);
+    expect(getPullRequestHead).toHaveBeenCalledWith(
+      expect.objectContaining({ pullRequest: other }),
+    );
+  });
+
+  it("never asks for a review with nothing written for the author, or no reviewed commit", async () => {
+    const checkGitHubDiff = vi.fn();
+    const { postable: _unused, ...forTheReader } = POSTABLE;
+    await hydrateWith(makeBridge({ checkGitHubDiff }), {
+      sessions: [prReview(ID_A, [forTheReader]), prReview(ID_B, [POSTABLE], null)],
+      activeSessionId: ID_A,
+    });
+    await vi.waitFor(() => {
+      expect(slice(ID_A).diff.phase).toBe("loaded");
+    });
+    store.getState().activateSession(ID_B);
+    await vi.waitFor(() => {
+      expect(slice(ID_B).diff.phase).toBe("loaded");
+    });
+    expect(checkGitHubDiff).not.toHaveBeenCalled();
+    expect(slice(ID_A).githubCheck).toBeNull();
+  });
+
+  it("keeps GitHub's failure as unchecked, trusting the local diff", async () => {
+    await hydrateWith(makeBridge(), {
+      sessions: [prReview(ID_A, [POSTABLE])],
+      activeSessionId: ID_A,
+    });
+    await vi.waitFor(() => {
+      expect(slice(ID_A).githubCheck).toEqual({
+        status: "unchecked",
+        failure: { code: "network" },
+      });
+    });
+    expect(slice(ID_A).diff.phase).toBe("loaded");
+  });
+
+  it("keeps the last answer, marked stale, when a re-check fails", async () => {
+    const limited = { code: "rateLimited", resetAt: 1, scope: "anonymous" } as const;
+    const checkGitHubDiff = vi
+      .fn()
+      .mockResolvedValueOnce(COMPARED)
+      .mockResolvedValue({ ok: false, failure: limited });
+    await hydrateWith(makeBridge({ checkGitHubDiff }), {
+      sessions: [prReview(ID_A, [POSTABLE])],
+      activeSessionId: ID_A,
+    });
+    await vi.waitFor(() => {
+      expect(slice(ID_A).githubCheck?.status).toBe("checked");
+    });
+    await store.getState().refreshPullRequestHeads(PR);
+    expect(slice(ID_A).githubCheck).toEqual({
+      status: "checked",
+      check: COMPARED.value,
+      staleBecause: limited,
+    });
+  });
+
+  it("settles a rejected IPC call as unchecked rather than leaving it hanging", async () => {
+    const checkGitHubDiff = vi.fn().mockRejectedValue(new Error("IPC rejected"));
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    await hydrateWith(makeBridge({ checkGitHubDiff }), {
+      sessions: [prReview(ID_A, [POSTABLE])],
+      activeSessionId: ID_A,
+    });
+    await vi.waitFor(() => {
+      expect(slice(ID_A).githubCheck).toEqual({
+        status: "unchecked",
+        failure: { code: "unexpected" },
+      });
+    });
+  });
+
+  it("drops an answer that lands after its tab closed", async () => {
+    const held = heldCheck();
+    await hydrateWith(makeBridge({ checkGitHubDiff: held.checkGitHubDiff }), {
+      sessions: [prReview(ID_A, [POSTABLE])],
+      activeSessionId: ID_A,
+    });
+    await vi.waitFor(() => {
+      expect(held.checkGitHubDiff).toHaveBeenCalled();
+    });
+    store.getState().closeSession(ID_A);
+    held.answer(COMPARED);
+    await Promise.resolve();
+    expect(store.getState().sessions[ID_A]).toBeUndefined();
+  });
+
+  it("drops an answer that lands on a slice main re-seated meanwhile", async () => {
+    const held = heldCheck();
+    await hydrateWith(makeBridge({ checkGitHubDiff: held.checkGitHubDiff }), {
+      sessions: [prReview(ID_A, [POSTABLE])],
+      activeSessionId: ID_A,
+    });
+    await vi.waitFor(() => {
+      expect(held.checkGitHubDiff).toHaveBeenCalled();
+    });
+    // What `reseatedSlice` does to the slice: a new origin, read from main's session.
+    const reseated = slice(ID_A);
+    store.setState({
+      sessions: {
+        ...store.getState().sessions,
+        [ID_A]: {
+          ...reseated,
+          reviewOrigin: reseated.reviewOrigin === null ? null : { ...reseated.reviewOrigin },
+        },
+      },
+    });
+    held.answer(COMPARED);
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(slice(ID_A).githubCheck).toBeNull();
   });
 });

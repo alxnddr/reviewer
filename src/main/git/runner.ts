@@ -16,6 +16,26 @@ export type GitRunRequest = {
   okExitCodes?: readonly number[];
   maxOutputBytes?: number;
   timeoutMs?: number;
+  /** Run git in a session of its own, with no controlling terminal — for the operations that
+   * reach a remote (fetch, clone, a partial clone's lazy blob fetch). `GIT_TERMINAL_PROMPT=0`
+   * (`hardenedGitEnv`) stops *git* asking for a password, but not ssh: ssh asks for a key's
+   * passphrase or to trust a new host key by opening `/dev/tty` itself, and a child of an app
+   * started from a terminal (`bun dev`, a binary exec'd by hand) inherits that terminal and
+   * would sit waiting on it until the timeout. Without a controlling terminal ssh cannot ask,
+   * so it fails at once with an answer the caller can map ("Permission denied", "Host key
+   * verification failed"). Chosen over pinning `GIT_SSH_COMMAND="ssh -o BatchMode=yes"`,
+   * which would override the reader's own `core.sshCommand` (a 1Password or Secretive agent
+   * wrapper, say) and so break the very credentials the fetch is meant to use.
+   *
+   * Detached, git leads its own process group, so the timeout, a cancel and quit signal the
+   * group rather than git alone: the ssh or `git-remote-https` it started would otherwise outlive it. */
+  detached?: boolean;
+  /** Stops the run when aborted — Review Pull Request…'s Cancel, for a fetch or clone that may
+   * take minutes. The child (and, detached, its group) is stopped the way a timeout stops it —
+   * SIGTERM, then SIGKILL after `KILL_GRACE_MS` — and the run answers `cancelled`; a signal
+   * already aborted spawns nothing. Never pass one to an operation that must not stop halfway
+   * (a checkout: `addDetachedWorktree` in `ops.ts`). */
+  signal?: AbortSignal;
 };
 
 export type GitRunFailure =
@@ -23,6 +43,7 @@ export type GitRunFailure =
   | { code: "cwdMissing"; cwd: string }
   | { code: "outputOverflow"; limitBytes: number }
   | { code: "timeout" }
+  | { code: "cancelled" }
   | { code: "exited"; exitCode: number | null; stderr: string };
 
 export type GitRunResult = { ok: true; stdout: string } | { ok: false; failure: GitRunFailure };
@@ -30,6 +51,9 @@ export type GitRunResult = { ok: true; stdout: string } | { ok: false; failure: 
 export type GitRunnerDefaults = {
   gitBinary?: string;
   maxOutputBytes?: number;
+  /** How long a timed-out or cancelled child has to exit on SIGTERM before it is SIGKILLed —
+   * `KILL_GRACE_MS` unless a test wants to wait less. */
+  killGraceMs?: number;
 };
 
 export type GitRunner = {
@@ -47,9 +71,33 @@ export type GitRunner = {
 export const DEFAULT_MAX_OUTPUT_BYTES = MAX_PATCH_BYTES;
 export const DEFAULT_TIMEOUT_MS = 30_000;
 
+/** The grace between SIGTERM and SIGKILL for a timeout or a cancel. git cleans up after itself
+ * on SIGTERM — `worktree add` deletes the half-written worktree and its registration, `clone`
+ * deletes the directory it was writing, a fetch releases its `.lock` files — and does none of
+ * that on SIGKILL, which is what left a truncated worktree registered `locked initializing`,
+ * a clone directory every retry then refused, and lock files in the reader's repository. A few
+ * seconds is plenty for that cleanup, and short enough that a git ignoring the signal still
+ * goes. The output cap still kills at once: it only ever stops a read. */
+export const KILL_GRACE_MS = 3_000;
+
 /** stderr is only ever logged in main, never sent to the renderer — a small window
  * onto the failure is enough. */
 const MAX_STDERR_BYTES = 64 * 1024;
+
+/** Signals a child — and, for one spawned `detached`, its whole process group (a negative
+ * pid), so the ssh or `git-remote-https` a network operation started goes down with git. Falls
+ * back to the child alone when the group cannot be signalled (it has already exited). */
+function killChild(child: ChildProcess, signal: NodeJS.Signals, group: boolean): void {
+  if (group && child.pid !== undefined) {
+    try {
+      process.kill(-child.pid, signal);
+      return;
+    } catch {
+      // ESRCH: the group is gone; the plain kill below is then a harmless no-op.
+    }
+  }
+  child.kill(signal);
+}
 
 /** Symlinks are followed on purpose — a link to a work tree is a usable cwd. */
 function isDirectory(path: string): boolean {
@@ -63,7 +111,9 @@ function isDirectory(path: string): boolean {
 export function createGitRunner(defaults: GitRunnerDefaults = {}): GitRunner {
   const gitBinary = defaults.gitBinary ?? "git";
   const defaultMaxOutputBytes = defaults.maxOutputBytes ?? DEFAULT_MAX_OUTPUT_BYTES;
-  const children = new Set<ChildProcess>();
+  const killGraceMs = defaults.killGraceMs ?? KILL_GRACE_MS;
+  /** Every in-flight child, with whether it leads its own process group (`detached`). */
+  const children = new Map<ChildProcess, boolean>();
 
   function run(request: GitRunRequest): Promise<GitRunResult> {
     const maxOutputBytes = request.maxOutputBytes ?? defaultMaxOutputBytes;
@@ -76,6 +126,9 @@ export function createGitRunner(defaults: GitRunnerDefaults = {}): GitRunner {
     // *synchronous* throw (ENOTDIR), which would escape the promise contract.
     if (!isDirectory(request.cwd)) {
       return Promise.resolve({ ok: false, failure: { code: "cwdMissing", cwd: request.cwd } });
+    }
+    if (request.signal?.aborted === true) {
+      return Promise.resolve({ ok: false, failure: { code: "cancelled" } });
     }
 
     // Hardened by `hardenedGitEnv` (src/shared/node/git-diff.ts) — the same posture the
@@ -93,6 +146,7 @@ export function createGitRunner(defaults: GitRunnerDefaults = {}): GitRunner {
           cwd: request.cwd,
           stdio: ["ignore", "pipe", "pipe"],
           env,
+          detached: request.detached === true,
         });
       } catch (error) {
         // The directory gate above covers the known synchronous throw; this keeps
@@ -103,7 +157,9 @@ export function createGitRunner(defaults: GitRunnerDefaults = {}): GitRunner {
         resolve({ ok: false, failure: { code: "cwdMissing", cwd: request.cwd } });
         return;
       }
-      children.add(child);
+      children.set(child, request.detached === true);
+      const kill = (signal: NodeJS.Signals): void =>
+        killChild(child, signal, request.detached === true);
 
       const stdoutChunks: Buffer[] = [];
       const stderrChunks: Buffer[] = [];
@@ -114,25 +170,38 @@ export function createGitRunner(defaults: GitRunnerDefaults = {}): GitRunner {
       let killFailure: GitRunFailure | null = null;
       let settled = false;
 
+      let graceTimer: ReturnType<typeof setTimeout> | undefined;
+
       const settle = (result: GitRunResult): void => {
         if (settled) return;
         settled = true;
         clearTimeout(timer);
+        clearTimeout(graceTimer);
+        request.signal?.removeEventListener("abort", onAbort);
         children.delete(child);
         resolve(result);
       };
 
-      const timer = setTimeout(() => {
-        killFailure = { code: "timeout" };
-        child.kill("SIGKILL");
-      }, timeoutMs);
+      /** A timeout or a cancel: SIGTERM, so git can clean up (`KILL_GRACE_MS` says what it
+       * cleans), then SIGKILL if it has not exited by the end of the grace. */
+      const stop = (cause: GitRunFailure): void => {
+        if (killFailure !== null) return;
+        killFailure = cause;
+        kill("SIGTERM");
+        graceTimer = setTimeout(() => kill("SIGKILL"), killGraceMs);
+      };
+
+      const timer = setTimeout(() => stop({ code: "timeout" }), timeoutMs);
+
+      const onAbort = (): void => stop({ code: "cancelled" });
+      request.signal?.addEventListener("abort", onAbort, { once: true });
 
       child.stdout.on("data", (chunk: Buffer) => {
         stdoutBytes += chunk.length;
         if (stdoutBytes > maxOutputBytes) {
           if (killFailure === null) {
             killFailure = { code: "outputOverflow", limitBytes: maxOutputBytes };
-            child.kill("SIGKILL");
+            kill("SIGKILL");
           }
           return;
         }
@@ -179,8 +248,8 @@ export function createGitRunner(defaults: GitRunnerDefaults = {}): GitRunner {
   }
 
   function terminateAll(): void {
-    for (const child of children) {
-      child.kill("SIGTERM");
+    for (const [child, group] of children) {
+      killChild(child, "SIGTERM", group);
     }
     children.clear();
   }

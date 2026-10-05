@@ -12,6 +12,12 @@ describe("gitFailureMessage", () => {
       { code: "outputOverflow", limitBytes: 32 * 1024 * 1024 },
       { code: "timeout" },
       { code: "unexpected" },
+      { code: "authFailed" },
+      { code: "remoteNotFound" },
+      { code: "remoteRefMissing", ref: "refs/pull/12/head" },
+      { code: "network" },
+      { code: "remoteFailed", detail: "remote: SSO required" },
+      { code: "cancelled" },
     ];
     for (const failure of failures) {
       const message = gitFailureMessage(failure);
@@ -23,6 +29,15 @@ describe("gitFailureMessage", () => {
     expect(gitFailureMessage({ code: "notARepo", path: "/tmp/nowhere" })).toContain("/tmp/nowhere");
     expect(gitFailureMessage({ code: "outputOverflow", limitBytes: 32 * 1024 * 1024 })).toContain(
       "32 MiB",
+    );
+  });
+
+  it("names the missing remote ref and carries the remote's own line", () => {
+    expect(gitFailureMessage({ code: "remoteRefMissing", ref: "refs/pull/12/head" })).toContain(
+      "refs/pull/12/head",
+    );
+    expect(gitFailureMessage({ code: "remoteFailed", detail: "remote: SSO required" })).toContain(
+      "remote: SSO required",
     );
   });
 

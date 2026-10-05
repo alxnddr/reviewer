@@ -43,7 +43,14 @@ function slice(overrides: Partial<DiffPlanSlice>): DiffPlanSlice {
 }
 
 const REPO: RepoInfo = { path: "/repo", name: "repo" };
-const ORIGIN = { repo: REPO, base: "main", head: sha("a"), patch: null, reviewedHead: null };
+const ORIGIN = {
+  repo: REPO,
+  base: "main",
+  head: sha("a"),
+  patch: null,
+  reviewedHead: null,
+  pr: null,
+};
 
 describe("planDiff", () => {
   // The six states a diff pane can be in, one row each — the whole decision as a table

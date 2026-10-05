@@ -1,6 +1,7 @@
 import type { StateCreator } from "zustand";
+import { samePullRequest, type PullRequest } from "../../../../shared/pull-request";
 import type { SessionId, SessionSnapshot } from "../../../../shared/session";
-import { deriveSession } from "./effects";
+import { checkGitHubDiff, deriveSession, readPrHead } from "./effects";
 import { reseatedSlice, restoredSlice } from "./slice-factory";
 import type { Getter, SessionSlice, Setter } from "./slice";
 import type { ReviewState } from "./state";
@@ -24,6 +25,16 @@ export type BootSlice = {
    * or after a dialog/drop opened one: adds the new slice(s), adopts main's active,
    * and derives it — without disturbing any already-live slice. */
   syncSessions: () => Promise<void>;
+  /** After Review Pull Request… has fetched `pr` — the only thing that moves its ref
+   * (`pullRequestRef`) — re-read the fetched head (`prHead`) of every derived review *of that pull
+   * request*, and ask GitHub again about its diff (`githubCheck`): a fetch the reader asked for is
+   * the one moment they are known to care whether that pull request moved. Reviews of other pull
+   * requests are left alone — their refs did not move, and each re-check is a request against
+   * the unauthenticated hourly limit. Matched case-folded (`samePullRequest`), because GitHub's
+   * names are case-insensitive. Here beside the re-list because it is the same kind of event:
+   * main changed something under the renderer, and the slices catch up. A slice not derived yet
+   * is skipped; its derive asks both anyway. */
+  refreshPullRequestHeads: (pr: PullRequest) => Promise<void>;
 };
 
 /** Boot's `sessions:list` round-trip and the `set` that lands it, up to but not including the
@@ -183,6 +194,23 @@ export const createBootSlice: StateCreator<ReviewState, [], [], BootSlice> = (se
       if (nextActive !== null && sessions[nextActive]?.needsDerive === true) {
         await deriveSession(set, get, nextActive);
       }
+    },
+
+    refreshPullRequestHeads: async (pr) => {
+      const ids = Object.values(get().sessions)
+        .filter((slice) => {
+          const reviewed = slice.reviewOrigin?.pr ?? null;
+          return !slice.needsDerive && reviewed !== null && samePullRequest(reviewed, pr);
+        })
+        .map((slice) => slice.id);
+      await Promise.all(
+        ids.flatMap((id) => [
+          readPrHead(set, get, id),
+          // Fresh: the fetch may just have seen the pull request move, and main's memo of its
+          // head would say it had not.
+          checkGitHubDiff(set, get, id, { fresh: true }),
+        ]),
+      );
     },
   };
 };

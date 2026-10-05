@@ -1,5 +1,6 @@
 import * as z from "zod";
 import { defaultTheme, EditorChoice, ThemeId } from "./contracts";
+import { GitHubOwner } from "./pull-request";
 
 // The app's settings: the reader's own choices, as opposed to a session's state. This module is
 // the contract every side agrees on — main persists exactly this shape, the IPC rows for
@@ -42,6 +43,14 @@ export const DIFF_TAB_SIZE: NumberRange = { min: 1, max: 8, step: 1 };
  * paragraph. */
 const FontFamily = z.string().trim().min(1).max(200);
 
+/** The prompt Review Pull Request… copies for the reader's agent: free text with `{pr}`,
+ * `{worktree}`, `{base}` and `{head}` placeholders (expanded by `lib/pull-request-prompt.ts`).
+ * Trimmed so a template that is only whitespace reads as never chosen, rather than as a choice
+ * to copy nothing; capped as a guard against a pasted file, not as a policy — a prompt is a
+ * paragraph or two. */
+export const PROMPT_TEMPLATE_MAX = 4000;
+const PromptTemplate = z.string().trim().min(1).max(PROMPT_TEMPLATE_MAX);
+
 /** A number that must survive a hand edit: a stored value outside the range is a value the
  * dialog could never have written, so it reads as "never chosen" rather than as a clamp. */
 function bounded(range: NumberRange) {
@@ -77,6 +86,20 @@ export const Settings = z.object({
    * absent key because the controls that use it are always drawn: they read the resolved
    * record and need one answer — disabled, and why — until an editor is picked. */
   editor: choice(EditorChoice),
+  /** Whether a comment copied for the change's author carries its evidence, folded under a
+   * `<details>` (`shared/postable-comment.ts`). Off by default because evidence is written to
+   * the reader — the command they would rerun, the output that convinced the agent — and
+   * sending it to someone else is a choice, not something a copy should do unasked. */
+  postableIncludesEvidence: choice(z.boolean()),
+  /** What Review Pull Request… puts on the clipboard once the worktree is ready — the reader's
+   * own way of asking their agent for a review, since the app never runs the agent itself. */
+  pullRequestPrompt: choice(PromptTemplate),
+  /** The reader's GitHub login, for Review Pull Request…'s inbox: the open pull requests that
+   * request this user's review. Not a credential — a name anyone can read on their profile —
+   * and needed only because an unauthenticated search cannot say "me". Held to GitHub's login
+   * charset (`GitHubOwner`), so a hand-edited value with a space or a `:` in it reads as never
+   * chosen rather than reaching the search as an extra qualifier. */
+  githubUsername: choice(GitHubOwner),
 });
 export type Settings = z.infer<typeof Settings>;
 
@@ -100,7 +123,7 @@ export function mergeSettings(current: Settings, patch: SettingsPatch): Settings
     } else {
       // The catalog of keys is closed and each branch of the union is written by the dialog
       // against its own key, so the assignment is sound; the cast is what TypeScript needs to
-      // write one loop instead of eight identical statements.
+      // write one loop instead of a statement per key.
       (next as Record<string, unknown>)[key] = value;
     }
   }
@@ -130,6 +153,18 @@ export const SETTINGS_DEFAULTS: Omit<ResolvedSettings, "theme"> = {
   // What the tree did before it was a setting, and what `@pierre/trees` does when told
   // nothing: a chain of empty folders is one row.
   fileTreeFlattenFolders: true,
+  postableIncludesEvidence: false,
+  // In the spirit of the start screen's prompt (`components/AgentPrompt.tsx`): the reader's
+  // half — however they ask their agent for a review — then the one clause that is the app's,
+  // saying where the findings go, with `--pr` so the review knows its pull request. `{pr}` is
+  // the pull request's URL, which `rvw emit --pr` reads unambiguously; `{base}` is the
+  // freshly fetched remote-tracking branch, so the agent compares against the base as it is
+  // now and not a stale local one.
+  pullRequestPrompt:
+    "/code-review PR {pr} in {worktree} against {base} — then present the findings using the rvw CLI with --pr {pr}.",
+  // No login until the reader gives one: the empty string is "not set", which the inbox reads as
+  // the pointer to Settings rather than as a search (`githubLogin`).
+  githubUsername: "",
 };
 
 /** Fills every unchosen key. `systemDark` is an input rather than read here so this stays a
@@ -149,7 +184,17 @@ export function resolveSettings(
     editor: settings.editor ?? SETTINGS_DEFAULTS.editor,
     fileTreeFlattenFolders:
       settings.fileTreeFlattenFolders ?? SETTINGS_DEFAULTS.fileTreeFlattenFolders,
+    postableIncludesEvidence:
+      settings.postableIncludesEvidence ?? SETTINGS_DEFAULTS.postableIncludesEvidence,
+    pullRequestPrompt: settings.pullRequestPrompt ?? SETTINGS_DEFAULTS.pullRequestPrompt,
+    githubUsername: settings.githubUsername ?? SETTINGS_DEFAULTS.githubUsername,
   };
+}
+
+/** The resolved GitHub login, or null while none is set — the one reading of the empty default,
+ * so no caller compares against `""` itself. */
+export function githubLogin(resolved: Pick<ResolvedSettings, "githubUsername">): string | null {
+  return resolved.githubUsername === "" ? null : resolved.githubUsername;
 }
 
 /** The row height the diff renders at, in pixels: the multiplier applied to the font size and

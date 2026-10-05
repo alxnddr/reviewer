@@ -16,7 +16,7 @@ import {
   parsePatch,
   type PatchFile,
 } from "../shared/diff/patch";
-import { proseReferences } from "../shared/markdown";
+import { proseReferences, type MalformedForm } from "../shared/markdown";
 import { MAX_LAYER_DEPTH } from "../shared/layers";
 
 // The pre-handoff check an agent runs on a `.reviewer.json` before giving it over. It reuses
@@ -32,14 +32,24 @@ import { MAX_LAYER_DEPTH } from "../shared/layers";
 // `process.exit`; this module only decides.
 
 /** Which prose a reference problem was found in: the overview's body, which sits under no
- * layer to name, or one layer's description, named by the same ordinal path every other
- * layer problem uses.
+ * layer to name; one layer's description, named by the same ordinal path every other
+ * layer problem uses; or one comment's `postable`, named by its anchor — the locator every
+ * other comment problem reports, since a wire comment carries no identity of its own.
  *
- * A closed union rather than a nullable `layer`, so neither locator can be built empty —
- * the reason the two link problems used to be two variants. One `site` on three rules is
- * three variants instead of six, and every new rule about prose inherits both tiers rather
- * than choosing to support one. */
-export type ProseSite = { at: "overview" } | { at: "layer"; layer: string };
+ * A closed union rather than a nullable `layer`, so no locator can be built empty — the
+ * reason the two link problems used to be two variants. One `site` on three rules is three
+ * variants instead of nine, and every new rule about prose inherits every tier rather than
+ * choosing to support one.
+ *
+ * A comment's `body` is deliberately not a site: the app draws every reference on a comment
+ * inert (`CommentBody` passes `Markdown` no `links`), so a dead one there costs the reader
+ * nothing a live one would have given them. Its `postable` is held to the artifact's rule
+ * because it leaves the app — posted, a dead reference is a broken link in front of the
+ * change's author. */
+export type ProseSite =
+  | { at: "overview" }
+  | { at: "layer"; layer: string }
+  | { at: "comment"; anchor: AnchorSpan };
 
 /** One hunk an anchor could have been placed in: inclusive, in its side's own line numbers. */
 export type PlaceableSpan = { startLine: number; endLine: number };
@@ -86,10 +96,19 @@ export type ValidationProblem =
       anchor: AnchorSpan;
       nearestHunks: PlaceableSpan[];
     }
-  /** A target that reached for the line grammar and missed (`src/app.ts:abc`). Reported
-   * with the target as written, because the thing to fix is those characters — reading the
-   * suffix as part of the filename instead would report a file the author never named. */
-  | { kind: "malformedReference"; site: ProseSite; label: string; url: string };
+  /** A target that reached for the line grammar and missed (`src/app.ts:abc`), or a path
+   * behind a reference-style definition (`[r]: src/app.ts`), which no reader of references
+   * resolves — `why` says which (`MalformedForm`), because the two are fixed differently.
+   * Reported with the target as written, because the thing to fix is those characters —
+   * reading the suffix as part of the filename instead would report a file the author never
+   * named. */
+  | {
+      kind: "malformedReference";
+      site: ProseSite;
+      label: string;
+      url: string;
+      why: MalformedForm;
+    };
 
 export type ValidationReport = { ok: true } | { ok: false; problems: ValidationProblem[] };
 
@@ -245,6 +264,20 @@ export function validatePlacement(artifact: ReviewArtifact, patch: string): Vali
     }
   }
 
+  // A comment's `postable` is the one comment prose the gate reads (`ProseSite` says why).
+  // Checked whether or not the comment itself placed: its references are their own claims
+  // about the diff, and a draft that fixes one problem at a time should hear about both.
+  for (const comment of artifact.comments) {
+    if (comment.postable !== undefined) {
+      collectReferenceProblems(
+        { at: "comment", anchor: pickAnchor(comment) },
+        comment.postable,
+        byPath,
+        problems,
+      );
+    }
+  }
+
   // Depth-first, so a problem's ordinal names the layer the same way the outline will.
   for (const { layer, ordinal } of walkLayerInputs(artifact.layers)) {
     // Empty `ranges` is a valid parent rollup, not a "nothing
@@ -297,7 +330,13 @@ function collectReferenceProblems(
 ): void {
   const { references, malformed } = proseReferences(prose);
   for (const reference of malformed) {
-    problems.push({ kind: "malformedReference", site, label: reference.label, url: reference.url });
+    problems.push({
+      kind: "malformedReference",
+      site,
+      label: reference.label,
+      url: reference.url,
+      why: reference.why,
+    });
   }
   for (const reference of references) {
     const file = byPath.get(reference.path);
@@ -348,9 +387,10 @@ function nearestHunks(file: PatchFile, anchor: AnchorSpan): PlaceableSpan[] {
 }
 
 /** The locator alone, picked out of whatever anchor-shaped value carried it: a comment also
- * carries its `body`, which is prose the report has no business repeating back. A layer range
- * is already exactly these four fields and goes through it anyway, so a problem's anchor is
- * the locator and nothing else however the anchor reached here. */
+ * carries its `body` and its `postable`, which are prose the report has no business repeating
+ * back — `--json` serializes a problem whole. A layer range is already exactly these four
+ * fields and goes through it anyway, so a problem's anchor is the locator and nothing else
+ * however the anchor reached here. */
 function pickAnchor(source: AnchorSpan): AnchorSpan {
   return {
     file: source.file,
@@ -385,7 +425,18 @@ export function describeProblem(problem: ValidationProblem): string {
     case "referenceOutdated":
       return `${proseAt(problem.site)} references a line range that does not place in the diff: ${locator(problem.anchor)}${hunkHint(problem.nearestHunks)}`;
     case "malformedReference":
-      return `${proseAt(problem.site)} links [${problem.label}](${problem.url}) — a line reference reads path:12, path:12-20 or path:12-20@deletions`;
+      return `${proseAt(problem.site)} ${malformedHint(problem.why, problem.label, problem.url)}`;
+  }
+}
+
+/** The malformed reference as written, and the fix — one sentence per form, closed so a third
+ * form cannot reach the report without one. */
+function malformedHint(why: MalformedForm, label: string, url: string): string {
+  switch (why) {
+    case "suffix":
+      return `links [${label}](${url}) — a line reference reads path:12, path:12-20 or path:12-20@deletions`;
+    case "definition":
+      return `defines [${label}]: ${url} — write the reference inline: [label](path:lines)`;
   }
 }
 
@@ -397,6 +448,8 @@ function proseAt(site: ProseSite): string {
       return "overview body";
     case "layer":
       return `layer ${site.layer} description`;
+    case "comment":
+      return `postable of the comment at ${locator(site.anchor)}`;
   }
 }
 

@@ -1,4 +1,4 @@
-import { ipcMain, type IpcMainInvokeEvent } from "electron";
+import { app, ipcMain, type IpcMainInvokeEvent } from "electron";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import type * as z from "zod";
@@ -7,8 +7,8 @@ import { IPC_SCHEMAS } from "../shared/ipc-schemas";
 
 /** `IPC_SCHEMAS` as a mapped type over the channel, which is what makes the lookup in
  * `registerIpcHandler` readable to TypeScript: indexing the table's own type by an unresolved
- * generic key yields the union of all 22 rows, whose `parse` answers the union of all 22
- * payloads and relates to nothing. A homomorphic mapped type *does* distribute over a generic
+ * generic key yields the union of every row, whose `parse` answers the union of every
+ * payload and relates to nothing. A homomorphic mapped type *does* distribute over a generic
  * key, so `SCHEMAS[channel]` is that channel's pair and each `parse` stays tied to its own
  * direction — parsing the request with the response schema is a compile error rather than a
  * silent swap, and none of it costs an assertion. */
@@ -26,9 +26,14 @@ const SCHEMAS: ChannelSchemas = IPC_SCHEMAS;
  * Both, rather than whichever this run chose: `window.ts` picks by `is.dev`, and a registry
  * that disagreed with it about which was in play would reject every channel and take the
  * whole app down. Neither entry loosens anything, because nothing but the page we loaded can
- * reach either URL — the window opens no others. */
+ * reach either URL — the window opens no others.
+ *
+ * The dev server's URL is read only in an unpackaged run, exactly as `window.ts` reads it (`is.dev`
+ * is `!app.isPackaged`). A packaged app never loads it, so trusting it there would only let an
+ * environment variable — which whoever launches the app sets — name a page whose frames may
+ * invoke every channel, Layer C's posting rows included. */
 function trustedSenderPrefixes(): readonly string[] {
-  const devUrl = process.env["ELECTRON_RENDERER_URL"];
+  const devUrl = app.isPackaged ? undefined : process.env["ELECTRON_RENDERER_URL"];
   const bundle = pathToFileURL(join(__dirname, "../renderer/")).href;
   return devUrl === undefined ? [bundle] : [devUrl, bundle];
 }

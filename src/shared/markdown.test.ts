@@ -6,6 +6,7 @@ import {
   flattenMarkdown,
   isExternalUrl,
   parseMarkdown,
+  placedReferences,
   proseReferences,
   readLinkTarget,
   remarkFileReferences,
@@ -128,13 +129,66 @@ describe("proseReferences", () => {
   it("reports a link that reached for the line grammar and missed, as written", () => {
     const found = proseReferences("the [caller](src/b.ts:forty) never awaits it");
     expect(found.references).toEqual([]);
-    expect(found.malformed).toEqual([{ label: "caller", url: "src/b.ts:forty" }]);
+    expect(found.malformed).toEqual([{ label: "caller", url: "src/b.ts:forty", why: "suffix" }]);
+  });
+
+  it("refuses a path behind a reference-style definition in every use, and leaves a web one alone", () => {
+    // Full, collapsed and shortcut uses all resolve through a definition, which is the node
+    // read: the form is refused once per definition however many times it is used.
+    const text = [
+      "See [x][r], [src/a.ts][] and [lbl].",
+      "",
+      "[r]: src/a.ts:12",
+      "[src/a.ts]: src/a.ts",
+      "[lbl]: src/b.ts:nope",
+      "[web]: https://example.com",
+    ].join("\n");
+    const found = proseReferences(text);
+    expect(found.references).toEqual([]);
+    expect(found.malformed).toEqual([
+      { label: "r", url: "src/a.ts:12", why: "definition" },
+      { label: "src/a.ts", url: "src/a.ts", why: "definition" },
+      { label: "lbl", url: "src/b.ts:nope", why: "definition" },
+    ]);
+    expect(placedReferences(text)).toEqual([]);
   });
 
   it("takes the label from the link's own text, markers and all stripped", () => {
     expect(proseReferences("[the **entry** `point`](src/a.ts)").references).toEqual([
       { label: "the entry point", path: "src/a.ts", span: null },
     ]);
+  });
+});
+
+describe("placedReferences", () => {
+  it("places each reference by its source offsets, label markup kept as written", () => {
+    const text = 'see [`retry()`](src/a.ts:12-14) and [b](src/b.ts "why")';
+    const placed = placedReferences(text);
+    expect(placed.map((reference) => text.slice(reference.start, reference.end))).toEqual([
+      "[`retry()`](src/a.ts:12-14)",
+      '[b](src/b.ts "why")',
+    ]);
+    expect(placed[0]).toMatchObject({
+      label: "retry()",
+      labelSource: "`retry()`",
+      path: "src/a.ts",
+      span: { side: "additions", startLine: 12, endLine: 14 },
+      title: null,
+    });
+    expect(placed[1]).toMatchObject({ labelSource: "b", title: "why" });
+  });
+
+  it("finds exactly the references proseReferences reads — never one inside code", () => {
+    const text =
+      "`[a](src/a.ts)` [b](src/b.ts) [web](https://x.dev) [bad](src/c.ts:x)\n\n```\n[c](src/c.ts)\n```";
+    expect(placedReferences(text).map((reference) => reference.path)).toEqual(
+      proseReferences(text).references.map((reference) => reference.path),
+    );
+    expect(placedReferences(text).map((reference) => reference.path)).toEqual(["src/b.ts"]);
+  });
+
+  it("gives a label-less link an empty label source", () => {
+    expect(placedReferences("[](src/a.ts)")[0]?.labelSource).toBe("");
   });
 });
 

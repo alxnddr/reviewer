@@ -1,7 +1,8 @@
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import type { GitHubPostRecord } from "../../shared/github-posting";
 import { NO_PROGRESS, type ReadProgress } from "../../shared/review-progress";
 import { createProgressStore, progressFileName } from "./progress";
 
@@ -19,6 +20,7 @@ function makeDir(): string {
 }
 
 afterEach(() => {
+  vi.restoreAllMocks();
   for (const dir of tempDirs) {
     rmSync(dir, { recursive: true, force: true });
   }
@@ -312,5 +314,89 @@ describe("createProgressStore", () => {
   it("pruning a directory that is not there is a no-op, not a failure", async () => {
     const store = createProgressStore(makeDir());
     await expect(store.prune(new Set())).resolves.toBeUndefined();
+  });
+});
+
+describe("the posted record (Layer C)", () => {
+  const POSTED: GitHubPostRecord = {
+    pullRequest: { host: "github.com", owner: "octocat", repo: "Hello-World", number: 1 },
+    reviewedHead: "a".repeat(40),
+    comments: {
+      "9d534093": {
+        reviewId: "PRR_1",
+        threadId: "PRRT_1",
+        commentId: "PRRC_1",
+        state: "pending",
+        postable: "0badc0de",
+      },
+    },
+  };
+
+  it("keeps the marks when the poster writes, and the posted record when the session mirrors", async () => {
+    const dir = makeDir();
+    const store = createProgressStore(dir);
+    await store.write(REVIEW, progress());
+    expect(await store.writePosted(REVIEW, POSTED)).toBe(true);
+    expect(await store.read(REVIEW)).toEqual(progress());
+    // A write-back that moved the marks, from a renderer that knows nothing of what was posted.
+    await store.write(REVIEW, progress({ readTotal: 9 }));
+    expect(await store.readPosted(REVIEW)).toEqual({ ok: true, record: POSTED });
+    expect((await store.read(REVIEW)).readTotal).toBe(9);
+  });
+
+  it("never loses either half to two writers at once", async () => {
+    const dir = makeDir();
+    const store = createProgressStore(dir);
+    await Promise.all([
+      store.write(REVIEW, progress({ readTotal: 3 })),
+      store.writePosted(REVIEW, POSTED),
+      store.write(REVIEW, progress({ readTotal: 4 })),
+    ]);
+    expect(await store.readPosted(REVIEW)).toEqual({ ok: true, record: POSTED });
+    expect((await store.read(REVIEW)).readTotal).toBe(4);
+  });
+
+  it("writes a posted record for a review nobody has read yet", async () => {
+    const store = createProgressStore(makeDir());
+    await store.writePosted(REVIEW, POSTED);
+    expect(await store.readPosted(REVIEW)).toEqual({ ok: true, record: POSTED });
+    expect(await store.read(REVIEW)).toEqual(NO_PROGRESS);
+  });
+
+  it("a damaged posted record costs the marks nothing, reads as unreadable, and is never overwritten", async () => {
+    const dir = makeDir();
+    const damaged = { pullRequest: "not one", comments: 7 };
+    const file = writeRaw(
+      dir,
+      REVIEW,
+      JSON.stringify({
+        version: 1,
+        path: REVIEW,
+        updated: "2026-10-03T00:00:00.000Z",
+        ...progress(),
+        github: damaged,
+      }),
+    );
+    const store = createProgressStore(dir);
+    expect(await store.read(REVIEW)).toEqual(progress());
+    expect(await store.readPosted(REVIEW)).toEqual({ ok: false });
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    expect(await store.writePosted(REVIEW, POSTED)).toBe(false);
+    // The session mirror carries the damaged value through untouched, too.
+    await store.write(REVIEW, progress({ readTotal: 11 }));
+    const onDisk = JSON.parse(readFileSync(file, "utf8")) as { github: unknown; readTotal: number };
+    expect(onDisk.github).toEqual(damaged);
+    expect(onDisk.readTotal).toBe(11);
+  });
+
+  it("never replaces a record it cannot read at all with one that lost it", async () => {
+    const dir = makeDir();
+    const bytes = JSON.stringify({ version: 2, path: REVIEW, fromTheFuture: true });
+    const file = writeRaw(dir, REVIEW, bytes);
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const store = createProgressStore(dir);
+    expect(await store.readPosted(REVIEW)).toEqual({ ok: false });
+    expect(await store.writePosted(REVIEW, POSTED)).toBe(false);
+    expect(readFileSync(file, "utf8")).toBe(bytes);
   });
 });

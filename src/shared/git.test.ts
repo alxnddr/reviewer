@@ -1,6 +1,14 @@
 import { describe, expect, it } from "vitest";
 import * as z from "zod";
-import { BranchName, CommitSha, DiffSelection, GitResultOf, Patch, RepoPath } from "./git";
+import {
+  BranchName,
+  CommitSha,
+  DiffSelection,
+  GitResultOf,
+  isGitBranchName,
+  Patch,
+  RepoPath,
+} from "./git";
 
 const SHA_40 = "a".repeat(40);
 const SHA_64 = "b".repeat(64);
@@ -120,5 +128,22 @@ describe("GitResultOf", () => {
   it("rejects an unknown failure code", () => {
     const result = { ok: false, failure: { code: "meltdown" } };
     expect(PatchResult.safeParse(result).success).toBe(false);
+  });
+});
+
+describe("isGitBranchName", () => {
+  it("accepts what git check-ref-format --branch accepts", () => {
+    for (const name of ["main", "release/1.2", "feature/x-y_z", "a.b"]) {
+      expect(isGitBranchName(name), name).toBe(true);
+    }
+  });
+
+  it("refuses the names BranchName lets through and git does not", () => {
+    for (const name of ["a/.b", "a.lock/b", "a/b.lock", "@", "HEAD", "a//b", "-x", "a..b", "a b"]) {
+      expect(isGitBranchName(name), name).toBe(false);
+    }
+    // The gap this closes: these parse as BranchName.
+    expect(BranchName.safeParse("a/.b").success).toBe(true);
+    expect(BranchName.safeParse("a.lock/b").success).toBe(true);
   });
 });

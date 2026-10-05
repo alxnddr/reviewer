@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -55,6 +55,79 @@ describe("createGitRunner", () => {
     const sleepRunner = createGitRunner({ gitBinary: "/bin/sleep" });
     const result = await sleepRunner.run({ cwd: workDir, args: ["5"], timeoutMs: 100 });
     expect(result).toEqual({ ok: false, failure: { code: "timeout" } });
+  });
+
+  it("runs a detached child like any other", async () => {
+    const result = await runner.run({ cwd: workDir, args: ["--version"], detached: true });
+    expect(result).toMatchObject({ ok: true });
+  });
+
+  it("takes a detached child's whole process group down on a timeout", async () => {
+    // The shell stands in for git, the backgrounded sleep for the ssh it would have started:
+    // killing the leader alone would leave the sleep running for its full 30 seconds.
+    const shellRunner = createGitRunner({ gitBinary: "/bin/sh" });
+    const pidFile = join(workDir, "helper.pid");
+    const result = await shellRunner.run({
+      cwd: workDir,
+      args: ["-c", `sleep 30 & echo $! > ${pidFile}; wait`],
+      timeoutMs: 300,
+      detached: true,
+    });
+    expect(result).toEqual({ ok: false, failure: { code: "timeout" } });
+    const helper = Number(readFileSync(pidFile, "utf8").trim());
+    await new Promise((resolve) => {
+      setTimeout(resolve, 100);
+    });
+    expect(() => process.kill(helper, 0)).toThrow();
+  });
+
+  it("kills a run whose signal is aborted, and answers cancelled", async () => {
+    const shellRunner = createGitRunner({ gitBinary: "/bin/sh" });
+    const controller = new AbortController();
+    const running = shellRunner.run({
+      cwd: workDir,
+      args: ["-c", "sleep 30 & wait"],
+      detached: true,
+      signal: controller.signal,
+    });
+    setTimeout(() => controller.abort(), 100);
+    expect(await running).toEqual({ ok: false, failure: { code: "cancelled" } });
+    // Already aborted: nothing is spawned at all.
+    expect(
+      await runner.run({ cwd: workDir, args: ["--version"], signal: controller.signal }),
+    ).toEqual({
+      ok: false,
+      failure: { code: "cancelled" },
+    });
+  });
+
+  it("lets a timed-out child clean up on SIGTERM before anything harder", async () => {
+    // The trap is git's own cleanup in miniature: it runs on SIGTERM and never on SIGKILL.
+    const shellRunner = createGitRunner({ gitBinary: "/bin/sh", killGraceMs: 2_000 });
+    const marker = join(workDir, "cleaned-up");
+    const controller = new AbortController();
+    const running = shellRunner.run({
+      cwd: workDir,
+      args: ["-c", `trap 'echo cleaned > ${marker}; exit 143' TERM; sleep 30 & wait`],
+      detached: true,
+      signal: controller.signal,
+    });
+    setTimeout(() => controller.abort(), 200);
+    expect(await running).toEqual({ ok: false, failure: { code: "cancelled" } });
+    expect(readFileSync(marker, "utf8").trim()).toBe("cleaned");
+  });
+
+  it("SIGKILLs a child that ignores SIGTERM once the grace runs out", async () => {
+    const shellRunner = createGitRunner({ gitBinary: "/bin/sh", killGraceMs: 200 });
+    const started = Date.now();
+    const result = await shellRunner.run({
+      cwd: workDir,
+      args: ["-c", "trap '' TERM; sleep 30 & wait"],
+      timeoutMs: 100,
+      detached: true,
+    });
+    expect(result).toEqual({ ok: false, failure: { code: "timeout" } });
+    expect(Date.now() - started).toBeLessThan(5_000);
   });
 
   it("reports a missing git binary", async () => {

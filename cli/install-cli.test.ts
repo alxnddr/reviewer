@@ -11,8 +11,11 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { minimalRepo, REPO_ROOT } from "./fixtures";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { minimalRepo, REPO_ROOT, SPAWN_SUITE_TIMEOUT_MS } from "./fixtures";
+
+// Real processes, so not the 5s default — see `SPAWN_SUITE_TIMEOUT_MS` for why and how long.
+vi.setConfig({ testTimeout: SPAWN_SUITE_TIMEOUT_MS, hookTimeout: SPAWN_SUITE_TIMEOUT_MS });
 
 // `rvw` for a machine without Reviewer.app, end to end: `scripts/pack-cli.mjs` packs the tarball a
 // release attaches, `scripts/install-cli.sh` installs it into a throwaway `$HOME`, and every verb
@@ -98,7 +101,7 @@ beforeAll(() => {
   );
   expect(packed.status, packed.stderr).toBe(0);
   tarball = packed.stdout.trim();
-}, 60_000);
+});
 
 afterAll(() => {
   rmSync(root, { recursive: true, force: true });

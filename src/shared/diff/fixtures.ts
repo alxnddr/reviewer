@@ -443,3 +443,184 @@ export function buildMovedLinesPatch(fileCount: number, linesPerFile: number): s
     ].join("\n");
   }).join("");
 }
+
+/** One change to `src/loop.c`, diffed twice from the same two commits: once with
+ * `--diff-algorithm=myers` (git's default) and once with `--diff-algorithm=histogram`. Captured
+ * from a throwaway repo. Myers aligns it as two hunks — new-file lines 7..13 and 18..27 — and
+ * histogram as one, 7..27, so new-file lines 14..17 are context in one diff and collapsed away
+ * in the other. The hunk-boundary case for checking a review against the code host's diff: a
+ * reader whose `diff.algorithm` differs from the host's sees lines the host has no hunk for. */
+export const MYERS_PATCH = `diff --git a/src/loop.c b/src/loop.c
+index fe91b24..9f12e17 100644
+--- a/src/loop.c
++++ b/src/loop.c
+@@ -7,7 +7,7 @@ foo();
+ int g() {
+ return x;
+ x++;
+-int f() {
++int g() {
+ bar();
+ }
+ x++;
+@@ -18,13 +18,10 @@ bar();
+ bar();
+ foo();
+ }
+-foo();
+ int g() {
+-}
+ x++;
+ }
+ int g() {
+-return x;
+-x++;
+ int g() {
++return x;
+ int g() {
+`;
+
+/** `MYERS_PATCH`'s change, aligned by `--diff-algorithm=histogram`: one hunk over new-file
+ * lines 7..27. */
+export const HISTOGRAM_PATCH = `diff --git a/src/loop.c b/src/loop.c
+index fe91b24..9f12e17 100644
+--- a/src/loop.c
++++ b/src/loop.c
+@@ -7,24 +7,21 @@ foo();
+ int g() {
+ return x;
+ x++;
+-int f() {
+-bar();
+-}
+-x++;
+-bar();
+-}
+-
+-
+-bar();
+-foo();
+-}
+-foo();
+ int g() {
++bar();
+ }
+ x++;
++bar();
+ }
++
++
++bar();
++foo();
++}
++int g() {
++x++;
++}
++int g() {
+ int g() {
+ return x;
+-x++;
+-int g() {
+ int g() {
+`;
+
+/** A pull request's diff as the code host shows it — against the base branch as it is now.
+ * Captured from a throwaway repo: `main` gained a commit (`src/config.ts`, and line 2 of
+ * `src/list.txt`) after which the pull request branched and changed lines 5 and 18 of
+ * `src/list.txt`. `git diff main...pr`: one file, two hunks, new-file lines 2..8 and 15..20. */
+export const STALE_BASE_HOST_PATCH = `diff --git a/src/list.txt b/src/list.txt
+index 12f810b..fb1cdf0 100644
+--- a/src/list.txt
++++ b/src/list.txt
+@@ -2,7 +2,7 @@ line 1
+ line 2 (from main)
+ line 3
+ line 4
+-line 5
++line 5 (from the pr)
+ line 6
+ line 7
+ line 8
+@@ -15,6 +15,6 @@ line 14
+ line 15
+ line 16
+ line 17
+-line 18
++line 18 (from the pr)
+ line 19
+ line 20
+`;
+
+/** The same pull request diffed against a *stale* local `main` that never fetched that commit:
+ * the merge base moves back, so the diff also carries `main`'s own change — all of
+ * `src/config.ts`, and line 2 of `src/list.txt`, which widens the first hunk to new-file lines
+ * 1..8. `git diff stale-main...pr` from the same repo as `STALE_BASE_HOST_PATCH`. */
+export const STALE_BASE_LOCAL_PATCH = `diff --git a/src/config.ts b/src/config.ts
+index 982290e..181bbd0 100644
+--- a/src/config.ts
++++ b/src/config.ts
+@@ -1,2 +1,2 @@
+-export const retries = 3;
++export const retries = 5;
+ export const timeoutMs = 1000;
+diff --git a/src/list.txt b/src/list.txt
+index c4352f8..fb1cdf0 100644
+--- a/src/list.txt
++++ b/src/list.txt
+@@ -1,8 +1,8 @@
+ line 1
+-line 2
++line 2 (from main)
+ line 3
+ line 4
+-line 5
++line 5 (from the pr)
+ line 6
+ line 7
+ line 8
+@@ -15,6 +15,6 @@ line 14
+ line 15
+ line 16
+ line 17
+-line 18
++line 18 (from the pr)
+ line 19
+ line 20
+`;
+
+/** A pull request's diff exactly as GitHub's API returned it (`jackfrued/Python-100-Days#1207`,
+ * fetched 2026-10-03): one file whose name is outside ASCII, so GitHub — like git with its
+ * default `core.quotePath` — writes it C-quoted with octal escapes in every header line. The
+ * parser keeps the escapes (`git-path.ts` says how), so the name it reports is not the name a
+ * reader sees. `String.raw` because `\345` is not a legal escape in a template literal. */
+export const QUOTED_PATH_HOST_PATCH = String.raw`diff --git "a/Day01-20/11.\345\270\270\347\224\250\346\225\260\346\215\256\347\273\223\346\236\204\344\271\213\345\255\227\347\254\246\344\270\262.md" "b/Day01-20/11.\345\270\270\347\224\250\346\225\260\346\215\256\347\273\223\346\236\204\344\271\213\345\255\227\347\254\246\344\270\262.md"
+index 38e2ffc807..3bc7023f20 100755
+--- "a/Day01-20/11.\345\270\270\347\224\250\346\225\260\346\215\256\347\273\223\346\236\204\344\271\213\345\255\227\347\254\246\344\270\262.md"
++++ "b/Day01-20/11.\345\270\270\347\224\250\346\225\260\346\215\256\347\273\223\346\236\204\344\271\213\345\255\227\347\254\246\344\270\262.md"
+@@ -4,7 +4,7 @@
+ 
+ <img src="res/day11/eniac.jpg" style="zoom:50%;">
+ 
+-随着时间的推移，虽然数值运算仍然是计算机日常工作中最为重要的组成部分，但是今天的计算机还要处理大量的以文本形式存在的信息。如果我们希望通过 Python 程序来操作本这些文本信息，就必须要先了解字符串这种数据类型以及与它相关的运算和方法。
++随着时间的推移，虽然数值运算仍然是计算机日常工作中最为重要的组成部分，但是今天的计算机还要处理大量的以文本形式存在的信息。如果我们希望通过 Python 程序来操作这些文本信息，就必须要先了解字符串这种数据类型以及与它相关的运算和方法。
+ 
+ ### 字符串的定义
+ 
+`;
+
+/** `QUOTED_PATH_HOST_PATCH`'s change as this app captures it, with `core.quotePath` off: the
+ * same hunk under the plain UTF-8 name, `Day01-20/11.常用数据结构之字符串.md`. */
+export const QUOTED_PATH_LOCAL_PATCH = `diff --git a/Day01-20/11.常用数据结构之字符串.md b/Day01-20/11.常用数据结构之字符串.md
+index 38e2ffc807..3bc7023f20 100755
+--- a/Day01-20/11.常用数据结构之字符串.md
++++ b/Day01-20/11.常用数据结构之字符串.md
+@@ -4,7 +4,7 @@
+ 
+ <img src="res/day11/eniac.jpg" style="zoom:50%;">
+ 
+-随着时间的推移，虽然数值运算仍然是计算机日常工作中最为重要的组成部分，但是今天的计算机还要处理大量的以文本形式存在的信息。如果我们希望通过 Python 程序来操作本这些文本信息，就必须要先了解字符串这种数据类型以及与它相关的运算和方法。
++随着时间的推移，虽然数值运算仍然是计算机日常工作中最为重要的组成部分，但是今天的计算机还要处理大量的以文本形式存在的信息。如果我们希望通过 Python 程序来操作这些文本信息，就必须要先了解字符串这种数据类型以及与它相关的运算和方法。
+ 
+ ### 字符串的定义
+ 
+`;

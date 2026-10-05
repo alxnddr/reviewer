@@ -117,6 +117,14 @@ function walkHunkLines(hunk: Hunk, visit: WalkVisitor): boolean {
   return true;
 }
 
+/** The four header numbers of a hunk — all `hunkSpan` reads, and all a placement needs. Named so
+ * a caller can keep a diff's geometry without its lines (`remote-diff.ts` caches a host diff
+ * this way rather than holding the whole parse). */
+export type HunkGeometry = Pick<
+  Hunk,
+  "additionStart" | "additionCount" | "deletionStart" | "deletionCount"
+>;
+
 /** The inclusive line span one hunk covers on one side: new-file lines
  * `[additionStart, additionStart + additionCount - 1]` on the additions side and old-file lines
  * `[deletionStart, deletionStart + deletionCount - 1]` on the deletions side (counts include
@@ -125,7 +133,7 @@ function walkHunkLines(hunk: Hunk, visit: WalkVisitor): boolean {
  * because both sides of anchoring have to ask the same question of the same hunks: an anchor is
  * only placeable within one span (`anchor.ts`), so that is what a picked range gets clamped to
  * (`comment-annotations.ts`). */
-export function hunkSpan(hunk: Hunk, side: ReviewSide): { start: number; end: number } {
+export function hunkSpan(hunk: HunkGeometry, side: ReviewSide): { start: number; end: number } {
   const start = side === "additions" ? hunk.additionStart : hunk.deletionStart;
   const count = side === "additions" ? hunk.additionCount : hunk.deletionCount;
   return { start, end: start + count - 1 };

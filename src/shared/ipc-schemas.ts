@@ -3,16 +3,48 @@ import { CliInstallResult, CliStatus } from "./cli";
 import { EditorOpenRequest, EditorOpenResponse } from "./editor-ipc";
 import {
   BranchesResponse,
+  CommitSha,
   DiffRequest,
   DiffResponse,
   FileContentsRequest,
   FileContentsResponse,
+  GitResultOf,
   LogRequest,
   LogResponse,
   OpenRepoResponse,
   RepoRequest,
 } from "./git";
+import {
+  GitHubDiffCheckRequest,
+  GitHubDiffCheckResponse,
+  GitHubInboxRequest,
+  GitHubInboxResponse,
+  GitHubPullRequestRequest,
+  GitHubPullRequestResponse,
+} from "./github-ipc";
+import {
+  GitHubDeletePendingRequest,
+  GitHubDeletePendingResponse,
+  GitHubForgetTokenRequest,
+  GitHubPostedRequest,
+  GitHubPostedResponse,
+  GitHubPostRequest,
+  GitHubPostResponse,
+  GitHubSetTokenRequest,
+  GitHubSetTokenResponse,
+  GitHubStatus,
+} from "./github-posting";
 import type { IpcChannelName } from "./ipc";
+import {
+  PullRequestHeadRequest,
+  PullRequestLocateResponse,
+  PullRequestPrepareRequest,
+  PullRequestPrepareResponse,
+  PullRequestRemoveWorktreeRequest,
+  PullRequestRemoveWorktreeResponse,
+  PullRequestRequest,
+  PullRequestWorktreesResponse,
+} from "./pull-request-ipc";
 import {
   RecentReviewsResponse,
   ReviewLocateRepoRequest,
@@ -77,6 +109,38 @@ export const IPC_SCHEMAS = {
   "git:log": { request: LogRequest, response: LogResponse },
   "git:diff": { request: DiffRequest, response: DiffResponse },
   "git:file-contents": { request: FileContentsRequest, response: FileContentsResponse },
+  // Review Pull Request…. The three ways to a checkout answer one shape, so the dialog treats
+  // a match, a located repository and a fresh clone alike; the pickers live in main, so their
+  // requests name only the pull request.
+  "pr:locate": { request: PullRequestRequest, response: PullRequestLocateResponse },
+  "pr:locate-checkout": { request: PullRequestRequest, response: PullRequestLocateResponse },
+  "pr:clone": { request: PullRequestRequest, response: PullRequestLocateResponse },
+  "pr:prepare": { request: PullRequestPrepareRequest, response: PullRequestPrepareResponse },
+  // Answers plainly, like `reviews:recent`: a worktree git cannot read is a row, not a failure.
+  "pr:worktrees": { request: NoPayload, response: PullRequestWorktreesResponse },
+  "pr:remove-worktree": {
+    request: PullRequestRemoveWorktreeRequest,
+    response: PullRequestRemoveWorktreeResponse,
+  },
+  "pr:cancel": { request: NoPayload, response: NoPayload },
+  // A git read like `git:log`, in the same envelope; null is "never fetched", not a failure.
+  "pr:head": { request: PullRequestHeadRequest, response: GitResultOf(CommitSha.nullable()) },
+  // GitHub's API. Each answers a `GitHubResult` envelope: the parsed value, or a failure code
+  // whose sentence the renderer composes (`lib/github-failure-message.ts`).
+  "github:inbox": { request: GitHubInboxRequest, response: GitHubInboxResponse },
+  "github:pull-request": { request: GitHubPullRequestRequest, response: GitHubPullRequestResponse },
+  "github:check-diff": { request: GitHubDiffCheckRequest, response: GitHubDiffCheckResponse },
+  // Layer C. No response schema here has a field a token could ride in — the parse on the way
+  // out is the last check that none does.
+  "github:set-token": { request: GitHubSetTokenRequest, response: GitHubSetTokenResponse },
+  "github:status": { request: NoPayload, response: GitHubStatus },
+  "github:forget": { request: GitHubForgetTokenRequest, response: GitHubStatus },
+  "github:post-comments": { request: GitHubPostRequest, response: GitHubPostResponse },
+  "github:posted": { request: GitHubPostedRequest, response: GitHubPostedResponse },
+  "github:delete-pending-comment": {
+    request: GitHubDeletePendingRequest,
+    response: GitHubDeletePendingResponse,
+  },
   // Session channels answer plainly, not in the GitResult envelope: no git runs
   // here and the store's salvage-on-load semantics mean reads always succeed.
   "sessions:list": { request: NoPayload, response: SessionSnapshot },

@@ -48,6 +48,7 @@ describe("logRangeFor", () => {
             head: sha("a"),
             patch: null,
             reviewedHead: null,
+            pr: null,
           },
           head: "feature",
           base: "trunk",

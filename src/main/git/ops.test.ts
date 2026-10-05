@@ -4,7 +4,16 @@ import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { GitResult } from "../../shared/git";
-import { getCommitLog, getDiff, getFileContents, listBranches, validateRepo } from "./ops";
+import {
+  getCommitLog,
+  getDiff,
+  getFileContents,
+  listBranches,
+  listRemotes,
+  mapRemoteFailure,
+  remoteFailureDetail,
+  validateRepo,
+} from "./ops";
 import { createGitRunner } from "./runner";
 
 // Integration suite against fixture repos built by real git in a temp dir.
@@ -483,5 +492,133 @@ describe("getFileContents", () => {
       }),
     );
     expect(failure).toEqual({ code: "outputOverflow", limitBytes: 1024 });
+  });
+});
+
+describe("listRemotes", () => {
+  it("lists every remote with its URL as configured and as rewritten, dots in names and all", async () => {
+    const repo = join(root, "remotes");
+    mkdirSync(repo);
+    git(repo, "init", "-q", "-b", "main");
+    git(repo, "remote", "add", "origin", "git@github.com:acme/widget.git");
+    git(repo, "remote", "add", "my.fork", "https://github.com/me/widget.git");
+    git(repo, "config", "url.https://mirror.test/.insteadOf", "git@github.com:");
+    const remotes = expectOk(await listRemotes(runner, repo));
+    // `arrayContaining` for the URLs: the runner reads the developer's global config like the
+    // app reads the reader's, and a global `insteadOf` may add a rewritten spelling of its own.
+    expect(remotes.map((remote) => remote.name).toSorted()).toEqual(["my.fork", "origin"]);
+    expect(remotes.find((remote) => remote.name === "my.fork")?.urls).toEqual(
+      expect.arrayContaining(["https://github.com/me/widget.git"]),
+    );
+    expect(remotes.find((remote) => remote.name === "origin")?.urls).toEqual(
+      expect.arrayContaining([
+        "git@github.com:acme/widget.git",
+        "https://mirror.test/acme/widget.git",
+      ]),
+    );
+  });
+
+  it("answers an empty list for a repository with no remotes", async () => {
+    expect(expectOk(await listRemotes(runner, cleanRepo))).toEqual([]);
+  });
+});
+
+describe("remoteFailureDetail", () => {
+  it("prefers the remote's own explanation over git's summary", () => {
+    expect(
+      remoteFailureDetail(
+        "remote: The 'acme' organization has enforced SAML SSO.\nfatal: unable to access 'https://github.com/acme/w.git/': The requested URL returned error: 403\n",
+      ),
+    ).toBe("remote: The 'acme' organization has enforced SAML SSO.");
+  });
+
+  it("falls back to git's last fatal line, with any URL's credentials redacted", () => {
+    expect(
+      remoteFailureDetail(
+        "warning: something\nfatal: unable to access 'https://x-access-token:ghp_secret@github.com/a/b.git/': SSL certificate problem\n",
+      ),
+    ).toBe("fatal: unable to access 'https://github.com/a/b.git/': SSL certificate problem");
+  });
+
+  it("redacts a password holding an @ or a /, over-redacting rather than leaking", () => {
+    expect(
+      remoteFailureDetail("fatal: unable to access 'https://u:p@ss@github.com/a/b.git/'"),
+    ).toBe("fatal: unable to access 'https://github.com/a/b.git/'");
+    expect(remoteFailureDetail("fatal: could not read https://u:p/w@github.com/a/b")).toBe(
+      "fatal: could not read https://github.com/a/b",
+    );
+  });
+
+  it("strips C0 and C1 controls and bidi overrides, and caps a runaway line", () => {
+    const detail = remoteFailureDetail(
+      `fatal: \u001B[31m\u009B\u202Eevil\u2066${"x".repeat(1000)}`,
+    );
+    for (const character of ["\u001B", "\u009B", "\u202E", "\u2066"]) {
+      expect(detail).not.toContain(character);
+    }
+    expect(detail.startsWith("fatal: [31mevil")).toBe(true);
+    expect(detail.length).toBeLessThanOrEqual(300);
+    expect(remoteFailureDetail("")).toBe("git gave no reason");
+  });
+});
+
+describe("mapRemoteFailure", () => {
+  const exited = (stderr: string) => ({ code: "exited" as const, exitCode: 128, stderr });
+  const map = (stderr: string, unknown?: "remote" | "local") =>
+    mapRemoteFailure(exited(stderr), "/repo", unknown);
+
+  it("reads a missing pull request or branch off git's own sentence", () => {
+    expect(map("fatal: couldn't find remote ref refs/pull/9/head\n")).toEqual({
+      code: "remoteRefMissing",
+      ref: "refs/pull/9/head",
+    });
+  });
+
+  it("reads a repository the remote will not show, over https and over ssh", () => {
+    expect(
+      map(
+        "remote: Repository not found.\nfatal: repository 'https://github.com/a/b.git/' not found\n",
+      ),
+    ).toEqual({ code: "remoteNotFound" });
+    expect(
+      map(
+        "ERROR: Repository not found.\nfatal: Could not read from remote repository.\n\nPlease make sure you have the correct access rights\nand the repository exists.\n",
+      ),
+    ).toEqual({ code: "remoteNotFound" });
+  });
+
+  it("reads refused credentials, including an SSO-enforcing organization's 403", () => {
+    for (const stderr of [
+      "fatal: could not read Username for 'https://github.com': terminal prompts disabled\n",
+      "git@github.com: Permission denied (publickey).\nfatal: Could not read from remote repository.\n",
+      "remote: Invalid username or token.\nfatal: Authentication failed for 'https://github.com/a/b.git/'\n",
+      "Host key verification failed.\nfatal: Could not read from remote repository.\n",
+      "remote: The 'acme' organization has enabled or enforced SAML SSO.\nfatal: unable to access 'https://github.com/acme/w.git/': The requested URL returned error: 403\n",
+    ]) {
+      expect(map(stderr), stderr).toEqual({ code: "authFailed" });
+    }
+  });
+
+  it("reads an unreachable remote", () => {
+    for (const stderr of [
+      "fatal: unable to access 'https://github.com/a/b.git/': Could not resolve host: github.com\n",
+      "ssh: Could not resolve hostname github.com: nodename nor servname provided, or not known\n",
+      "fatal: unable to access 'https://github.com/a/b.git/': Failed to connect to github.com port 443\n",
+    ]) {
+      expect(map(stderr), stderr).toEqual({ code: "network" });
+    }
+  });
+
+  it("carries the line of anything else for a fetch, and keeps a local failure local", () => {
+    expect(
+      map("fatal: unable to access 'https://github.com/a/b.git/': SSL certificate problem\n"),
+    ).toEqual({
+      code: "remoteFailed",
+      detail: "fatal: unable to access 'https://github.com/a/b.git/': SSL certificate problem",
+    });
+    expect(map("fatal: '/wt/acme/widget-8' already exists\n", "local")).toEqual({
+      code: "unexpected",
+    });
+    expect(mapRemoteFailure({ code: "cancelled" }, "/repo")).toEqual({ code: "cancelled" });
   });
 });

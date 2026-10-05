@@ -64,7 +64,9 @@ async function resolveExportOrigin(
     headShaOf(slice.log),
   );
   if (!needsPatch) {
-    return { repo, base, head, patch: null, reviewedHead };
+    // A plain repo session was never told which pull request it is of — that only arrives
+    // with an artifact `rvw emit --pr` wrote — so its export names none.
+    return { repo, base, head, patch: null, reviewedHead, pr: null };
   }
   const response = await bridge.getDiff({
     repoPath: slice.repo.path,
@@ -76,7 +78,7 @@ async function resolveExportOrigin(
   // An empty patch is no usable frozen diff (and no comment could have anchored on
   // it): fall through to the source refs rather than freezing an empty artifact.
   const patch = response.value.patch;
-  return { repo, base, head, patch: patch.length > 0 ? patch : null, reviewedHead };
+  return { repo, base, head, patch: patch.length > 0 ? patch : null, reviewedHead, pr: null };
 }
 
 export const createExportSlice: StateCreator<ReviewState, [], [], ExportSlice> = (set, get) => ({
@@ -102,6 +104,7 @@ export const createExportSlice: StateCreator<ReviewState, [], [], ExportSlice> =
         head: origin.head,
         patch: origin.patch,
         reviewedHead: origin.reviewedHead,
+        pr: origin.pr,
         overview: slice.overview,
         comments: slice.comments,
         layers: slice.layers,

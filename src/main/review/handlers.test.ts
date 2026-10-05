@@ -189,6 +189,8 @@ function emptyProgress(): ProgressStore {
     write: () => Promise.resolve(),
     summaries: () => Promise.resolve(new Map()),
     prune: () => Promise.resolve(),
+    readPosted: () => Promise.resolve({ ok: true, record: null }),
+    writePosted: () => Promise.resolve(true),
   };
 }
 
@@ -200,6 +202,7 @@ function memoryRelocations(
   return {
     entries,
     get: (authored) => entries.get(authored) ?? null,
+    locals: () => [...entries.values()],
     remember: (authored, local) => {
       entries.set(authored, local);
     },
@@ -761,6 +764,7 @@ describe("repinReviewSessions", () => {
       head,
       patch,
       reviewedHead: null,
+      pr: null,
       overview: null,
       comments: [],
       layers: [],

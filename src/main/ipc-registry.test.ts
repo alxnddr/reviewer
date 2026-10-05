@@ -12,8 +12,14 @@ type Listener = (event: unknown, request?: unknown) => Promise<unknown>;
 
 const electron = vi.hoisted(() => ({
   handlers: new Map<string, Listener>(),
+  packaged: false,
 }));
 vi.mock("electron", () => ({
+  app: {
+    get isPackaged() {
+      return electron.packaged;
+    },
+  },
   ipcMain: {
     handle: (channel: string, listener: Listener) => {
       electron.handlers.set(channel, listener);
@@ -50,6 +56,7 @@ function registerOnboardingGet(): { invoke: (event: IpcMainInvokeEvent) => Promi
 
 beforeEach(() => {
   electron.handlers.clear();
+  electron.packaged = false;
   // No dev server unless a test says so, whatever the ambient environment is.
   vi.stubEnv("ELECTRON_RENDERER_URL", undefined);
   vi.spyOn(console, "error").mockImplementation(() => {});
@@ -77,6 +84,16 @@ describe("registerIpcHandler sender validation", () => {
     // play would reject every channel in the app.
     vi.stubEnv("ELECTRON_RENDERER_URL", "http://localhost:5173");
     const { invoke } = registerOnboardingGet();
+    await expect(invoke(fakeEvent(BUNDLE_URL))).resolves.toBe(true);
+  });
+
+  it("ignores the dev server's URL in a packaged app, which never loads it", async () => {
+    electron.packaged = true;
+    vi.stubEnv("ELECTRON_RENDERER_URL", "http://localhost:5173");
+    const { invoke } = registerOnboardingGet();
+    await expect(invoke(fakeEvent("http://localhost:5173/index.html"))).rejects.toThrow(
+      "untrusted sender",
+    );
     await expect(invoke(fakeEvent(BUNDLE_URL))).resolves.toBe(true);
   });
 

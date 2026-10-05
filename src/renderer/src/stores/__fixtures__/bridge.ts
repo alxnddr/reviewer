@@ -52,7 +52,7 @@ export const BRANCH_LIST: BranchList = {
 export function makeBridge(overrides: Partial<ReviewerBridge> = {}): ReviewerBridge {
   return {
     getSettings: vi.fn().mockResolvedValue({}),
-    setSettings: vi.fn().mockResolvedValue(undefined),
+    setSettings: vi.fn().mockResolvedValue({ ok: true }),
     getCliStatus: vi.fn().mockResolvedValue({
       supported: true,
       installed: true,
@@ -91,6 +91,42 @@ export function makeBridge(overrides: Partial<ReviewerBridge> = {}): ReviewerBri
     getCommitLog: vi.fn().mockResolvedValue({ ok: true, value: { entries: DIRTY_ENTRIES } }),
     getDiff: vi.fn().mockResolvedValue({ ok: true, value: { patch: MULTI_STATUS_PATCH } }),
     getFileContents: vi.fn().mockResolvedValue({ ok: true, value: { kind: "absent" } }),
+    locatePullRequestCheckout: vi.fn().mockResolvedValue({ ok: true, value: { kind: "notFound" } }),
+    pickPullRequestCheckout: vi.fn().mockResolvedValue({ ok: true, value: { kind: "canceled" } }),
+    clonePullRequestRepo: vi.fn().mockResolvedValue({ ok: true, value: { kind: "canceled" } }),
+    preparePullRequest: vi.fn().mockResolvedValue({
+      ok: true,
+      value: {
+        worktree: "/worktrees/acme/widget-12",
+        head: SHA_A,
+        base: "origin/main",
+        change: "created",
+      },
+    }),
+    listPullRequestWorktrees: vi.fn().mockResolvedValue({ worktrees: [] }),
+    removePullRequestWorktree: vi.fn().mockResolvedValue({
+      ok: true,
+      value: { path: "/worktrees/acme/widget-12" },
+    }),
+    cancelPullRequest: vi.fn().mockResolvedValue(undefined),
+    getPullRequestHead: vi.fn().mockResolvedValue({ ok: true, value: null }),
+    // GitHub unreachable by default: every store test that does not stub these runs offline,
+    // and the app's own answer to that is "not checked", which changes nothing on screen.
+    listReviewRequests: vi.fn().mockResolvedValue({ ok: false, failure: { code: "network" } }),
+    getGitHubPullRequest: vi.fn().mockResolvedValue({ ok: false, failure: { code: "network" } }),
+    checkGitHubDiff: vi.fn().mockResolvedValue({ ok: false, failure: { code: "network" } }),
+    // No token held, nothing posted: the state of every launch until the reader pastes one.
+    setGitHubToken: vi.fn().mockResolvedValue({ ok: false, failure: { code: "network" } }),
+    getGitHubStatus: vi.fn().mockResolvedValue({ tokens: [], exposedBy: [] }),
+    forgetGitHubToken: vi.fn().mockResolvedValue({ tokens: [], exposedBy: [] }),
+    postGitHubComments: vi.fn().mockResolvedValue({ ok: false, failure: { code: "noToken" } }),
+    getGitHubPosted: vi.fn().mockResolvedValue({
+      ok: true,
+      value: { comments: {}, unverified: null },
+    }),
+    deleteGitHubPendingComment: vi
+      .fn()
+      .mockResolvedValue({ ok: false, failure: { code: "noToken" } }),
     listSessions: vi.fn().mockResolvedValue({ sessions: [], activeSessionId: null }),
     createSession: vi.fn().mockImplementation((request: { source: Session["source"] }) =>
       Promise.resolve({
@@ -118,6 +154,7 @@ export function makeBridge(overrides: Partial<ReviewerBridge> = {}): ReviewerBri
     onOpenRepoCommand: vi.fn().mockReturnValue(() => {}),
     onOpenReviewCommand: vi.fn().mockReturnValue(() => {}),
     onOpenRecentReviewsCommand: vi.fn().mockReturnValue(() => {}),
+    onReviewPullRequestCommand: vi.fn().mockReturnValue(() => {}),
     onOpenSettingsCommand: vi.fn().mockReturnValue(() => {}),
     onToggleSidebarCommand: vi.fn().mockReturnValue(() => {}),
     onOpenRepoInEditorCommand: vi.fn().mockReturnValue(() => {}),

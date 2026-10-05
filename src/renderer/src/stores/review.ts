@@ -4,6 +4,7 @@ import { createCurationSlice } from "./review/curation";
 import { createExportSlice } from "./review/export";
 import { createOpenSlice } from "./review/open";
 import { createPickerSlice } from "./review/picker";
+import { createPostingSlice } from "./review/posting";
 import { createProgressSlice } from "./review/progress";
 import type { ReviewState } from "./review/state";
 import { createTabsSlice } from "./review/tabs";
@@ -13,7 +14,7 @@ import { createWriteBackSlice } from "./review/write-back";
 // The review store, composed. Everything it is made of lives in `review/`, one module per
 // concern, and this file is only the seam where they are put together and published.
 //
-// The nine slices — each one a chunk of state with the actions that maintain it, declared
+// The ten slices — each one a chunk of state with the actions that maintain it, declared
 // together so a field's prose sits with its code:
 //
 //   boot.ts          sessions arriving from main: hydration, and re-listing on a push
@@ -24,6 +25,7 @@ import { createWriteBackSlice } from "./review/write-back";
 //   curation.ts      comments: authored, edited, discarded, and copied out as prompts
 //   walkthrough.ts   the way through an authored review: tour doc, layers, comments
 //   export.ts        the review as a file on disk, in either shape
+//   posting.ts       comments leaving for the pull request as pending review comments (Layer C)
 //   write-back.ts    everything that travels back to main, debounced — the two debouncers,
 //                    the schedule/flush its siblings persist through, and the quit-path lid
 //
@@ -32,7 +34,7 @@ import { createWriteBackSlice } from "./review/write-back";
 //   slice.ts         one open project's state (`SessionSlice`), and the two combinators
 //                    every action reaches it through (`setSlice`, `withSlice`)
 //   slice-factory.ts the one slice literal there is, and the restore that mirrors it
-//   state.ts         `ReviewState` — what the nine add up to
+//   state.ts         `ReviewState` — what the ten add up to
 //   tab-strip.ts     the strip as a value: what a stop is, and how a list of them rearranges
 //   effects.ts       the three git errands: diff load, log re-walk, first derivation
 //
@@ -59,6 +61,7 @@ export function createReviewStore() {
     ...createCurationSlice(...a),
     ...createWalkthroughSlice(...a),
     ...createExportSlice(...a),
+    ...createPostingSlice(...a),
     ...createWriteBackSlice(...a),
   }));
 }

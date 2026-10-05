@@ -4,6 +4,7 @@ import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { App } from "./App";
 import { initInputModality } from "./lib/input-modality";
+import { useGitHubStore } from "./stores/github";
 import { useReviewStore } from "./stores/review";
 import { useSettingsStore } from "./stores/settings";
 
@@ -11,6 +12,10 @@ import { useSettingsStore } from "./stores/settings";
 // in main, the window becomes visible only after this has applied, so cold start cannot flash.
 // The OS seed lands synchronously; the stored record follows when main answers.
 void useSettingsStore.getState().init();
+
+// Which GitHub tokens main holds — described, never the tokens — so a card knows whether to draw
+// Post. A reload of the window finds main still holding them; a relaunch finds none.
+void useGitHubStore.getState().load();
 
 // Document-level listeners with no React state behind them, so they mount once here
 // rather than riding a component's effect.

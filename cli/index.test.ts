@@ -2,7 +2,11 @@ import { spawnSync } from "node:child_process";
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import { SPAWN_SUITE_TIMEOUT_MS } from "./fixtures";
+
+// Real processes, so not the 5s default — see `SPAWN_SUITE_TIMEOUT_MS` for why and how long.
+vi.setConfig({ testTimeout: SPAWN_SUITE_TIMEOUT_MS, hookTimeout: SPAWN_SUITE_TIMEOUT_MS });
 
 // The exit-code contract on the *real* process: Stricli's `run` leaves a code in the context,
 // and index.ts collapses it to 0/1/2 and leaves that in `process.exitCode`.

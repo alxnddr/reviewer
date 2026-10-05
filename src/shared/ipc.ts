@@ -44,6 +44,38 @@ export const IpcChannel = {
   // Full text of a file at a ref, for expanding the unchanged lines around a hunk.
   // Modelled on git:diff so the validated boundary + envelope carry over.
   gitFileContents: "git:file-contents",
+  // Review Pull Request… (`main/pull-request/`). Main owns every step that touches the disk
+  // or a remote — finding a checkout of the pull request's repository, the pickers, the fetch,
+  // the worktree — and answers the dialog with paths to show and typed failures to explain.
+  pullRequestLocate: "pr:locate",
+  pullRequestLocateCheckout: "pr:locate-checkout",
+  pullRequestClone: "pr:clone",
+  pullRequestPrepare: "pr:prepare",
+  pullRequestWorktrees: "pr:worktrees",
+  pullRequestRemoveWorktree: "pr:remove-worktree",
+  // Cancel: kills the fetch, clone or checkout Review Pull Request… is running. Payload-free —
+  // there is only ever the one the dialog started.
+  pullRequestCancel: "pr:cancel",
+  // The sha the pull request's ref (`pullRequestRef`) resolves to in a review's repo: the pull request's head as last
+  // fetched, which Copy & open on GitHub compares with the reviewed commit.
+  pullRequestHead: "pr:head",
+  // GitHub's API (`main/github/`): the pull requests waiting on the reader's review (always
+  // unauthenticated), one pull request's title, state and base, and whether GitHub's own diff of a
+  // pull request carries each comment's lines (both with the owner's token when main holds one). Main builds every URL against an allowlist of
+  // api.github.com; the renderer names a login or a pull request and gets back parsed values
+  // or a typed failure, never a response it would have to trust.
+  githubInbox: "github:inbox",
+  githubPullRequest: "github:pull-request",
+  githubCheckDiff: "github:check-diff",
+  // Layer C: the reader's token and posting pending comments (`shared/github-posting.ts`). The
+  // token crosses once, renderer to main, on `github:set-token`; nothing answers with it. Posting
+  // names comments by id — main builds every body from the session it holds — and never submits.
+  githubSetToken: "github:set-token",
+  githubStatus: "github:status",
+  githubForgetToken: "github:forget",
+  githubPostComments: "github:post-comments",
+  githubPosted: "github:posted",
+  githubDeletePendingComment: "github:delete-pending-comment",
   sessionsList: "sessions:list",
   sessionsCreate: "sessions:create",
   sessionsUpdate: "sessions:update",
@@ -63,6 +95,9 @@ export const IpcEvent = {
   // Toggles the in-app recents picker. A command like the rest of these — the list it shows
   // is read by the renderer over `reviews:recent`, not carried on the event.
   menuOpenRecentReviews: "menu:open-recent-reviews",
+  // ⇧⌘P — File ▸ Review Pull Request…, the dialog's only way in (the start screen names two
+  // things and stays at two). A toggle, like the recents picker's command.
+  menuReviewPullRequest: "menu:review-pull-request",
   // ⌘, — the app menu's Settings… item. A menu command like the rest so the chord fires from
   // inside a text field and under a modal, where the window handlers stand down.
   menuOpenSettings: "menu:open-settings",
@@ -188,6 +223,61 @@ export type ReviewerBridge = {
   getFileContents: (
     request: IpcRequest<"git:file-contents">,
   ) => Promise<IpcResponse<"git:file-contents">>;
+  /** Review Pull Request…: a checkout of the pull request's repository among those the app
+   * knows (open tabs, recent reviews, located repositories), or `notFound`. */
+  locatePullRequestCheckout: (
+    request: IpcRequest<"pr:locate">,
+  ) => Promise<IpcResponse<"pr:locate">>;
+  /** The directory picker, for a checkout the app did not know; remembered once it matches. */
+  pickPullRequestCheckout: (
+    request: IpcRequest<"pr:locate-checkout">,
+  ) => Promise<IpcResponse<"pr:locate-checkout">>;
+  /** The no-checkout fallback: a folder picker, then a blobless partial clone into it. */
+  clonePullRequestRepo: (request: IpcRequest<"pr:clone">) => Promise<IpcResponse<"pr:clone">>;
+  /** Fetch the pull request's head and base, and give it a worktree. */
+  preparePullRequest: (request: IpcRequest<"pr:prepare">) => Promise<IpcResponse<"pr:prepare">>;
+  /** The worktrees Review Pull Request… has made, re-read on every call. */
+  listPullRequestWorktrees: () => Promise<IpcResponse<"pr:worktrees">>;
+  /** Removes one of them — never one with uncommitted changes, never one a tab is reading. */
+  removePullRequestWorktree: (
+    request: IpcRequest<"pr:remove-worktree">,
+  ) => Promise<IpcResponse<"pr:remove-worktree">>;
+  /** Kills the running fetch, clone or checkout; the operation answers `cancelled`. */
+  cancelPullRequest: () => Promise<IpcResponse<"pr:cancel">>;
+  /** The pull request's head as last fetched into a repo (`pullRequestRef`), or null. */
+  getPullRequestHead: (request: IpcRequest<"pr:head">) => Promise<IpcResponse<"pr:head">>;
+  /** The open pull requests on GitHub that request `login`'s review — public repositories only,
+   * since the call is unauthenticated. Asked on demand, never on a timer. */
+  listReviewRequests: (request: IpcRequest<"github:inbox">) => Promise<IpcResponse<"github:inbox">>;
+  /** One pull request as GitHub describes it: title, state, draft, base branch, head. */
+  getGitHubPullRequest: (
+    request: IpcRequest<"github:pull-request">,
+  ) => Promise<IpcResponse<"github:pull-request">>;
+  /** Whether GitHub's own diff of the pull request, at the reviewed commit, carries each anchor. */
+  checkGitHubDiff: (
+    request: IpcRequest<"github:check-diff">,
+  ) => Promise<IpcResponse<"github:check-diff">>;
+  /** Hands main a pasted token to check and keep in memory until quit. The answer describes the
+   * token — kind, login, owner, expiry — and never contains it. */
+  setGitHubToken: (
+    request: IpcRequest<"github:set-token">,
+  ) => Promise<IpcResponse<"github:set-token">>;
+  /** The tokens main holds (described, never shown). */
+  getGitHubStatus: () => Promise<IpcResponse<"github:status">>;
+  /** Forgets one token; answers the status after. */
+  forgetGitHubToken: (
+    request: IpcRequest<"github:forget">,
+  ) => Promise<IpcResponse<"github:forget">>;
+  /** Posts comments of a review to its pull request as pending (draft) review comments. */
+  postGitHubComments: (
+    request: IpcRequest<"github:post-comments">,
+  ) => Promise<IpcResponse<"github:post-comments">>;
+  /** Where a review's comments stand on GitHub, re-checked when there is something to check. */
+  getGitHubPosted: (request: IpcRequest<"github:posted">) => Promise<IpcResponse<"github:posted">>;
+  /** Removes one pending draft from the reader's pending review. */
+  deleteGitHubPendingComment: (
+    request: IpcRequest<"github:delete-pending-comment">,
+  ) => Promise<IpcResponse<"github:delete-pending-comment">>;
   listSessions: () => Promise<IpcResponse<"sessions:list">>;
   createSession: (
     request: IpcRequest<"sessions:create">,
@@ -212,6 +302,8 @@ export type ReviewerBridge = {
   onOpenReviewCommand: (listener: () => void) => () => void;
   /** Subscribes to the File → Recent Reviews command (⇧⌘R); returns unsubscribe. */
   onOpenRecentReviewsCommand: (listener: () => void) => () => void;
+  /** Subscribes to File ▸ Review Pull Request… (⇧⌘P); returns unsubscribe. */
+  onReviewPullRequestCommand: (listener: () => void) => () => void;
   /** Subscribes to the Settings… command (⌘,); returns unsubscribe. */
   onOpenSettingsCommand: (listener: () => void) => () => void;
   /** Subscribes to the View ▸ Toggle Sidebar command (⌘B); returns unsubscribe. */

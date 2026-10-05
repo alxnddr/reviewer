@@ -120,6 +120,30 @@ describe("reviewArtifactJsonSchema", () => {
     expect(document).toContain("never replaces the verdict sentence");
   });
 
+  it("publishes a comment's postable text, and the one rule about who it is written to", () => {
+    // The field an agent writes for the change's author. Absent from the published document,
+    // an agent reviewing a pull request would put that text in `body` — the one field the app
+    // never posts.
+    const postable = {
+      ...VALID,
+      comments: [
+        {
+          file: "a.ts",
+          side: "additions",
+          startLine: 2,
+          endLine: 4,
+          body: "why",
+          postable: "Could this await the write before it returns?",
+        },
+      ],
+    };
+    expect(compiled()(postable)).toBe(true);
+    expect(ReviewArtifact.safeParse(postable).success).toBe(true);
+    expect(JSON.stringify(reviewArtifactJsonSchema())).toContain(
+      "never refers to the agent, the review, the evidence or the tour",
+    );
+  });
+
   it("is derived from the contract, not hand-written: every artifact key appears in the schema", () => {
     const properties = reviewArtifactJsonSchema().properties ?? {};
     expect(Object.keys(properties).toSorted()).toEqual([
@@ -129,8 +153,21 @@ describe("reviewArtifactJsonSchema", () => {
       "layers",
       "overview",
       "patch",
+      "pr",
       "repo",
       "reviewedHead",
     ]);
+  });
+
+  it("publishes the pull request, says who writes it, and refuses a host it does not know", () => {
+    const pr = { host: "github.com", owner: "acme", repo: "widgets", number: 42 };
+    expect(compiled()({ ...VALID, pr })).toBe(true);
+    expect(ReviewArtifact.safeParse({ ...VALID, pr }).success).toBe(true);
+
+    const gitlab = { ...VALID, pr: { ...pr, host: "gitlab.com" } };
+    expect(compiled()(gitlab)).toBe(false);
+    expect(ReviewArtifact.safeParse(gitlab).success).toBe(false);
+
+    expect(JSON.stringify(reviewArtifactJsonSchema())).toContain("fills this in from `--pr`");
   });
 });

@@ -16,9 +16,10 @@ import { Markdown } from "@/components/Markdown";
 // was a second ago. Remembering it would also mean a comment that re-opens expanded, which
 // is the layout this fold exists to avoid.
 //
-// The disclosure vocabulary is `UnplaceableComments`': a ghost button carrying the label
-// and the chevron, the content below it, no chrome of its own. A second vocabulary for the
-// same gesture is how two widgets in one column drift apart.
+// It is a section of the card (`CommentThread`): a full-width row is the toggle, label left and
+// chevron right, with the content under it in the same section. The row spans the card so it
+// reads as the section's header, the way the author's text has its own header row
+// (`CommentPostable`).
 
 /** Evidence under a comment body, folded. Rendered through the same `Markdown` the body
  * takes — a fenced command and its output is the expected content, and the body's grammar
@@ -29,22 +30,22 @@ export function CommentEvidence({ evidence }: { evidence: string }): ReactElemen
   const [expanded, setExpanded] = useState(false);
 
   return (
-    <div className="mt-2">
+    <div>
       <Button
         variant="ghost"
         size="sm"
         aria-expanded={expanded}
         onClick={() => setExpanded((value) => !value)}
-        // A quiet line, not a call to action: the claim above it is what the reader came
-        // for, and this says the receipts exist. Hover brightens the ink only.
-        className="-ml-1.5 h-6 gap-1.5 px-1.5 text-xs text-text-muted hover:bg-transparent hover:text-foreground dark:hover:bg-transparent"
+        // A quiet row, not a call to action: the claim above it is what the reader came for,
+        // and this says the receipts exist.
+        className="h-9 w-full justify-start gap-1.5 rounded-none px-4 text-xs text-text-muted hover:bg-foreground/5 hover:text-foreground aria-expanded:bg-transparent aria-expanded:text-text-muted aria-expanded:hover:bg-foreground/5 aria-expanded:hover:text-foreground dark:hover:bg-foreground/5"
       >
         <FlaskConical aria-hidden="true" className="size-3.5" />
         Evidence
         {expanded ? (
-          <ChevronUp aria-hidden="true" className="size-3.5" />
+          <ChevronUp aria-hidden="true" className="ml-auto size-3.5" />
         ) : (
-          <ChevronDown aria-hidden="true" className="size-3.5" />
+          <ChevronDown aria-hidden="true" className="ml-auto size-3.5" />
         )}
       </Button>
       {expanded && (
@@ -54,7 +55,7 @@ export function CommentEvidence({ evidence }: { evidence: string }): ReactElemen
           // reading register and the receipts sit under it as supporting material. The
           // scroll cap is what keeps a comment a comment — a hundred lines of captured
           // output scrolls in place instead of pushing the diff off screen.
-          className="mt-1 max-h-64 space-y-2 overflow-y-auto text-sm break-words text-text-muted select-text"
+          className="max-h-64 space-y-2 overflow-y-auto px-4 py-3 text-sm break-words text-text-muted select-text"
         />
       )}
     </div>
