@@ -12,6 +12,7 @@ import { RAIL_ACTIVE_ITEM, RAIL_GLYPH, RAIL_LIST, RailRow, RailSection } from "@
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { TooltipHint } from "@/components/ui/tooltip";
+import { PlainMarkdown } from "@/components/PlainMarkdown";
 import { ReadRing, readLabel } from "@/components/ReadRing";
 import { selectActiveSlice, useReviewStore } from "@/stores/review";
 
@@ -158,7 +159,9 @@ function TreeRow({ row, selected, current, expanded, onToggle }: LayerRowProps):
           ) : (
             <div className="flex flex-col gap-0.5">
               <span>{row.label}</span>
-              <span className="text-background/70">{row.summary}</span>
+              <span className="text-background/70">
+                <PlainMarkdown text={row.summary} />
+              </span>
             </div>
           )
         }

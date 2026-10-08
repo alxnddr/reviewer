@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { ReviewLayer } from "./review";
+import type { ReviewLayer, ReviewSide } from "./review";
 import {
   capturesScroll,
   emptySoloReason,
@@ -7,6 +7,8 @@ import {
   layerOutline,
   layerOwning,
   layerRanges,
+  rangeCovers,
+  rangeSpans,
   resolveLayerScroll,
   soloFiles,
   stepLayer,
@@ -358,5 +360,108 @@ describe("resolveLayerScroll", () => {
       fileId: "src/foo.ts",
       range: { start: 11, end: 13, side: "additions" },
     });
+  });
+});
+
+describe("whole-file ranges", () => {
+  const whole = (id: string, file: string, overrides: Partial<ReviewLayer> = {}): ReviewLayer =>
+    layer(id, { ranges: [{ file }], ...overrides });
+
+  it("expand against the loaded diff to every hunk, both sides, and to nothing off it", () => {
+    const foo = FILES.find((file) => file.path === "src/foo.ts");
+    expect(rangeSpans({ file: "src/foo.ts" }, foo)).toEqual([
+      { file: "src/foo.ts", side: "additions", startLine: 10, endLine: 14 },
+      { file: "src/foo.ts", side: "deletions", startLine: 10, endLine: 12 },
+    ]);
+    expect(rangeSpans({ file: "src/gone.ts" }, undefined)).toEqual([]);
+    // A line range is itself, whatever file is handed in.
+    const line = { file: "src/foo.ts", side: "additions", startLine: 11, endLine: 11 } as const;
+    expect(rangeSpans(line, foo)).toEqual([line]);
+  });
+
+  it("cover any anchor in their file, on either side, and none in another", () => {
+    const anchor = { file: "src/foo.ts", side: "deletions", startLine: 11, endLine: 11 } as const;
+    expect(rangeCovers({ file: "src/foo.ts" }, anchor)).toBe(true);
+    expect(rangeCovers({ file: "src/bar.ts" }, anchor)).toBe(false);
+  });
+
+  it("lose a line to a deeper layer's line range, and keep the rest of the file", () => {
+    // Existing semantics, now across forms: the parent owns foo.ts outright, the child claims
+    // three lines of it — the child wins those (deepest), the parent keeps everything else.
+    const parent = whole("p", "src/foo.ts");
+    const child = layer("k", { parent: "p" });
+    const layers = [parent, child];
+    const at = (startLine: number, side: "additions" | "deletions" = "additions") =>
+      layerOwning(layers, { file: "src/foo.ts", side, startLine, endLine: startLine })?.id;
+    expect(at(12)).toBe("k");
+    expect(at(10)).toBe("p");
+    expect(at(11, "deletions")).toBe("p");
+  });
+
+  it("lose a line to a later sibling's line range at equal depth, in either order", () => {
+    // The skill's split-file case: one chapter owns most of foo.ts and is written `{ file }`, a
+    // sibling claims three lines of it. Depth cannot separate them, so the narrower claim does —
+    // document order used to, and the earlier whole-file range took the sibling's lines.
+    const at = (layers: ReviewLayer[], startLine: number, side: ReviewSide = "additions") =>
+      layerOwning(layers, { file: "src/foo.ts", side, startLine, endLine: startLine })?.id;
+    const wholeFirst = [whole("w", "src/foo.ts"), layer("l")];
+    expect(at(wholeFirst, 12)).toBe("l");
+    expect(at(wholeFirst, 10)).toBe("w");
+    expect(at(wholeFirst, 11, "deletions")).toBe("w");
+    const linesFirst = [layer("l"), whole("w", "src/foo.ts")];
+    expect(at(linesFirst, 12)).toBe("l");
+    expect(at(linesFirst, 14)).toBe("w");
+  });
+
+  it("keep depth first: a child's whole-file range takes the file from its parent's lines", () => {
+    // Nesting is the author's own statement of which section is more specific, so it outranks
+    // the range form; the form only breaks ties between equals.
+    const parent = layer("p");
+    const child = whole("k", "src/foo.ts", { parent: "p" });
+    expect(
+      layerOwning([parent, child], {
+        file: "src/foo.ts",
+        side: "additions",
+        startLine: 12,
+        endLine: 12,
+      })?.id,
+    ).toBe("k");
+  });
+
+  it("fall back to document order between two claims of the same form and depth", () => {
+    const anchor = { file: "src/foo.ts", side: "additions", startLine: 12, endLine: 12 } as const;
+    expect(layerOwning([whole("x", "src/foo.ts"), whole("y", "src/foo.ts")], anchor)?.id).toBe("x");
+    expect(layerOwning([layer("x"), layer("y")], anchor)?.id).toBe("x");
+    // A layer with both forms on the file claims by its line range where it has one.
+    const both = whole("b", "src/foo.ts", {
+      ranges: [
+        { file: "src/foo.ts" },
+        { file: "src/foo.ts", side: "additions", startLine: 12, endLine: 12 },
+      ],
+    });
+    expect(layerOwning([layer("x"), both], anchor)?.id).toBe("x");
+    expect(layerOwning([whole("w", "src/foo.ts"), both], anchor)?.id).toBe("b");
+  });
+
+  it("solo and step by file like any range", () => {
+    const layers = [whole("w", "src/bar.ts"), B];
+    expect(soloFiles(FILES, layers[0] ?? null, layers).map((file) => file.path)).toEqual([
+      "src/bar.ts",
+    ]);
+    expect(layerFilePaths(layers[0] as ReviewLayer, layers)).toEqual(["src/bar.ts"]);
+    expect(stepLayer(layers, "w", 1)).toBe("b");
+  });
+
+  it("place on their file iff the diff carries it, frozen or not", () => {
+    const here = whole("h", "src/foo.ts");
+    const gone = whole("g", "src/gone.ts");
+    for (const frozen of [false, true]) {
+      expect(resolveLayerScroll(here, [here], FILES, frozen)).toEqual({
+        kind: "placed",
+        fileId: "src/foo.ts",
+        range: null,
+      });
+      expect(resolveLayerScroll(gone, [gone], FILES, frozen).kind).toBe("outdated");
+    }
   });
 });

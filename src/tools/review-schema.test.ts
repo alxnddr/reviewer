@@ -1,6 +1,9 @@
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import Ajv2020 from "ajv/dist/2020";
 import type { ValidateFunction } from "ajv";
 import { describe, expect, it } from "vitest";
+import { MAX_LAYER_DEPTH } from "../shared/layers";
 import { ReviewArtifact } from "../shared/review";
 import { reviewArtifactJsonSchema } from "./review-schema";
 
@@ -144,6 +147,42 @@ describe("reviewArtifactJsonSchema", () => {
     );
   });
 
+  it("publishes the guide's visuals once, with their limits and the rules zod cannot state", () => {
+    const at = { file: "a.ts", side: "additions", startLine: 2, endLine: 4 };
+    const guided = {
+      ...VALID,
+      overview: {
+        title: "t",
+        lede: "One sentence.",
+        steps: ["first", "second"],
+        visual: {
+          kind: "flow",
+          caption: "c",
+          nodes: [
+            { id: "a", label: "a()", status: "same" },
+            { id: "b", label: "b()", status: "added", at },
+          ],
+          edges: [{ from: "a", to: "b" }],
+        },
+      },
+      layers: [{ ...VALID.layers[0], focus: at }],
+    };
+    expect(compiled()(guided)).toBe(true);
+    expect(ReviewArtifact.safeParse(guided).success).toBe(true);
+
+    // The limits an agent's own validator enforces: a label past 40, a line break in a lede.
+    const longLabel = structuredClone(guided);
+    longLabel.overview.visual.nodes[1]!.label = "x".repeat(41);
+    expect(compiled()(longLabel)).toBe(false);
+    expect(compiled()({ ...guided, overview: { ...guided.overview, lede: "a\nb" } })).toBe(false);
+
+    const schema = reviewArtifactJsonSchema();
+    expect(Object.keys(schema.$defs ?? {})).toContain("reviewVisual");
+    // ...and the anchored rule, which no keyword can express, as prose.
+    expect(JSON.stringify(schema)).toContain("needs `at`; an edge may carry one");
+    expect(JSON.stringify(schema)).toContain("on the side and lines its status claims");
+  });
+
   it("is derived from the contract, not hand-written: every artifact key appears in the schema", () => {
     const properties = reviewArtifactJsonSchema().properties ?? {};
     expect(Object.keys(properties).toSorted()).toEqual([
@@ -169,5 +208,48 @@ describe("reviewArtifactJsonSchema", () => {
     expect(ReviewArtifact.safeParse(gitlab).success).toBe(false);
 
     expect(JSON.stringify(reviewArtifactJsonSchema())).toContain("fills this in from `--pr`");
+  });
+});
+
+describe("the authoring skill's quoted limits", () => {
+  // The skill quotes a handful of limits so an agent writes to them the first time rather than
+  // learning them from a refusal — and it once said "3 to 5 steps" in two places while the
+  // schema enforced 2 to 5, so an agent read two answers to one question. The schema is the one
+  // source: each number the skill states is read back here from the published document, and any
+  // other "N to M" beside `steps` fails, so an edit to either side that forgets the other is red.
+  const skill = readFileSync(
+    fileURLToPath(new URL("../../skills/present-review/SKILL.md", import.meta.url)),
+    "utf8",
+  );
+  type Limits = {
+    properties: {
+      lede: { maxLength: number };
+      steps: { minItems: number; maxItems: number; items: { maxLength: number } };
+    };
+  };
+  const overview = (reviewArtifactJsonSchema().properties?.["overview"] ?? {}) as Limits;
+  const lede = overview.properties.lede.maxLength;
+  const { minItems, maxItems, items } = overview.properties.steps;
+
+  it("states the step count, the step and lede lengths and the nesting depth the schema enforces", () => {
+    expect(skill).toContain(
+      `\`steps\` holds ${minItems} to ${maxItems} lines of at most ${items.maxLength} each`,
+    );
+    expect(skill).toContain(
+      `| ${minItems} to ${maxItems} lines, each at most ${items.maxLength} characters |`,
+    );
+    expect(skill).toContain(`Write ${minItems} to ${maxItems} \`steps\``);
+    expect(skill).toContain(`\`lede\` is one line of at most ${lede} characters`);
+    expect(skill).toContain(`| one sentence, at most ${lede} characters |`);
+    expect(skill).toContain(`layers nest at most ${MAX_LAYER_DEPTH} deep`);
+  });
+
+  it("gives no other step count anywhere it talks about steps", () => {
+    const counts = skill
+      .split("\n")
+      .filter((line) => line.includes("`steps`"))
+      .flatMap((line) => [...line.matchAll(/\b(\d+) to (\d+)\b/gu)].map((match) => match[0]));
+    expect(counts.length).toBeGreaterThanOrEqual(3);
+    expect(new Set(counts)).toEqual(new Set([`${minItems} to ${maxItems}`]));
   });
 });

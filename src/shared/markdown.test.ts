@@ -3,7 +3,9 @@ import remarkParse from "remark-parse";
 import { unified } from "unified";
 import { visit } from "unist-util-visit";
 import {
+  blockMarkup,
   flattenMarkdown,
+  inlineMarkup,
   isExternalUrl,
   parseMarkdown,
   placedReferences,
@@ -292,5 +294,56 @@ describe("flattenMarkdown", () => {
   it("returns nothing for an empty or whitespace-only body", () => {
     expect(flattenMarkdown("")).toEqual([]);
     expect(flattenMarkdown("   \n\n  ")).toEqual([]);
+  });
+});
+
+describe("blockMarkup", () => {
+  it("names the block a line of inline prose parses as, and null for a plain paragraph", () => {
+    expect(blockMarkup("# Retries")).toBe("heading");
+    expect(blockMarkup("> quoted")).toBe("blockquote");
+    expect(blockMarkup("- item")).toBe("list");
+    expect(blockMarkup("2025. was a year")).toBe("list");
+    expect(blockMarkup("```ts")).toBe("code");
+    expect(blockMarkup("    indented()")).toBe("code");
+    expect(blockMarkup("***")).toBe("thematicBreak");
+    expect(blockMarkup("| a | b |\n| - | - |")).toBe("table");
+    // CommonMark's call, not a pattern's: none of these opens a block.
+    for (const plain of [
+      "#hashtag",
+      "C# and F#",
+      "a > b",
+      "use `- x`",
+      "-1 is negative",
+      "\\# escaped",
+    ]) {
+      expect(blockMarkup(plain)).toBeNull();
+    }
+  });
+});
+
+describe("inlineMarkup", () => {
+  it("names a code span or strong emphasis, the first one found", () => {
+    expect(inlineMarkup("`fetchBlob()`")).toBe("code");
+    expect(inlineMarkup("a **new** box")).toBe("strong");
+    expect(inlineMarkup("**x** then `y`")).toBe("strong");
+  });
+
+  it("leaves what only looks like markup to a regex: CommonMark's flanking rules decide", () => {
+    for (const text of [
+      "def f(*args, **kwargs)",
+      "a ** b",
+      "x * y * z",
+      "one ` tick",
+      "fetchBlob()",
+    ]) {
+      expect(inlineMarkup(text)).toBeNull();
+    }
+  });
+
+  it("counts only a code span wrapping the whole text under the `whole` rule — source keeps its backticks", () => {
+    expect(inlineMarkup(" `fetchBlob(path)` ", "whole")).toBe("code");
+    expect(inlineMarkup("log(`hi ${name}`)", "whole")).toBeNull();
+    expect(inlineMarkup("log(`hi ${name}`)")).toBe("code");
+    expect(inlineMarkup("a**b**c", "whole")).toBe("strong");
   });
 });

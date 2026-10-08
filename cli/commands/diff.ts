@@ -23,6 +23,11 @@ import { writeCannotRun, writeJson } from "../errors";
 // `pre-existing` finding can be pinned), with the files that carry no anchorable line named as
 // such. The extents came second: an author used to learn a hunk's boundary from the refusal's
 // "nearest on that side", which meant failing once to find out where it could have succeeded.
+// `pairs` came third: the same extents regrouped by hunk, both sides together, because `hunks`
+// lists them per side and an author writing a range for each side of one hunk was matching the
+// two lists up by position. Added beside `hunks`, not instead of it, so a consumer of the old
+// shape reads on unchanged. Most layers need neither now — a whole-file range (`{ file }`)
+// covers a file without naming a line.
 //
 // Read-only: nothing is written (that is `rvw emit`), and the range flags default exactly as
 // `emit`'s do, so what you read here is what you are about to author against.
@@ -51,11 +56,13 @@ export const diffCommand = buildCommand<DiffFlags, [], LocalContext>({
       "`rvw emit` resolves them: committed history only, the base the fork point with the",
       "branch's upstream (unless that is its own pushed copy) or the default branch; the ref it",
       "was measured from is named on stderr. --json instead prints, per file, `spans`: the",
-      "contiguous changed lines per side, which layers must cover; and `hunks`: each hunk's",
-      "extent per side, context lines included, which is where an anchor may sit (inside one",
-      "hunk, never across two). Binaries and pure renames are named non-coverable, with no",
-      "hunks. Exit 0 on a captured range; 2 when the range cannot be resolved or git cannot",
-      "produce the diff.",
+      "contiguous changed lines per side, which layers must cover; `hunks`: each hunk's extent",
+      "per side, context lines included, which is where an anchor may sit (inside one hunk,",
+      "never across two); and `pairs`: the same extents per hunk, `{ deletions, additions }`",
+      "side by side (null where a hunk has no line on that side). A layer that owns a whole",
+      'file needs none of these — `{ "file": path }` covers it. Binaries and pure renames are',
+      "named non-coverable, with no hunks. Exit 0 on a captured range; 2 when the range cannot",
+      "be resolved or git cannot produce the diff.",
     ].join("\n"),
     customUsage: ["", "--json", "--base main", "--repo . --base main --head feature --json"],
   },
@@ -84,7 +91,7 @@ export const diffCommand = buildCommand<DiffFlags, [], LocalContext>({
       },
       json: {
         kind: "boolean",
-        brief: "Print per file the changed spans and hunk extents as JSON instead of the patch",
+        brief: "Print per file the changed spans and hunk extents (per side and paired) as JSON",
         optional: true,
       },
     },

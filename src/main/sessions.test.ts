@@ -109,7 +109,19 @@ describe("createSessionStore", () => {
           id: "11111111-1111-4111-8111-111111111111",
         },
       ],
-      layers: [{ id: "l1", label: "Layer", summary: "s", ranges: [] }],
+      // A whole-file range beside a line range: persisted as authored, `{ file }` and no more —
+      // its spans are re-derived from the diff on every load.
+      layers: [
+        {
+          id: "l1",
+          label: "Layer",
+          summary: "s",
+          ranges: [
+            { file: "src/a.ts" },
+            { file: "src/b.ts", side: "additions", startLine: 2, endLine: 3 },
+          ],
+        },
+      ],
     };
 
     const created = store.createFromReview(review, {
@@ -133,6 +145,9 @@ describe("createSessionStore", () => {
     expect(created.commitSelection).toBeNull();
     expect(store.list()).toEqual({ sessions: [created], activeSessionId: created.id });
     expect(readStoreFile(dir).sessions).toEqual([created]);
+    expect(createSessionStore({ directory: dir }).list().sessions[0]?.layers).toEqual(
+      review.layers,
+    );
   });
 
   it("stores a frozen pin as given, keeping the authored refs on the origin", () => {

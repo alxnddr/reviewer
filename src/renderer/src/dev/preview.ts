@@ -1,12 +1,20 @@
 import type { BranchList, LogEntry } from "../../../shared/git";
 import type { RecentReview } from "../../../shared/review-ipc";
-import type { Comment, ReviewLayer, ReviewOverview, ReviewVerdict } from "../../../shared/review";
+import {
+  importReview,
+  type Comment,
+  type ReviewLayer,
+  type ReviewOverview,
+  type ReviewVerdict,
+} from "../../../shared/review";
 import {
   buildHugeAdditionPatch,
   buildManyFilesPatch,
   buildPathsPatch,
   MOVED_BLOCK_PATCH,
   MULTI_STATUS_PATCH,
+  GUIDE_DEPS_PATCH,
+  OUTLINE_PATCH,
 } from "../../../shared/diff/fixtures";
 import { parsePatch, type PatchFile } from "../../../shared/diff/patch";
 import {
@@ -241,6 +249,43 @@ function fixtureLayers(): ReviewLayer[] {
         { file: "greet.ts", side: "additions", startLine: 4, endLine: 6 },
         { file: "added.txt", side: "additions", startLine: 1, endLine: 2 },
       ],
+      // The chapter's key hunk is the new function, not `added.txt` beside it — the case the
+      // computed first-hunk excerpt gets wrong — and its picture is a skeleton whose lines
+      // fall in two chapters, so the derived badges have more than one number to show.
+      focus: { file: "greet.ts", side: "additions", startLine: 5, endLine: 7 },
+      visual: {
+        kind: "skeleton",
+        caption: "What a greeting now goes through",
+        lines: [
+          { depth: 0, code: "greet(name: string): string", status: "same" },
+          {
+            depth: 1,
+            code: "`hello ${name}`",
+            status: "removed",
+            at: { file: "greet.ts", side: "deletions", startLine: 2, endLine: 2 },
+          },
+          {
+            depth: 1,
+            code: "`hi ${name}`",
+            status: "added",
+            note: "reworded in its own chapter",
+            at: { file: "greet.ts", side: "additions", startLine: 2, endLine: 2 },
+          },
+          {
+            depth: 0,
+            code: "shout(name: string): string",
+            status: "added",
+            at: { file: "greet.ts", side: "additions", startLine: 5, endLine: 5 },
+          },
+          {
+            depth: 1,
+            code: "greet(name).toUpperCase()",
+            status: "added",
+            note: "one formatting path",
+            at: { file: "greet.ts", side: "additions", startLine: 6, endLine: 6 },
+          },
+        ],
+      },
     },
     {
       id: "layer-housekeeping",
@@ -258,6 +303,7 @@ function fixtureLayers(): ReviewLayer[] {
       description:
         "Small copy pass over [notes.txt](notes.txt): the second item is capitalised and a new trailing entry is appended. No code path depends on this file — it is reading material only.",
       ranges: [{ file: "notes.txt", side: "additions", startLine: 6, endLine: 6 }],
+      focus: { file: "notes.txt", side: "additions", startLine: 6, endLine: 6 },
     },
     {
       id: "layer-rename",
@@ -272,6 +318,7 @@ function fixtureLayers(): ReviewLayer[] {
       summary: "Remove doomed.txt",
       parent: "layer-housekeeping",
       ranges: [{ file: "doomed.txt", side: "deletions", startLine: 1, endLine: 2 }],
+      focus: { file: "doomed.txt", side: "deletions", startLine: 1, endLine: 2 },
     },
     {
       id: "layer-legacy",
@@ -291,6 +338,45 @@ function fixtureLayers(): ReviewLayer[] {
 function fixtureOverview(): ReviewOverview {
   return {
     title: "Add a shout() greeting and refresh the notes",
+    // The guide's front: one sentence, the steps in order, and a flow whose changed boxes
+    // each point at a hunk the preview's patch carries — so every one wears a derived badge
+    // (greet → the rename chapter, shout and its call → the greeting chapter) and the two
+    // unchanged boxes wear none.
+    lede: "`greet.ts` gains [shout()](greet.ts:5-7), a second entry point built on `greet()`, so the two share one formatting path.",
+    steps: [
+      "Reword `greet()`'s template from hello to hi",
+      "Add [shout()](greet.ts:5-7) on top of `greet()`",
+      "Refresh [notes.txt](notes.txt) and delete `doomed.txt`",
+    ],
+    visual: {
+      kind: "flow",
+      caption: "How a caller reaches a greeting",
+      nodes: [
+        { id: "caller", label: "caller", status: "same" },
+        {
+          id: "greet",
+          label: "greet()",
+          status: "changed",
+          note: "hello → hi",
+          at: { file: "greet.ts", side: "additions", startLine: 2, endLine: 2 },
+        },
+        {
+          id: "shout",
+          label: "shout()",
+          status: "added",
+          note: "new entry point",
+          at: { file: "greet.ts", side: "additions", startLine: 5, endLine: 6 },
+        },
+        { id: "upper", label: "toUpperCase()", status: "same" },
+      ],
+      edges: [
+        { from: "caller", to: "greet", label: "name" },
+        { from: "caller", to: "shout", label: "name", status: "added" },
+        { from: "shout", to: "greet", status: "added" },
+        { from: "shout", to: "upper", status: "added" },
+      ],
+    },
+    // Now the folded "Reviewer's notes"; it still walks the whole prose grammar.
     body: [
       "The greeting API grows a second entry point. `greet.ts` keeps its existing `greet()` and gains [shout()](greet.ts:5-7) on top of it, so both share **one formatting path** instead of drifting apart as callers pick sides — the template [it used to build inline](greet.ts:2@deletions) is gone.",
       "Everything else in the range is bookkeeping: [notes.txt](notes.txt) gets a copy pass, `added.txt` lands as the smoke test for the new entry point, and a dead file goes away. Read the greeting layer first — the rest only makes sense once the shape of the API is in your head.",
@@ -303,6 +389,214 @@ function fixtureOverview(): ReviewOverview {
     // this fixture carry the chip the two surfaces have to agree about.
     verdict: "caution",
   };
+}
+
+/** The guide scene's layers over `OUTLINE_PATCH` — the "retry blob reads" change Capy's guide
+ * illustrates, so the preview can be held against that picture: a core chapter with a skeleton,
+ * a chapter with neither visual nor focus (its card is the computed first range), a group with
+ * two parts (one with a `focus`), and a skim chapter. Line numbers are the patch's own. */
+function guideLayers(): ReviewLayer[] {
+  const blob = (side: "additions" | "deletions", startLine: number, endLine: number) =>
+    ({ file: "src/blob.ts", side, startLine, endLine }) as const;
+  return [
+    {
+      id: "guide-retry",
+      label: "Retry blob reads with backoff",
+      summary: "A failed read is retried, never cached",
+      description:
+        "[`loadBlob`](src/blob.ts:4-5) now goes through `withRetry`, which backs off and tries again on a network error. The session cache is gone, so nothing can replay an old failure.\n\nThe sync loop asks the client for the same retry, and [`backoff()`](tools/sync.py:23-24) caps the delay at thirty seconds.",
+      ranges: [
+        blob("additions", 2, 5),
+        blob("deletions", 3, 13),
+        { file: "tools/sync.py", side: "additions", startLine: 14, endLine: 14 },
+        { file: "tools/sync.py", side: "additions", startLine: 21, endLine: 24 },
+        // `GUIDE_DEPS_PATCH`: the retry helper added, the session cache deleted, the viewer
+        // rewired from one to the other — what the Deps tab draws.
+        { file: "src/retry.ts", side: "additions", startLine: 1, endLine: 6 },
+        { file: "src/cache.ts", side: "deletions", startLine: 1, endLine: 8 },
+        { file: "web/viewer.ts", side: "deletions", startLine: 1, endLine: 1 },
+        { file: "web/viewer.ts", side: "additions", startLine: 1, endLine: 1 },
+        { file: "web/viewer.ts", side: "deletions", startLine: 5, endLine: 5 },
+        { file: "web/viewer.ts", side: "additions", startLine: 5, endLine: 5 },
+      ],
+      focus: blob("additions", 4, 5),
+      visual: {
+        kind: "skeleton",
+        caption: "How a blob read reaches the network",
+        lines: [
+          { depth: 0, code: "loadBlob(path)", status: "removed", at: blob("deletions", 5, 5) },
+          {
+            depth: 0,
+            code: "loadBlob(path, attempts = 3)",
+            status: "added",
+            at: blob("additions", 4, 4),
+          },
+          {
+            depth: 1,
+            code: "blobCache.get(path)",
+            status: "removed",
+            note: "a cached failure was returned for the rest of the session",
+            at: blob("deletions", 6, 8),
+          },
+          {
+            depth: 1,
+            code: "withRetry(() => fetchBlob(path), attempts)",
+            status: "added",
+            note: "backs off and tries again on a network error",
+            at: blob("additions", 5, 5),
+          },
+          { depth: 2, code: "fetchBlob(path)", status: "same" },
+          {
+            depth: 1,
+            code: "blobCache.set(path, read)",
+            status: "removed",
+            at: blob("deletions", 11, 11),
+          },
+          {
+            depth: 0,
+            code: "Syncer.send(item, retry=True)",
+            status: "added",
+            note: "the sync loop asks for the same retry",
+            at: { file: "tools/sync.py", side: "additions", startLine: 14, endLine: 14 },
+          },
+        ],
+      },
+    },
+    {
+      id: "guide-manifest",
+      label: "Record each attempt in the manifest",
+      summary: "The manifest says which attempt produced a blob",
+      description:
+        "`Manifest.record` takes the attempt number and stores `path#attempt`, and `patchText` rebuilds patch text from the fresh read. The size warning moves from 100 entries to 500, since retries now add entries.",
+      ranges: [blob("additions", 8, 10), blob("additions", 15, 16), blob("additions", 21, 21)],
+    },
+    {
+      id: "guide-server",
+      label: "Name the server and trim the handlers",
+      summary: "Two small edits the retry work made necessary",
+      description:
+        "The health check reports which server answered, so a retried request can be traced; and the handler the old cache needed goes away.",
+      ranges: [],
+    },
+    {
+      id: "guide-server-name",
+      label: "Give the server a name",
+      summary: "serve takes a name and the health check prints it",
+      parent: "guide-server",
+      ranges: [
+        { file: "cmd/server.go", side: "additions", startLine: 5, endLine: 10 },
+        { file: "cmd/server.go", side: "additions", startLine: 19, endLine: 19 },
+      ],
+      focus: { file: "cmd/server.go", side: "additions", startLine: 9, endLine: 10 },
+    },
+    {
+      id: "guide-server-handlers",
+      label: "Drop the unused handler",
+      summary: "third() had no caller once the cache was gone",
+      parent: "guide-server",
+      ranges: [
+        { file: "src/handlers.ts", side: "additions", startLine: 7, endLine: 7 },
+        { file: "src/handlers.ts", side: "deletions", startLine: 7, endLine: 11 },
+      ],
+    },
+    {
+      id: "guide-install",
+      label: "Install script and docs",
+      summary: "A helper for the copy, and one line of README",
+      skim: true,
+      ranges: [
+        {
+          file: "scripts/install.sh",
+          side: "additions",
+          startLine: 4,
+          endLine: 9,
+          note: "install_bin wraps the copy",
+        },
+        { file: "README.md", side: "additions", startLine: 4, endLine: 4 },
+      ],
+    },
+  ];
+}
+
+function guideOverview(): ReviewOverview {
+  const blob = (side: "additions" | "deletions", startLine: number, endLine: number) =>
+    ({ file: "src/blob.ts", side, startLine, endLine }) as const;
+  return {
+    title: "Retry blob reads with backoff instead of caching failures",
+    verdict: "ready",
+    lede: "A single failed blob read used to stick in the session cache, so one network blip broke every diff that touched that file until a reload.",
+    steps: [
+      "Reads go through `withRetry`, which backs off and tries again before giving up.",
+      "The blob cache is gone, so nothing replays an old failure.",
+      "The manifest records which attempt produced each blob.",
+      "The server and the install script pick up two small follow-ons.",
+    ],
+    visual: {
+      kind: "flow",
+      caption: "How a blob read reaches the network",
+      nodes: [
+        { id: "sync", label: "Syncer.sync()", status: "same" },
+        {
+          id: "load",
+          label: "loadBlob()",
+          status: "changed",
+          note: "async, takes attempts",
+          at: blob("additions", 4, 4),
+        },
+        {
+          id: "cache",
+          label: "blobCache",
+          status: "removed",
+          note: "replayed failures",
+          at: blob("deletions", 3, 3),
+        },
+        {
+          id: "retry",
+          label: "withRetry()",
+          status: "added",
+          note: "backs off on network errors",
+          at: blob("additions", 5, 5),
+        },
+        { id: "fetch", label: "fetchBlob()", status: "same" },
+        {
+          id: "record",
+          label: "Manifest.record()",
+          status: "changed",
+          at: blob("additions", 15, 16),
+        },
+        {
+          id: "backoff",
+          label: "backoff()",
+          status: "added",
+          at: { file: "tools/sync.py", side: "additions", startLine: 23, endLine: 24 },
+        },
+      ],
+      edges: [
+        { from: "sync", to: "load", label: "path" },
+        { from: "load", to: "cache", status: "removed" },
+        { from: "load", to: "retry", status: "added" },
+        { from: "retry", to: "fetch", label: "attempt", status: "added" },
+        { from: "retry", to: "backoff", label: "delay", status: "added" },
+        { from: "load", to: "record", label: "path" },
+      ],
+    },
+    body: "The retry budget is per call, not per host; if the network is down for longer than the budget, reads fail exactly as before, just later. Worth a follow-up to share one budget across a sync.",
+  };
+}
+
+/** A real artifact, handed in by whoever drives the browser: `window.reviewerPreviewArtifact =
+ * { bytes, patch }` set before load (Playwright's `addInitScript`). Lets a visual check run the
+ * guide over an artifact `rvw emit` produced, against the patch it was written for, without
+ * copying either into the repository. */
+type PreviewArtifact = { bytes: string; patch: string };
+
+function injectedArtifact(): PreviewArtifact | null {
+  const value: unknown = (window as { reviewerPreviewArtifact?: unknown }).reviewerPreviewArtifact;
+  if (typeof value !== "object" || value === null) {
+    return null;
+  }
+  const { bytes, patch } = value as Partial<PreviewArtifact>;
+  return typeof bytes === "string" && typeof patch === "string" ? { bytes, patch } : null;
 }
 
 /** Marks the named files read, exactly as the app does: signed against their own content
@@ -349,7 +643,7 @@ function siblingSlice(ordinal: number, spec: SiblingSpec): SessionSlice {
               reviewedHead: null,
               pr: null,
             },
-      overview: title === undefined ? null : { title, body: "" },
+      overview: title === undefined ? null : { title },
     },
   );
 }
@@ -1033,7 +1327,9 @@ export function applyPreviewState(): void {
           summary: "Retries now back off per host rather than per request",
           description:
             "The engine holds one budget per host and the util reads it. Everything below this chapter follows from that one decision.",
-          ranges: [noted("src/engine.ts", "holds the per-host budget"), range("src/util.ts")],
+          // `src/util.ts` as a whole-file range (`{ file }`), the form an author writes for a
+          // file the chapter owns outright — it must read exactly like the line range beside it.
+          ranges: [noted("src/engine.ts", "holds the per-host budget"), { file: "src/util.ts" }],
         },
         {
           id: "mechanical",
@@ -1079,6 +1375,67 @@ export function applyPreviewState(): void {
           verdict: "ready",
         },
         overviewOpen: true,
+      });
+      break;
+    }
+    case "guide":
+    case "guide-chapter": {
+      // The guide over a change worth a guide: a flow on the front, a skeleton in the first
+      // chapter, a group with parts, a skim chapter, and an outline with something in it. The
+      // `-chapter` variant is the band above the diff for that first chapter.
+      // `GUIDE_DEPS_PATCH` rides along so the Map card's Deps tab has a rewiring to draw.
+      const files = parsePatch(OUTLINE_PATCH + GUIDE_DEPS_PATCH, "preview:guide");
+      const layers = guideLayers();
+      const chapter = state === "guide-chapter";
+      seedSession({
+        diff: { phase: "loaded", loadId: 1, files },
+        selectedFilePath: files[0]?.path ?? null,
+        layers,
+        overview: guideOverview(),
+        comments: [
+          {
+            id: "c0000000-0000-4000-8000-000000000900",
+            file: "src/blob.ts",
+            side: "additions",
+            startLine: 5,
+            endLine: 5,
+            body: "`attempts` defaults to 3 here and to nothing in `sync.py` — say which one wins.",
+            severity: "important",
+          },
+        ],
+        ...(chapter ? { activeLayerId: "guide-retry" } : { overviewOpen: true }),
+        ...readFixture(files, chapter ? [] : ["cmd/server.go"]),
+        collapsedFiles: withCollapsed(NO_COLLAPSED_FILES, initialFolds(files, layers), true),
+      });
+      break;
+    }
+    case "artifact":
+    case "artifact-chapter": {
+      const injected = injectedArtifact();
+      if (injected === null) {
+        break;
+      }
+      let next = 0;
+      const imported = importReview(injected.bytes, {
+        newId: () => `c0000000-0000-4000-8000-${String((next += 1)).padStart(12, "0")}`,
+      });
+      if (!imported.ok) {
+        console.error(imported.reason);
+        break;
+      }
+      const files = parsePatch(injected.patch, "preview:artifact");
+      const { review } = imported;
+      const firstLayer = review.layers.find((layer) => layer.visual !== undefined) ?? null;
+      seedSession({
+        diff: { phase: "loaded", loadId: 1, files },
+        selectedFilePath: files[0]?.path ?? null,
+        layers: review.layers,
+        overview: review.overview,
+        comments: review.comments,
+        ...(state === "artifact-chapter"
+          ? { activeLayerId: firstLayer?.id ?? review.layers[0]?.id ?? null }
+          : { overviewOpen: true }),
+        collapsedFiles: withCollapsed(NO_COLLAPSED_FILES, initialFolds(files, review.layers), true),
       });
       break;
     }

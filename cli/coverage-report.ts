@@ -25,7 +25,8 @@ import {
 // saw "Not covered by layers" in the app. Emit is the moment the author can still fix it, so it
 // says so there; it does not change the exit code, for the reason `rvw check` gives (a strong
 // review may skip trivia on purpose). What it prints is the fix rather than the score: the
-// uncovered spans per file and side, since those are what a range is written from.
+// uncovered spans per file and side, since those are what a range is written from — or, for a
+// file no layer touches, the whole-file range that covers it in one line.
 
 /** How many files the rollup names before it starts counting instead. Small on purpose: past a
  * handful, a file list stops being something a reader scans and becomes something they scroll,
@@ -114,8 +115,20 @@ export function emitCoverageLines(report: CoverageReport): string[] {
     `layers cover ${percent(coveredChangedLines, coverableChangedLines)} of changed lines — ${bySide.additions} added and ${bySide.deletions} removed line(s) are in no layer (shown as "Not covered by layers"):`,
   ];
   const gaps = filesWithGaps(report);
+  // A file no layer touches at all is fixed by one whole-file range, not by copying its spans
+  // out one hunk side at a time — which is how an author once wrote 63 ranges for 14 files.
+  const untouched = new Set(
+    report.files.filter((file) => file.status === "uncovered").map((file) => file.file),
+  );
   for (const [file, spans] of gaps.slice(0, MAX_ROLLUP_FILES)) {
-    lines.push(`  ${file}: ${describeSpans(spans)}`);
+    lines.push(
+      untouched.has(file)
+        ? // `JSON.stringify`, not quotes around the path: this is a range the author pastes into
+          // the draft, and a path holding `"` or `\` would otherwise print JSON that does not
+          // parse — or, worse, parses as a different path.
+          `  ${file}: in no layer — { "file": ${JSON.stringify(file)} } covers all of it`
+        : `  ${file}: ${describeSpans(spans)}`,
+    );
   }
   const hidden = gaps.length - MAX_ROLLUP_FILES;
   if (hidden > 0) {

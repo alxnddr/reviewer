@@ -1,8 +1,9 @@
 import type { SelectedLineRange } from "@pierre/diffs";
-import type { ReviewAnchor, ReviewLayer } from "./review";
+import type { AnchorSpan, ReviewLayer, ReviewLayerRange, ReviewSide } from "./review";
 import { clamp } from "./clamp";
 import { resolveAnchor } from "./diff/anchor";
 import type { PatchFile } from "./diff/patch";
+import { hunkSpan } from "./diff/walk";
 
 // The layer outline: `layers` is a **tree in document order**, and this is the one place
 // that reads it. A layer hangs off another through the `parent` id `importReview` stamped;
@@ -17,7 +18,7 @@ import type { PatchFile } from "./diff/patch";
 // group, soloing a child narrows to a section of it, and no surface ever has to ask which
 // of two file sets a group "really" means. Counts aggregate the same way; only *ownership*
 // (which layer a comment belongs to) is exclusive, and that is the deepest layer whose own
-// ranges cover it.
+// ranges cover it — a line range beating a whole-file one at equal depth (`layerOwning`).
 //
 // Nothing here sorts or ranks — the artifact's order is reading order. All derivation runs
 // against the loaded (git-re-derived) diff, so a range that drifted resolves to `outdated`
@@ -200,8 +201,50 @@ function layerSubtree(layer: ReviewLayer, layers: readonly ReviewLayer[]): Revie
 /** A layer's real extent: its own ranges and every range under it, in document order. The
  * single definition of "what this layer covers" — files, counts, solo subset and drift all
  * read it, so a parent and its children can never disagree about what the group is. */
-export function layerRanges(layer: ReviewLayer, layers: readonly ReviewLayer[]): ReviewAnchor[] {
+export function layerRanges(
+  layer: ReviewLayer,
+  layers: readonly ReviewLayer[],
+): ReviewLayerRange[] {
   return layerSubtree(layer, layers).flatMap((current) => current.ranges);
+}
+
+/** The sides a whole-file range spans, in the order its spans are listed: additions first, so
+ * the first span of a hunk is the new code — where a reader sent to "this file" expects to
+ * land. */
+const WHOLE_FILE_SIDES: readonly ReviewSide[] = ["additions", "deletions"];
+
+/** A layer range as concrete spans against the loaded diff — the one place a whole-file range
+ * (`{ file }`) becomes line numbers. A line range is itself; a whole-file range is every
+ * hunk's extent on both sides (`hunkSpan`, the geometry `resolveAnchor` places against), so
+ * every changed line of the file falls inside one of them and every span places. Derived, never
+ * stored: the hunks are the diff's *now*, which is the session.ts inputs-not-derived precedent.
+ *
+ * `file` is the diff's entry for `range.file` by current path, or absent when the diff does not
+ * carry it — and then a whole-file range has no spans at all, the same "names no code here" a
+ * line range on a vanished file amounts to. Callers that only ask *which file* read
+ * `range.file` and never need this. */
+export function rangeSpans(
+  range: ReviewLayerRange,
+  file: PatchFile | null | undefined,
+): AnchorSpan[] {
+  if (range.side !== undefined) {
+    return [
+      { file: range.file, side: range.side, startLine: range.startLine, endLine: range.endLine },
+    ];
+  }
+  if (file === null || file === undefined) {
+    return [];
+  }
+  const spans: AnchorSpan[] = [];
+  for (const hunk of file.fileDiff.hunks) {
+    for (const side of WHOLE_FILE_SIDES) {
+      const span = hunkSpan(hunk, side);
+      if (span.end >= span.start) {
+        spans.push({ file: range.file, side, startLine: span.start, endLine: span.end });
+      }
+    }
+  }
+  return spans;
 }
 
 /** The unique files a layer covers, in first-appearance order — one entry per file
@@ -218,14 +261,14 @@ export function layerFilePaths(layer: ReviewLayer, layers: readonly ReviewLayer[
   return paths;
 }
 
-type AnchorLike = {
-  file: string;
-  side: ReviewAnchor["side"];
-  startLine: number;
-  endLine: number;
-};
-
-function rangeCovers(range: ReviewAnchor, anchor: AnchorLike): boolean {
+/** Whether a range covers any line of an anchor. A whole-file range covers everything in its
+ * file on both sides — no diff needed to say so, which is why ownership (`layerOwning`) can
+ * stay diff-free. A parent's whole-file range and a child's line range in the same file still
+ * resolve to the child: both cover the line, and the deeper one wins. */
+export function rangeCovers(range: ReviewLayerRange, anchor: AnchorSpan): boolean {
+  if (range.side === undefined) {
+    return range.file === anchor.file;
+  }
   return (
     range.file === anchor.file &&
     range.side === anchor.side &&
@@ -234,31 +277,66 @@ function rangeCovers(range: ReviewAnchor, anchor: AnchorLike): boolean {
   );
 }
 
-/** Whether a layer's **own** ranges cover an anchor. Ownership is exclusive and belongs at
- * the leaf: this is the predicate `layerOwning` resolves with. */
-function layerOwnsAnchor(layer: ReviewLayer, anchor: AnchorLike): boolean {
-  return layer.ranges.some((range) => rangeCovers(range, anchor));
-}
+/** How a layer's **own** ranges claim an anchor: `none`, only through a whole-file range
+ * (`file`), or through a line range (`lines`) — the more specific claim. Ownership is
+ * exclusive and belongs at the leaf: this is what `layerOwning` ranks layers by. */
+type AnchorClaim = "none" | "file" | "lines";
 
-/** The one layer an anchor belongs to: the **deepest** layer whose own ranges cover it,
- * and among equals the first in document order. Deepest wins because that is the most
- * specific claim anyone made about those lines — an ancestor still counts it, by
- * aggregation, without taking it away from the section that actually explains it. */
-export function layerOwning(
-  layers: readonly ReviewLayer[],
-  anchor: AnchorLike,
-): ReviewLayer | null {
-  const outline = layerOutline(layers);
-  let best: LayerOutlineEntry | null = null;
-  for (const entry of outline) {
-    if (!layerOwnsAnchor(entry.layer, anchor)) {
+function layerClaim(layer: ReviewLayer, anchor: AnchorSpan): AnchorClaim {
+  let claim: AnchorClaim = "none";
+  for (const range of layer.ranges) {
+    if (!rangeCovers(range, anchor)) {
       continue;
     }
-    if (best === null || entry.depth > best.depth) {
-      best = entry;
+    if (range.side !== undefined) {
+      return "lines";
+    }
+    claim = "file";
+  }
+  return claim;
+}
+
+/** The one layer an anchor belongs to, by three rules applied in order:
+ *
+ * 1. **The deepest** layer whose own ranges cover it wins. That is the most specific claim
+ *    anyone made about those lines — an ancestor still counts it, by aggregation, without
+ *    taking it away from the section that actually explains it.
+ * 2. **At equal depth, a line range beats a whole-file range.** Two siblings sharing a file is
+ *    the case the skill teaches — "write line ranges only for a file split across chapters" —
+ *    and one of them is often written `{ file }` because it owns *most* of it. Without this
+ *    rule the earlier sibling's whole-file range took every line of the file, the later
+ *    sibling's carefully placed line ranges included: its comments, its visual's badges, its
+ *    symbol chips and its map tint all named the other chapter, and its `focus` passed the
+ *    gate's overlap check while wearing the other chapter's number beside its own prose. The
+ *    line range is the narrower claim about those exact lines, so it is the one that holds —
+ *    the same reasoning as rule 1, applied across range forms instead of across depth. Depth
+ *    stays first so a child's whole-file range still takes a file from its parent's line
+ *    ranges: nesting is the author's explicit statement of which section is more specific.
+ * 3. Among equals, the first in document order.
+ *
+ * Every surface that attributes a line asks this — a comment's chapter, a visual element's
+ * badge, the module map's tint, the chapter strip's widths, the symbol chips, and the gate's
+ * focus rule — so they cannot disagree about who owns a line. */
+export function layerOwning(
+  layers: readonly ReviewLayer[],
+  anchor: AnchorSpan,
+): ReviewLayer | null {
+  const outline = layerOutline(layers);
+  let best: { entry: LayerOutlineEntry; claim: AnchorClaim } | null = null;
+  for (const entry of outline) {
+    const claim = layerClaim(entry.layer, anchor);
+    if (claim === "none") {
+      continue;
+    }
+    if (
+      best === null ||
+      entry.depth > best.entry.depth ||
+      (entry.depth === best.entry.depth && claim === "lines" && best.claim === "file")
+    ) {
+      best = { entry, claim };
     }
   }
-  return best?.layer ?? null;
+  return best?.entry.layer ?? null;
 }
 
 /** The layer named by `activeId`, or null when nothing is active or the id names
@@ -332,9 +410,11 @@ export function emptySoloReason(
  * a drifted layer. `placed` carries the resolved location; `outdated` means the range no
  * longer resolves (missing file, or a range no same-side hunk covers); `none` is a layer
  * whose whole extent carries no range at all. A parent resolves through its extent, so a
- * group reads as placed when the sections under it are. */
+ * group reads as placed when the sections under it are. A whole-file range places on its
+ * file with a null `range` — the file is the location, and no one line of it is more the
+ * range's than another. */
 export type LayerScroll =
-  | { kind: "placed"; fileId: string; range: SelectedLineRange }
+  | { kind: "placed"; fileId: string; range: SelectedLineRange | null }
   | { kind: "outdated" }
   | { kind: "none" };
 
@@ -365,6 +445,12 @@ export function resolveLayerScroll(
   // comment surface (which only annotates files it renders): a layer pointing at a
   // file the patch lacks fails soft rather than scrolling to a row that never mounts.
   const file = files.find((candidate) => candidate.path === first.file) ?? null;
+  if (first.side === undefined) {
+    // A whole-file range places iff its file is in the diff — the gate's rule for it.
+    return file === null
+      ? { kind: "outdated" }
+      : { kind: "placed", fileId: first.file, range: null };
+  }
   const resolution =
     frozen && file !== null
       ? resolveAnchor(first, { kind: "frozen" })

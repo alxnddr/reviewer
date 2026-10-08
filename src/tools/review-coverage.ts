@@ -2,8 +2,8 @@ import {
   walkLayerInputs,
   type AnchorSpan,
   type LineSpan,
-  type ReviewAnchor,
   type ReviewLayerInput,
+  type ReviewLayerRange,
   type ReviewSide,
 } from "../shared/review";
 import {
@@ -13,11 +13,13 @@ import {
   type PatchFile,
 } from "../shared/diff/patch";
 import { hunkSpan, walkFileLines } from "../shared/diff/walk";
+import { rangeSpans } from "../shared/layers";
 
 // Do the ordered layers cover the whole diff? The universe is every *changed* line of the
 // range's diff — additions in new-file coordinates, deletions in old-file coordinates, context
 // excluded (a walkthrough explains what changed, not the untouched lines a range incidentally
-// spans). A changed line is covered iff some layer `range` on its side spans it. Pure and
+// spans). A changed line is covered iff some layer `range` on its side spans it, or a
+// whole-file range (`{ file }`) names its file. Pure and
 // I/O-free, over the *same* `parsePatch` the app renders with, against whatever diff the caller
 // resolved: the range captured live for a `--draft` audit, re-derived from the artifact's own
 // repo/refs for a finished artifact, or a rare embedded frozen patch. The CLI shell owns the
@@ -94,7 +96,7 @@ export type ChangedLines = Record<ReviewSide, ReadonlySet<number>>;
  * an artifact's nested one walked flat by the CLI. Nesting is irrelevant here: a layer's
  * extent is its own ranges plus its descendants', so a walk that visits every node covers
  * exactly the same lines whichever way they were grouped. */
-export type LayerExtent = { readonly ranges: readonly ReviewAnchor[] };
+export type LayerExtent = { readonly ranges: readonly ReviewLayerRange[] };
 
 /** An authored outline flattened to the extents coverage measures — every node of the tree,
  * so a nested layer's ranges count exactly as a top-level one's do. Lives here, beside the
@@ -131,7 +133,7 @@ export function coverageOfFiles(
   files: readonly PatchFile[],
   layers: readonly LayerExtent[],
 ): CoverageReport {
-  const rangesByFile = groupRanges(layers);
+  const rangesByFile = groupRanges(layers, files);
 
   const fileCoverages: FileCoverage[] = [];
   const uncoveredSpans: AnchorSpan[] = [];
@@ -151,10 +153,11 @@ export function coverageOfFiles(
     let covered = 0;
 
     for (const side of SIDES) {
+      const covers = spansCover(ranges[side]);
       const uncoveredOnSide: number[] = [];
       for (const line of changed[side]) {
         coverable += 1;
-        if (spansCover(ranges[side], line)) {
+        if (covers(line)) {
           covered += 1;
         } else {
           uncoveredOnSide.push(line);
@@ -195,11 +198,19 @@ export type ChangedSpan = LineSpan & { side: ReviewSide };
  * "nearest on that side" was the first place it was printed. */
 export type HunkExtent = LineSpan & { side: ReviewSide };
 
+/** One hunk with both of its sides together: the old-file extent and the new-file extent of
+ * the same `@@` block, either null when the hunk has no line on that side (a pure insertion
+ * has no deletions extent). `hunks` lists the same extents grouped by side, which is the order
+ * coverage reads them in and the shape an older consumer already parses — but an author
+ * writing a line range for *both* sides of one hunk had to pair the two lists back up by
+ * position, and did, for 63 ranges. A pair is that matching done once, here. */
+export type HunkPair = { deletions: LineSpan | null; additions: LineSpan | null };
+
 /** One file's place in the changed-line universe: either the contiguous changed spans an
  * anchor may fall in, or an honest non-coverable reason (a binary/pure-rename carries no
  * lines to anchor). `status` is the file's A/M/D/R change so the listing reads like the
- * diff tree. `hunks` is on both arms so every entry has the same answer to "where may I
- * anchor": a non-coverable file's is simply empty. */
+ * diff tree. `hunks` and `pairs` are on both arms so every entry has the same answer to
+ * "where may I anchor": a non-coverable file's are simply empty. */
 export type FileUniverse =
   | {
       file: string;
@@ -207,6 +218,7 @@ export type FileUniverse =
       coverable: false;
       reason: NonCoverableReason;
       hunks: HunkExtent[];
+      pairs: HunkPair[];
     }
   | {
       file: string;
@@ -214,6 +226,7 @@ export type FileUniverse =
       coverable: true;
       spans: ChangedSpan[];
       hunks: HunkExtent[];
+      pairs: HunkPair[];
     };
 
 /** The changed-line universe of a captured patch: per file, the per-side contiguous
@@ -226,8 +239,9 @@ export function changedLineUniverse(patch: string): FileUniverse[] {
     const changed = changedLines(file);
     const reason = nonCoverableReason(file, changed);
     const hunks = hunkExtents(file);
+    const pairs = hunkPairs(file);
     if (reason !== null) {
-      return { file: file.path, status: file.status, coverable: false, reason, hunks };
+      return { file: file.path, status: file.status, coverable: false, reason, hunks, pairs };
     }
     const spans: ChangedSpan[] = [];
     for (const side of SIDES) {
@@ -235,8 +249,22 @@ export function changedLineUniverse(patch: string): FileUniverse[] {
         spans.push({ side, ...span });
       }
     }
-    return { file: file.path, status: file.status, coverable: true, spans, hunks };
+    return { file: file.path, status: file.status, coverable: true, spans, hunks, pairs };
   });
+}
+
+/** Every hunk as one pair of side extents, in file order — `hunkExtents`' spans regrouped by
+ * hunk, read through the same `hunkSpan`, so a pair's sides are exactly two entries of
+ * `hunks`. */
+function hunkPairs(file: PatchFile): HunkPair[] {
+  const side = (hunk: (typeof file.fileDiff.hunks)[number], which: ReviewSide) => {
+    const span = hunkSpan(hunk, which);
+    return span.end >= span.start ? { startLine: span.start, endLine: span.end } : null;
+  };
+  return file.fileDiff.hunks.map((hunk) => ({
+    deletions: side(hunk, "deletions"),
+    additions: side(hunk, "additions"),
+  }));
 }
 
 /** Every hunk's extent per side, deletions then additions like `spans`, in file order. Read
@@ -307,18 +335,27 @@ export function changedLines(file: PatchFile): ChangedLines {
   return { additions, deletions };
 }
 
-/** Layer ranges grouped by file then side. A range covers only its own side (mirroring
- * `coversRange`); empty `ranges` (a parent rollup) contribute nothing. */
-function groupRanges(layers: readonly LayerExtent[]): Map<string, FileRanges> {
+/** Layer ranges grouped by file then side. A line range covers only its own side (mirroring
+ * `coversRange`); a whole-file range is read through `rangeSpans`, the one expansion of it,
+ * as every hunk of its file on both sides — which spans every changed line the file has, and
+ * nothing on a file the diff does not carry. Empty `ranges` (a parent rollup) contribute
+ * nothing. */
+function groupRanges(
+  layers: readonly LayerExtent[],
+  files: readonly PatchFile[],
+): Map<string, FileRanges> {
+  const byPath = new Map(files.map((file) => [file.path, file]));
   const byFile = new Map<string, FileRanges>();
   for (const layer of layers) {
     for (const range of layer.ranges) {
-      let fileRanges = byFile.get(range.file);
-      if (fileRanges === undefined) {
-        fileRanges = emptyRanges();
-        byFile.set(range.file, fileRanges);
+      for (const span of rangeSpans(range, byPath.get(range.file))) {
+        let fileRanges = byFile.get(span.file);
+        if (fileRanges === undefined) {
+          fileRanges = emptyRanges();
+          byFile.set(span.file, fileRanges);
+        }
+        fileRanges[span.side].push({ startLine: span.startLine, endLine: span.endLine });
       }
-      fileRanges[range.side].push({ startLine: range.startLine, endLine: range.endLine });
     }
   }
   return byFile;
@@ -328,10 +365,40 @@ function emptyRanges(): FileRanges {
   return { deletions: [], additions: [] };
 }
 
-/** Whether any range spans the line — the same inclusive `[startLine, endLine]` test the
- * anchor resolver uses, applied per side by the caller. */
-function spansCover(ranges: readonly LineSpan[], line: number): boolean {
-  return ranges.some((range) => range.startLine <= line && line <= range.endLine);
+/** "Does any range span this line?" — the same inclusive `[startLine, endLine]` test the anchor
+ * resolver uses, applied per side by the caller — answered by binary search over the ranges
+ * sorted and merged once. Not `ranges.some(…)` per line: a whole-file range arrives as one span
+ * per hunk, a PR's file can carry tens of thousands of hunks, and lines × spans was 460 ms of
+ * every `effectiveLayers` (so of every read mark in the guide) on a 20k-hunk file. Exported
+ * because the renderer asks the same question of a chapter's spans (`lib/diff/snippet.ts`'s
+ * `spanIndex`), and one answer cannot drift from the coverage it is counted beside. */
+export function spansCover(ranges: readonly LineSpan[]): (line: number) => boolean {
+  const merged: [number, number][] = [];
+  for (const range of ranges
+    .filter((current) => current.startLine <= current.endLine)
+    .toSorted((a, b) => a.startLine - b.startLine)) {
+    const last = merged.at(-1);
+    if (last !== undefined && range.startLine <= last[1] + 1) {
+      last[1] = Math.max(last[1], range.endLine);
+    } else {
+      merged.push([range.startLine, range.endLine]);
+    }
+  }
+  return (line) => {
+    // The last merged interval starting at or before `line`.
+    let low = 0;
+    let high = merged.length;
+    while (low < high) {
+      const middle = (low + high) >>> 1;
+      if ((merged[middle]?.[0] ?? 0) <= line) {
+        low = middle + 1;
+      } else {
+        high = middle;
+      }
+    }
+    const interval = merged[low - 1];
+    return interval !== undefined && line <= interval[1];
+  };
 }
 
 /** Group sorted line numbers into contiguous runs — consecutive integers merge into one

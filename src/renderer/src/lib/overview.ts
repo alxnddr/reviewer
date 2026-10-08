@@ -1,10 +1,11 @@
-import type { Comment, ReviewLayer } from "../../../shared/review";
+import type { AnchorSpan, Comment, ReviewLayer, ReviewLayerRange } from "../../../shared/review";
 import { countLabel } from "../../../shared/plural";
 import { changedLines, type ChangedLines } from "../../../tools/review-coverage";
 import { effectiveLayers } from "./coverage";
 import type { FileChangeStatus, PatchFile } from "../../../shared/diff/patch";
-import { snippetForAnchor, type DiffSnippet } from "./diff/snippet";
-import { layerOutline, layerOwning, resolveLayerScroll } from "../../../shared/layers";
+import { hunkSnippet, representativeAnchors, spanIndex, type HunkSnippet } from "./diff/snippet";
+import { isMachineWritten } from "./initial-folds";
+import { layerOutline, layerOwning, rangeSpans, resolveLayerScroll } from "../../../shared/layers";
 import {
   layerTally,
   nextUnreadLayer,
@@ -23,9 +24,16 @@ import {
 // render-free — the screen maps this to elements and owns nothing but styling and
 // navigation.
 
-/** How much preview a chapter snippet shows. Six lines is a taste of the code — enough to
- * recognise the change, short enough that ten chapters still scan as a document. */
-const SNIPPET_LINES = 6;
+/** How much a chapter's hunk card shows: the anchor's rows with two unchanged rows either side,
+ * capped at sixteen — enough for the key hunk of a chapter to be read beside its prose (the
+ * guide's right column), short enough that ten chapters still scan as a document. */
+const SNIPPET_OPTIONS = { context: 2, maxLines: 16 } as const;
+
+/** Where a chapter's card came from: the author's `focus` (the hunk they say represents the
+ * chapter), or the app's pick among its ranges when there is no focus or it drifted. */
+export type ChapterSnippetSource = "focus" | "range";
+
+export type ChapterSnippet = { file: string; snippet: HunkSnippet; source: ChapterSnippetSource };
 
 /** One file a chapter covers, with that chapter's own footprint in it — not the file's
  * totals. A layer that explains three lines of a 400-line file reads `+3`, because the
@@ -94,9 +102,10 @@ export type OverviewChapter = {
    * and then having its children render full-size would be the mark doing nothing. Nothing
    * about progress or coverage reads it: a skim chapter counts exactly like any other. */
   skim: boolean;
-  /** A few real lines from the first range that still places, or null (a layer whose
+  /** The chapter's key hunk as a card: the layer's own `focus` when it places, else the most
+   * representative hunk of its extent that places (`chapterSnippet`), or null (a layer whose
    * extent carries no range, a drifted layer, or an unloaded diff). */
-  snippet: { file: string; snippet: DiffSnippet } | null;
+  snippet: ChapterSnippet | null;
 };
 
 /** Everything the overview screen renders below the authored prose. `chapters` is in
@@ -133,24 +142,19 @@ export type OverviewInput = {
 /** How many of a file's changed lines, per side, this chapter's ranges cover. `ranges` is
  * expected to already be narrowed to `path` — the caller buckets a chapter's whole-extent
  * ranges by file once (`rangesByPath` below) rather than handing every file's changed lines
- * the chapter's entire range list to filter, which used to make this O(changed lines ×
- * chapter ranges) instead of O(changed lines × that file's ranges). */
+ * the chapter's entire range list to filter. Each line is then a binary search over the file's
+ * spans (`spanIndex`), not a test of every one: a whole-file range is one span per hunk, and a
+ * PR's file can carry tens of thousands of hunks. */
 function coveredIn(
   changed: ChangedLines,
-  ranges: readonly {
-    side: "additions" | "deletions";
-    startLine: number;
-    endLine: number;
-  }[],
+  ranges: readonly AnchorSpan[],
 ): { additions: number; deletions: number } {
   let additions = 0;
   let deletions = 0;
+  const index = spanIndex(ranges);
   for (const side of ["additions", "deletions"] as const) {
     for (const line of changed[side]) {
-      const covered = ranges.some(
-        (range) => range.side === side && range.startLine <= line && line <= range.endLine,
-      );
-      if (!covered) {
+      if (!index.holds(side, line)) {
         continue;
       }
       if (side === "additions") {
@@ -163,41 +167,82 @@ function coveredIn(
   return { additions, deletions };
 }
 
-/** The first of a chapter's ranges that still resolves to real lines in the diff — the
- * code a preview would show. Ranges are tried in authored order, so a layer previews the
- * code its author put first, not whatever happens to be earliest in the file tree. */
-function firstSnippet(
-  ranges: readonly {
-    file: string;
-    side: "additions" | "deletions";
-    startLine: number;
-    endLine: number;
-  }[],
+/** The chapter's card: its `focus` first — the author's pick of the hunk that represents it,
+ * which is often not the first range (a chapter whose first file is a fixture beside the real
+ * change). A focus that no longer places falls through rather than leaving the chapter without
+ * a card. Without one the app picks (`representativeAnchors` in `lib/diff/snippet.ts`): the
+ * chapter's biggest hand-written file and a declaration in it, never just the first range —
+ * which for a chapter that adds a file was its imports. Each file's spans come through
+ * `rangeSpans`, so a whole-file range offers every hunk of its file to the pick. */
+function chapterSnippet(
+  focus: AnchorSpan | undefined,
+  ranges: readonly ReviewLayerRange[],
   byPath: ReadonlyMap<string, PatchFile>,
-): { file: string; snippet: DiffSnippet } | null {
+): ChapterSnippet | null {
+  const focusFile = focus === undefined ? undefined : byPath.get(focus.file);
+  if (focus !== undefined && focusFile !== undefined) {
+    const snippet = hunkSnippet(focusFile.fileDiff, focus, SNIPPET_OPTIONS);
+    if (snippet !== null) {
+      return { file: focus.file, snippet, source: "focus" };
+    }
+  }
+  const spansByPath = new Map<string, { file: PatchFile; spans: AnchorSpan[] }>();
   for (const range of ranges) {
     const file = byPath.get(range.file);
     if (file === undefined) {
       continue;
     }
-    const snippet = snippetForAnchor(file.fileDiff, range, SNIPPET_LINES);
+    const entry = spansByPath.get(file.path) ?? { file, spans: [] };
+    entry.spans.push(...rangeSpans(range, file));
+    spansByPath.set(file.path, entry);
+  }
+  for (const pick of representativeAnchors([...spansByPath.values()], isMachineWritten)) {
+    const snippet = hunkSnippet(pick.file.fileDiff, pick.anchor, {
+      ...SNIPPET_OPTIONS,
+      lead: pick.lead,
+    });
     if (snippet !== null) {
-      return { file: range.file, snippet };
+      return { file: pick.file.path, snippet, source: "range" };
     }
   }
   return null;
 }
 
-/** The whole tour, derived. Every count here is measured against the diff on screen, so
- * an overview opened on a drifted branch honestly shows fewer files and flags the
- * chapters that no longer place, rather than reprinting what the artifact once claimed. */
-export function buildOverview({
+/** Every chapter's card, by layer id — the one part of the model that reads code rather than
+ * counts it (an outline per file, a hunk walk per card), and so the one part kept out of
+ * `buildOverview`'s other inputs. It is a function of the layers and the diff alone: the screen
+ * memoises it on exactly those (`OverviewScreen.tsx`) and hands it in, so marking a file read or
+ * editing a comment — both of which re-run `buildOverview` — does not re-pick a single card.
+ * Folding it back into the model is what once made every Reviewed toggle cost 6.6 s on a
+ * 12k-line file. */
+export type ChapterSnippets = ReadonlyMap<string, ChapterSnippet | null>;
+
+export function buildChapterSnippets({
   layers,
   files,
-  comments,
-  frozen,
-  readFiles,
-}: OverviewInput): OverviewModel {
+}: Pick<OverviewInput, "layers" | "files">): ChapterSnippets {
+  const byPath = new Map(files.map((file) => [file.path, file]));
+  const effective = layers.length === 0 ? [] : effectiveLayers(files, layers);
+  const outline = new Map(layerOutline(layers).map((entry) => [entry.layer.id, entry]));
+  return new Map(
+    effective.map((layer) => {
+      // The extent, as `buildOverview` reads it: a group's card is picked from all it contains.
+      const subtree = outline.get(layer.id)?.subtree ?? [layer];
+      const ranges = subtree.flatMap((current) => current.ranges);
+      return [layer.id, chapterSnippet(layer.focus, ranges, byPath)];
+    }),
+  );
+}
+
+/** The whole tour, derived. Every count here is measured against the diff on screen, so
+ * an overview opened on a drifted branch honestly shows fewer files and flags the
+ * chapters that no longer place, rather than reprinting what the artifact once claimed.
+ * `snippets` defaults to being derived here, for callers with nothing to memoise (tests); the
+ * screen passes its own (`buildChapterSnippets`). */
+export function buildOverview(
+  { layers, files, comments, frozen, readFiles }: OverviewInput,
+  snippets: ChapterSnippets = buildChapterSnippets({ layers, files }),
+): OverviewModel {
   const byPath = new Map(files.map((file) => [file.path, file]));
   const read = readPaths(files, readFiles);
   const changedByPath = new Map(files.map((file) => [file.path, changedLines(file)]));
@@ -251,8 +296,10 @@ export function buildOverview({
     for (const path of paths) {
       const changed = changedByPath.get(path);
       const forFile = rangesByPath.get(path) ?? [];
+      // Through `rangeSpans`, so a whole-file range counts every changed line of its file.
+      const spans = forFile.flatMap((range) => rangeSpans(range, byPath.get(path)));
       const counts =
-        changed === undefined ? { additions: 0, deletions: 0 } : coveredIn(changed, forFile);
+        changed === undefined ? { additions: 0, deletions: 0 } : coveredIn(changed, spans);
       additions += counts.additions;
       deletions += counts.deletions;
       entries.push({
@@ -291,7 +338,7 @@ export function buildOverview({
       // inferred "not covered by layers" chapter is in no outline and so is never skim,
       // which is right: nobody marked those files anything.
       skim: layer.skim === true || (entry?.ancestors ?? []).some((a) => a.skim === true),
-      snippet: firstSnippet(ranges, byPath),
+      snippet: snippets.get(layer.id) ?? null,
     };
   });
 

@@ -287,6 +287,25 @@ export function buildHugeAdditionPatch(lineCount: number): string {
   ].join("\n");
 }
 
+/** A new file of `count` one-line exported functions — the outline's "a new module is a table of
+ * contents" case, where `MAX_SYMBOLS_PER_FILE` has to cut the list rather than the reader. */
+export function buildExportsPatch(count: number): string {
+  const lines = Array.from(
+    { length: count },
+    (_, index) => `+export function step${index}(): number { return ${index}; }`,
+  );
+  return [
+    "diff --git a/steps.ts b/steps.ts",
+    "new file mode 100644",
+    "index 0000000..1111111",
+    "--- /dev/null",
+    "+++ b/steps.ts",
+    `@@ -0,0 +1,${count} @@`,
+    ...lines,
+    "",
+  ].join("\n");
+}
+
 /** A function moved whole from one file to another, and re-indented on the way — the case
  * move detection exists for. The deleted run is `src/moved-from.ts` old-file lines 3..10
  * (seven lines of function plus the blank after it); the added run is `src/moved-to.ts`
@@ -624,3 +643,473 @@ index 38e2ffc807..3bc7023f20 100755
  ### 字符串的定义
  
 `;
+
+/** Six files — five of code in four languages, and one of prose — captured with the app's own `DIFF_CONFIG` /
+ * `DIFF_ARGS` from a throwaway repo — the outline fixture (`outline.ts`). What each file proves:
+ *
+ *   - `src/blob.ts`: a signature change (`loadBlob` gains a parameter and `async`), a method
+ *     whose signature changed (`record`), an added arrow const (`patchText`), a removed
+ *     *non-exported* const that must not surface (`blobCache`), and a body-only change found
+ *     from a declaration in the hunk's own leading context (`size`).
+ *   - `src/handlers.ts`: git's hunk header names the *wrong* function (`first`, the nearest
+ *     column-0 line above the hunk) while the edit is in `second`, whose declaration is in the
+ *     hunk's context; and a removed function (`third`) in the same change block.
+ *   - `cmd/server.go`: an added struct, a paired signature change, and a body-only hunk whose
+ *     only clue is the header's funcname (`func (s *Server) Handle`).
+ *   - `tools/sync.py`: a deep body edit attributed to the header's `class Syncer:`, and an
+ *     added `def`.
+ *   - `scripts/install.sh`: an added shell function, and a top-level edit attributed to nothing.
+ *   - `README.md`: prose that reads like a declaration (`function loadBlob(path) …`) and must
+ *     not be outlined, because markdown is not code. */
+export const OUTLINE_PATCH = `diff --git a/README.md b/README.md
+index b5ce304..9195199 100644
+--- a/README.md
++++ b/README.md
+@@ -1,3 +1,4 @@
+ # Demo
+ 
+ The loader reads blobs.
++function loadBlob(path) now retries.
+diff --git a/cmd/server.go b/cmd/server.go
+index bf358a1..5c7805b 100644
+--- a/cmd/server.go
++++ b/cmd/server.go
+@@ -2,8 +2,12 @@ package main
+ 
+ import "fmt"
+ 
+-func serve(addr string) error {
+-	fmt.Println("listening on", addr)
++type Server struct {
++	name string
++}
++
++func serve(addr string, name string) error {
++	fmt.Println("listening on", addr, "as", name)
+ 	return nil
+ }
+ 
+@@ -12,7 +16,7 @@ func (s *Server) Handle(path string) string {
+ 		return "index"
+ 	}
+ 	if path == "/health" {
+-		return "ok"
++		return "ok: " + s.name
+ 	}
+ 	return "not found: " + path
+ }
+diff --git a/scripts/install.sh b/scripts/install.sh
+index dbbbde6..e6cf62b 100644
+--- a/scripts/install.sh
++++ b/scripts/install.sh
+@@ -1,5 +1,9 @@
+ #!/bin/sh
+ set -e
+ 
++install_bin() {
++  cp "$1" /usr/local/bin/
++}
++
+ echo "installing"
+-cp rvw /usr/local/bin/rvw
++install_bin rvw
+diff --git a/src/blob.ts b/src/blob.ts
+index 0fcf847..5cec87b 100644
+--- a/src/blob.ts
++++ b/src/blob.ts
+@@ -1,27 +1,24 @@
+ import { fetchBlob } from "./net";
++import { withRetry } from "./retry";
+ 
+-const blobCache = new Map<string, Promise<string>>();
+-
+-export function loadBlob(path: string): Promise<string> {
+-  const cached = blobCache.get(path);
+-  if (cached !== undefined) {
+-    return cached;
+-  }
+-  const read = fetchBlob(path);
+-  blobCache.set(path, read);
+-  return read;
++export async function loadBlob(path: string, attempts = 3): Promise<string> {
++  return withRetry(() => fetchBlob(path), attempts);
+ }
+ 
++export const patchText = (previous: string, next: string): string => {
++  return previous === next ? previous : next;
++};
++
+ export class Manifest {
+   private entries: string[] = [];
+ 
+-  record(path: string): void {
+-    this.entries.push(path);
++  record(path: string, attempt: number): void {
++    this.entries.push(\`\${path}#\${attempt}\`);
+   }
+ 
+   size(): number {
+     const count = this.entries.length;
+-    if (count > 100) {
++    if (count > 500) {
+       console.warn("large manifest");
+     }
+     return count;
+diff --git a/src/handlers.ts b/src/handlers.ts
+index e9636db..96df068 100644
+--- a/src/handlers.ts
++++ b/src/handlers.ts
+@@ -4,9 +4,5 @@ export function first(): number {
+ 
+ export function second(): number {
+   const a = 1;
+-  return a + 1;
+-}
+-
+-function third(): void {
+-  console.log("third");
++  return a + 2;
+ }
+diff --git a/tools/sync.py b/tools/sync.py
+index ef8026e..70711e8 100644
+--- a/tools/sync.py
++++ b/tools/sync.py
+@@ -11,10 +11,14 @@ class Syncer:
+             return 0
+         self.client.open()
+         for item in pending:
+-            self.client.send(item)
++            self.client.send(item, retry=True)
+         self.client.close()
+         return len(pending)
+ 
+ 
+ def helper(value):
+     return value * 2
++
++
++def backoff(attempt: int) -> float:
++    return min(2 ** attempt, 30)
+`;
+
+/** Sixteen files in eight languages, captured with the app's own `DIFF_CONFIG` / `DIFF_ARGS` from
+ * a throwaway repo — the dependency-diff fixture (`imports.ts`). What each file proves:
+ *
+ *   - `web/viewer.tsx`: a relative import retargeted (`../src/cache` → `../src/blob`), an import
+ *     *moved* (`react`, removed at the top and re-added lower: no change), a multi-line import
+ *     read from its closing `} from` line through a learned alias (`@/components/ui` →
+ *     `web/components/ui/index.ts`), a re-export from a scoped package's deep path, a dynamic
+ *     `import()`, a removed `require()` of a deep path (`lodash/merge` → `lodash`), and a string
+ *     holding a dynamic `import()` of a package that must not count.
+ *   - `src/cache.ts` (deleted) and `lib/retry.ts` (added): every statement of a whole file, one
+ *     way each; `./clock.js` is ESM-style for a `.ts` the diff does not carry.
+ *   - `src/blob.ts`: an added relative import of a file the diff adds, beside a context one.
+ *   - `tools/sync.py` / `app/store.py`: Python's plain, relative (`.policy`) and absolute-internal
+ *     (`app.store`, a changed file; `app.models`, a directory the diff shows) imports.
+ *   - `cmd/server.go`: specs inside an `import ( … )` block, one retargeted from a package the
+ *     change deletes (`internal/cache`) to one it adds (`internal/store`); `internal/store`'s
+ *     own single-line `import "os"`.
+ *   - `engine/src/main.rs`: `std::…::HashMap` → `std::…::BTreeMap` (same package: no change), a
+ *     `crate::` path to a file the diff adds, and an external crate.
+ *   - `android/…/Main.kt`, `app/Sources/Viewer/View.swift`, `scripts/release.rb`: Kotlin, Swift
+ *     and Ruby (`require` and `require_relative`).
+ *   - `README.md`: an indented code sample that reads like an import and must not, because
+ *     Markdown is not code. */
+export const IMPORTS_PATCH = `diff --git a/README.md b/README.md
+index 0805455..e967a45 100644
+--- a/README.md
++++ b/README.md
+@@ -1 +1,3 @@
+ # Demo
++
++    import { loadBlob } from "./src/blob";
+diff --git a/android/src/main/kotlin/demo/Main.kt b/android/src/main/kotlin/demo/Main.kt
+index 86d7c99..b904a67 100644
+--- a/android/src/main/kotlin/demo/Main.kt
++++ b/android/src/main/kotlin/demo/Main.kt
+@@ -1,7 +1,7 @@
+ package demo
+ 
+-import demo.cache.Store
++import kotlinx.coroutines.delay
+ 
+-fun main() {
+-    println(Store.size())
++suspend fun main() {
++    delay(10)
+ }
+diff --git a/app/Sources/Viewer/View.swift b/app/Sources/Viewer/View.swift
+new file mode 100644
+index 0000000..2a851b8
+--- /dev/null
++++ b/app/Sources/Viewer/View.swift
+@@ -0,0 +1,6 @@
++import SwiftUI
++import Combine
++
++struct Viewer: View {
++    var body: some View { Text("hi") }
++}
+diff --git a/app/store.py b/app/store.py
+new file mode 100644
+index 0000000..8326259
+--- /dev/null
++++ b/app/store.py
+@@ -0,0 +1,7 @@
++import json
++
++from app.models import Blob
++
++
++def save(response):
++    return Blob(json.loads(response.text))
+diff --git a/cmd/server.go b/cmd/server.go
+index 76ac91b..b5a6438 100644
+--- a/cmd/server.go
++++ b/cmd/server.go
+@@ -2,10 +2,12 @@ package main
+ 
+ import (
+ 	"fmt"
++	"net/http"
+ 
+-	"example.com/demo/internal/cache"
++	"example.com/demo/internal/store"
+ )
+ 
+ func main() {
+-	fmt.Println(cache.Size())
++	fmt.Println(store.Size())
++	http.ListenAndServe(":8080", nil)
+ }
+diff --git a/engine/src/main.rs b/engine/src/main.rs
+index 922fcea..d104ffa 100644
+--- a/engine/src/main.rs
++++ b/engine/src/main.rs
+@@ -1,6 +1,8 @@
+-use std::collections::HashMap;
++use std::collections::BTreeMap;
++use crate::retry::Policy;
++use serde::Deserialize;
+ 
+ fn main() {
+-    let map: HashMap<String, u32> = HashMap::new();
+-    println!("{}", map.len());
++    let map: BTreeMap<String, u32> = BTreeMap::new();
++    println!("{} {:?}", map.len(), Policy::default());
+ }
+diff --git a/engine/src/retry.rs b/engine/src/retry.rs
+new file mode 100644
+index 0000000..36a1db9
+--- /dev/null
++++ b/engine/src/retry.rs
+@@ -0,0 +1,2 @@
++#[derive(Debug, Default)]
++pub struct Policy;
+diff --git a/internal/cache/cache.go b/internal/cache/cache.go
+deleted file mode 100644
+index 0f11cb9..0000000
+--- a/internal/cache/cache.go
++++ /dev/null
+@@ -1,3 +0,0 @@
+-package cache
+-
+-func Size() int { return 0 }
+diff --git a/internal/store/store.go b/internal/store/store.go
+new file mode 100644
+index 0000000..ae5990b
+--- /dev/null
++++ b/internal/store/store.go
+@@ -0,0 +1,5 @@
++package store
++
++import "os"
++
++func Size() int { return len(os.Args) }
+diff --git a/lib/retry.ts b/lib/retry.ts
+new file mode 100644
+index 0000000..a7feff8
+--- /dev/null
++++ b/lib/retry.ts
+@@ -0,0 +1,6 @@
++import pRetry from "p-retry";
++import { sleep } from "./clock.js";
++
++export function withRetry<T>(run: () => Promise<T>): Promise<T> {
++  return pRetry(run, { onFailedAttempt: () => sleep(10) });
++}
+diff --git a/scripts/release.rb b/scripts/release.rb
+index 1b6b214..625b8c2 100644
+--- a/scripts/release.rb
++++ b/scripts/release.rb
+@@ -1 +1,4 @@
+-puts "releasing"
++require "json"
++require_relative "../lib/version"
++
++puts "releasing #{Version::NAME}"
+diff --git a/src/blob.ts b/src/blob.ts
+index 9b65412..f70fd25 100644
+--- a/src/blob.ts
++++ b/src/blob.ts
+@@ -1,5 +1,6 @@
+ import { fetchBlob } from "./net";
++import { withRetry } from "../lib/retry";
+ 
+ export function loadBlob(path: string): Promise<string> {
+-  return fetchBlob(path);
++  return withRetry(() => fetchBlob(path));
+ }
+diff --git a/src/cache.ts b/src/cache.ts
+deleted file mode 100644
+index f6f277d..0000000
+--- a/src/cache.ts
++++ /dev/null
+@@ -1,8 +0,0 @@
+-import { LRU } from "lru-cache";
+-import { fetchBlob } from "./net";
+-
+-export const cache = new LRU<string, string>(100);
+-
+-export function cached(path: string): Promise<string> {
+-  return fetchBlob(path);
+-}
+diff --git a/tools/sync.py b/tools/sync.py
+index 8b37289..4a774d8 100644
+--- a/tools/sync.py
++++ b/tools/sync.py
+@@ -1,6 +1,9 @@
+ import os
+-import requests
++import httpx
++
++from .policy import backoff
++from app.store import save
+ 
+ 
+ def sync(url):
+-    return requests.get(url, timeout=os.environ.get("T"))
++    save(httpx.get(url, timeout=backoff(os.environ.get("T"))))
+diff --git a/web/components/ui/index.ts b/web/components/ui/index.ts
+new file mode 100644
+index 0000000..88a20d1
+--- /dev/null
++++ b/web/components/ui/index.ts
+@@ -0,0 +1,2 @@
++export { Panel } from "./panel";
++export { Toolbar } from "./toolbar";
+diff --git a/web/viewer.tsx b/web/viewer.tsx
+index 98c5d51..13838ef 100644
+--- a/web/viewer.tsx
++++ b/web/viewer.tsx
+@@ -1,10 +1,17 @@
+-import { useState } from "react";
+-import { loadBlob } from "../src/cache";
++import { loadBlob } from "../src/blob";
+ import { Header } from "./header";
++import {
++  Panel,
++  Toolbar,
++} from "@/components/ui";
++import { useState } from "react";
++
++export * from "@scope/kit/icons";
+ 
+-const legacy = require("lodash/merge");
++const probe = 'import("katex")';
+ 
+-export function Viewer(): JSX.Element {
++export async function Viewer(): Promise<JSX.Element> {
+   const [path] = useState("");
+-  return <Header title={legacy({}, loadBlob(path))} />;
++  const worker = await import("./worker");
++  return <Panel><Toolbar /><Header title={worker.render(loadBlob(path), probe)} /></Panel>;
+ }
+`;
+
+/** Three files that rewire `OUTLINE_PATCH`'s retry story, captured the same way, for the guide
+ * preview's Deps tab and the dependency graph's tests: the session cache is deleted (`lru-cache`
+ * and `./net` go with it), the retry helper `src/blob.ts` imports is added (with `p-retry` and a
+ * `../lib/clock` the diff does not carry), and the viewer swaps `../src/cache` for
+ * `../src/blob` — one module edge both removed and added. Disjoint from `OUTLINE_PATCH`'s paths,
+ * so the two concatenate into one diff. */
+export const GUIDE_DEPS_PATCH = `diff --git a/src/cache.ts b/src/cache.ts
+deleted file mode 100644
+index 0705935..0000000
+--- a/src/cache.ts
++++ /dev/null
+@@ -1,8 +0,0 @@
+-import { LRUCache } from "lru-cache";
+-import { fetchBlob } from "./net";
+-
+-export const blobCache = new LRUCache<string, Promise<string>>({ max: 500 });
+-
+-export function cachedRead(path: string): Promise<string> {
+-  return blobCache.get(path) ?? fetchBlob(path);
+-}
+diff --git a/src/retry.ts b/src/retry.ts
+new file mode 100644
+index 0000000..b4c0cc8
+--- /dev/null
++++ b/src/retry.ts
+@@ -0,0 +1,6 @@
++import pRetry from "p-retry";
++import { sleep } from "../lib/clock";
++
++export function withRetry<T>(read: () => Promise<T>, attempts: number): Promise<T> {
++  return pRetry(read, { retries: attempts, onFailedAttempt: () => sleep(250) });
++}
+diff --git a/web/viewer.ts b/web/viewer.ts
+index 829618b..039ed5e 100644
+--- a/web/viewer.ts
++++ b/web/viewer.ts
+@@ -1,6 +1,6 @@
+-import { cachedRead } from "../src/cache";
++import { loadBlob } from "../src/blob";
+ import { render } from "./render";
+ 
+ export async function show(path: string): Promise<string> {
+-  return render(await cachedRead(path));
++  return render(await loadBlob(path));
+ }
+`;
+
+/** Lines built to make a backtracking pattern split a run every possible way: a prefix some
+ * pattern of the outline, the import reader or the snippet's noise filter starts with, then a
+ * long run of what that pattern's quantifiers take, then one character that fails the match at
+ * the very end. A PR's author picks their lines, so the linearity tests run every pattern over
+ * all of these at `length` far past the read budget, where a polynomial cannot hide. */
+export function backtrackingLines(length: number): string[] {
+  const prefixes = [
+    "",
+    "  ",
+    "function",
+    "export function f",
+    "type X",
+    "  f():",
+    "  f(",
+    "  public ",
+    "def f",
+    "fun a.",
+    "func (",
+    "class ",
+    "f()",
+    "import a",
+    "import ",
+    "from .",
+    "require",
+    "export {",
+    '"x"',
+    "use ",
+    "@a ",
+  ];
+  const runs = [" ", "\t", ")", "):", "public ", "a", ".", "<", "@a ", "*", ",", "a ", "from "];
+  const lines: string[] = [];
+  for (const prefix of prefixes) {
+    for (const run of runs) {
+      const body = run.repeat(Math.ceil(length / run.length));
+      lines.push(`${prefix}${body}`.slice(0, length - 1) + "x");
+    }
+  }
+  return lines;
+}

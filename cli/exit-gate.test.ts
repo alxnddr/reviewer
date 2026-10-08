@@ -245,6 +245,12 @@ describe("exit gate: the agent's toolchain, end to end in a foreign repo", () =>
         { side: "additions", startLine: 1, endLine: 5 },
         { side: "additions", startLine: 15, endLine: 20 },
       ],
+      // The same extents by hunk, both sides together — what an author writing a range for
+      // each side of one hunk reads, instead of matching the two `hunks` runs up by position.
+      pairs: [
+        { deletions: { startLine: 1, endLine: 5 }, additions: { startLine: 1, endLine: 5 } },
+        { deletions: { startLine: 15, endLine: 20 }, additions: { startLine: 15, endLine: 20 } },
+      ],
     });
 
     // Every anchor of the walkthrough — comment and layer range alike — falls inside a span the
@@ -252,7 +258,9 @@ describe("exit gate: the agent's toolchain, end to end in a foreign repo", () =>
     // coincidence: change the diff and this fails before any coverage number does.
     const authored: ReviewAnchor[] = [
       ...COMMENTS,
-      ...(COMPLETE_DRAFT.layers ?? []).flatMap((layer) => layer.ranges ?? []),
+      ...(COMPLETE_DRAFT.layers ?? [])
+        .flatMap((layer) => layer.ranges ?? [])
+        .filter((authoredRange): authoredRange is ReviewAnchor => authoredRange.side !== undefined),
     ];
     for (const anchor of authored) {
       expect(withinUniverse(files, anchor), `${anchor.file} ${anchor.side}`).toBe(true);
@@ -282,6 +290,7 @@ describe("exit gate: the agent's toolchain, end to end in a foreign repo", () =>
       coverable: false,
       reason: "binary",
       hunks: [],
+      pairs: [],
     });
     expect(files.find((file) => file.file === "src/new-name.ts")).toEqual({
       file: "src/new-name.ts",
@@ -289,6 +298,7 @@ describe("exit gate: the agent's toolchain, end to end in a foreign repo", () =>
       coverable: false,
       reason: "pureRename",
       hunks: [],
+      pairs: [],
     });
 
     // The honesty that matters is in the *coverage* report an agent acts on: both files appear,

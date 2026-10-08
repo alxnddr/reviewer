@@ -317,6 +317,77 @@ describe("serializeReview", () => {
     expect(serializeReview(importFixture(serialized, "ll"))).toEqual(serialized);
   });
 
+  it("round-trips a whole-file range as written — never expanded into the spans it covers", () => {
+    // A whole-file range is an input (`{ file }`); its hunk spans are derived from the diff on
+    // load. An export that wrote the expansion would freeze today's hunks into the artifact.
+    const owned: ReviewArtifactDraft = {
+      ...FIXTURE,
+      layers: [
+        {
+          label: "Own one file, share another",
+          ranges: [
+            { file: "src/a.ts", note: "all of it" },
+            { file: "src/b.ts", side: "deletions", startLine: 3, endLine: 4 },
+          ],
+        },
+      ],
+    };
+    const serialized = serializeReview(importFixture(owned, "ww"));
+    expect(serialized.layers?.[0]?.ranges).toEqual([
+      { file: "src/a.ts", note: "all of it" },
+      { file: "src/b.ts", side: "deletions", startLine: 3, endLine: 4 },
+    ]);
+    expect(serializeReview(importFixture(serialized, "xx"))).toEqual(serialized);
+  });
+
+  it("round-trips the guide: lede, steps, both kinds of visual, and a layer's focus", () => {
+    // Every one of these rides a hand-copied projection — `flattenLayers` in, `nestLayers`
+    // out — so a field the schema gained and the projection did not copy would vanish on
+    // export without a sound. Asserted for both visual kinds, because each is its own shape.
+    const at = { file: "src/a.ts", side: "additions", startLine: 10, endLine: 12 } as const;
+    const guided: ReviewArtifactDraft = {
+      ...FIXTURE,
+      overview: {
+        title: "Guard the input",
+        lede: "Input is validated before [the endpoint](src/a.ts:10) sees it.",
+        steps: ["Parse at the edge", "Refuse what does not parse"],
+        visual: {
+          kind: "flow",
+          caption: "A request reaches the handler",
+          nodes: [
+            { id: "route", label: "route()", status: "same" },
+            { id: "guard", label: "guard()", status: "added", note: "new", at },
+          ],
+          // An edge's own `at` (the call site) rides the same projection.
+          edges: [{ from: "route", to: "guard", label: "body", status: "added", at }],
+        },
+      },
+      layers: [
+        {
+          ...FIXTURE.layers![0]!,
+          focus: at,
+          visual: {
+            kind: "skeleton",
+            caption: "What the guard does",
+            lines: [
+              { depth: 0, code: "guard(body)", status: "same" },
+              { depth: 1, code: "Schema.parse(body)", status: "added", at },
+            ],
+          },
+        },
+        FIXTURE.layers![1]!,
+      ],
+    };
+
+    const serialized = serializeReview(importFixture(guided, "gg"));
+    expect(serialized.overview).toEqual(guided.overview);
+    expect(serialized.layers?.[0]).toEqual(guided.layers?.[0]);
+    // Absent on the layer that has neither, on the absent-key rule.
+    expect(serialized.layers?.[1]).not.toHaveProperty("focus");
+    expect(serialized.layers?.[1]).not.toHaveProperty("visual");
+    expect(serializeReview(importFixture(serialized, "hg"))).toEqual(serialized);
+  });
+
   it("omits the reviewed head entirely for an artifact written before it existed", () => {
     const review = importFixture(FIXTURE, "jj");
     expect(review.reviewedHead).toBeNull();
@@ -521,6 +592,119 @@ describe("reviewToMarkdown", () => {
       Why this exists.
       "
     `);
+  });
+
+  it("draws the guide's front in the app's order, each visual as a fenced block", () => {
+    const at = { file: "src/a.ts", side: "additions", startLine: 10, endLine: 12 } as const;
+    const markdown = reviewToMarkdown({
+      repo: REPO,
+      base: "main",
+      head: HEAD,
+      overview: {
+        title: "Retry blob reads",
+        lede: "A failed read no longer sticks in `blobCache`.",
+        steps: ["Reads go through `withRetry`", "The cache is gone"],
+        visual: {
+          kind: "skeleton",
+          caption: "How a blob read reaches the network",
+          lines: [
+            { depth: 0, code: "loadBlob(path)", status: "same" },
+            {
+              depth: 1,
+              code: "blobCache.get(path)",
+              status: "removed",
+              note: "a cached failure stuck",
+              at: { ...at, side: "deletions", startLine: 4, endLine: 4 },
+            },
+            { depth: 1, code: "withRetry(() => fetchBlob(path))", status: "added", at },
+          ],
+        },
+        body: "Checked: the retry test.",
+      },
+      layers: [
+        {
+          id: "l1",
+          label: "Retry",
+          summary: "reads back off",
+          ranges: [],
+          visual: {
+            kind: "flow",
+            caption: "Who calls fetch",
+            nodes: [
+              { id: "load", label: "loadBlob()", status: "same" },
+              { id: "retry", label: "withRetry()", status: "added", at },
+              { id: "cache", label: "blobCache", status: "removed", at },
+            ],
+            edges: [
+              { from: "load", to: "retry", label: "path", status: "added", at },
+              { from: "load", to: "cache", status: "removed" },
+            ],
+          },
+        },
+      ],
+      comments: [],
+    });
+
+    expect(markdown).toMatchInlineSnapshot(`
+      "# Retry blob reads
+
+      Review — \`app\`
+
+      \`main\` … \`aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\`
+
+      A failed read no longer sticks in \`blobCache\`.
+
+      1. Reads go through \`withRetry\`
+      2. The cache is gone
+
+      \`\`\`diff
+      @@ How a blob read reaches the network @@
+       loadBlob(path)
+      -  blobCache.get(path)  — a cached failure stuck · src/a.ts:4@deletions
+      +  withRetry(() => fetchBlob(path))  — src/a.ts:10-12
+      \`\`\`
+
+      Checked: the retry test.
+
+      ## Retry
+
+      reads back off
+
+      \`\`\`text
+      Who calls fetch
+
+        loadBlob()
+      + withRetry()  — src/a.ts:10-12
+      - blobCache  — src/a.ts:10-12
+
+      + loadBlob() → withRetry() (path)  — src/a.ts:10-12
+      - loadBlob() → blobCache
+      \`\`\`
+      "
+    `);
+  });
+
+  it("sizes a visual's fence past any backtick run in its text, so a label cannot close it", () => {
+    const markdown = reviewToMarkdown({
+      repo: REPO,
+      base: "main",
+      head: HEAD,
+      overview: {
+        title: "t",
+        visual: {
+          kind: "skeleton",
+          caption: "c",
+          lines: [
+            { depth: 0, code: "md(```)", status: "same" },
+            { depth: 0, code: "# not a heading", status: "same" },
+          ],
+        },
+      },
+      layers: [],
+      comments: [],
+    });
+    expect(markdown).toContain("````diff\n");
+    expect(blocksOf(markdown)).toEqual(["h1", "paragraph", "paragraph", "code"]);
   });
 
   it("ends in exactly one trailing newline", () => {

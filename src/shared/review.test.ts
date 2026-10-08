@@ -1,8 +1,10 @@
 import { describe, expect, it } from "vitest";
 import {
   ARTIFACT_JSON_FORMAT,
+  artifactPath,
   Comment,
   importReview,
+  isWholeFileRange,
   parseArtifactBytes,
   pinReview,
   repoDisplayName,
@@ -10,10 +12,12 @@ import {
   ReviewAnchor,
   ReviewArtifact,
   ReviewComment,
+  ReviewLayerInput,
   ReviewLayerRange,
   ReviewOrigin,
   ReviewOverview,
   reviewOriginFor,
+  ReviewVisual,
   type ReviewStamp,
 } from "./review";
 
@@ -343,9 +347,9 @@ describe("importReview", () => {
     if (result.ok) {
       return;
     }
-    // The locator is the dot path zod itself would print — array indices bracketed — so the
-    // reader can find the one place in the file that has to change.
-    expect(result.reason).toContain("comments[0].side");
+    // The locator is `artifactPath` — positions from 1, marked `#`, as every report counts
+    // them — so the reader can find the one place in the file that has to change.
+    expect(result.reason).toContain("comments#1.side");
   });
 
   it("bounds the reason — part of it is the untrusted file's own text", () => {
@@ -615,6 +619,70 @@ describe("a layer range's note", () => {
   });
 });
 
+describe("a whole-file layer range", () => {
+  const messages = (input: unknown): string[] => {
+    const parsed = ReviewLayerRange.safeParse(input);
+    return parsed.success ? [] : parsed.error.issues.map((issue) => issue.message);
+  };
+
+  it("is a file alone, persisted as written — no side or lines are invented for it", () => {
+    const range = ReviewLayerRange.parse({ file: "src/a.ts", note: "all of it" });
+    expect(range).toEqual({ file: "src/a.ts", note: "all of it" });
+    expect(isWholeFileRange(range)).toBe(true);
+    const line = ReviewLayerRange.parse({
+      file: "src/a.ts",
+      side: "additions",
+      startLine: 1,
+      endLine: 2,
+    });
+    expect(isWholeFileRange(line)).toBe(false);
+  });
+
+  it("refuses a line range missing a key instead of reading it as the whole file", () => {
+    // The failure the shape is built against: `{ file, side, startLine }` passing as a
+    // whole-file claim would silently widen a range the author meant to be three lines.
+    expect(
+      ReviewLayerRange.safeParse({ file: "a.ts", side: "additions", startLine: 3 }).success,
+    ).toBe(false);
+    expect(messages({ file: "a.ts", side: "additions", startLine: 3 })[0]).toContain("endLine");
+    expect(messages({ file: "a.ts", startLine: 3 })[0]).toContain("line range");
+  });
+
+  it("still reports a bad value at its field, whichever form it is", () => {
+    const at = (input: unknown) => {
+      const parsed = ReviewLayerRange.safeParse(input);
+      return parsed.success ? [] : parsed.error.issues.map((issue) => issue.path);
+    };
+    expect(at({ file: "a.ts", note: "x".repeat(121) })).toEqual([["note"]]);
+    expect(at({ file: "a.ts", side: "additions", startLine: 5, endLine: 2 })).toEqual([
+      ["endLine"],
+    ]);
+  });
+
+  it("mixes with line ranges in one layer and survives import into the in-app layer", () => {
+    const review = importReview(
+      JSON.stringify(
+        validArtifact({
+          layers: [
+            {
+              label: "Own one file, share another",
+              ranges: [
+                { file: "src/a.ts" },
+                { file: "src/b.ts", side: "additions", startLine: 1, endLine: 4 },
+              ],
+            },
+          ],
+        }),
+      ),
+      fixedStamp(),
+    );
+    expect(review.ok ? review.review.layers[0]?.ranges : null).toEqual([
+      { file: "src/a.ts" },
+      { file: "src/b.ts", side: "additions", startLine: 1, endLine: 4 },
+    ]);
+  });
+});
+
 describe("the overview verdict", () => {
   const overview = { title: "Back off per host", body: "why it is shaped this way" };
 
@@ -702,5 +770,135 @@ describe("the pull request a review is of", () => {
     });
     expect(origin.pr).toBe(null);
     expect(origin.reviewedHead).toBe(null);
+  });
+});
+
+describe("the guide: lede, steps and visuals", () => {
+  const at = { file: "src/a.ts", side: "additions", startLine: 10, endLine: 12 } as const;
+  const flow = {
+    kind: "flow",
+    caption: "How a share reaches a thread",
+    nodes: [
+      { id: "main", label: "MainActivity", status: "same" },
+      { id: "take-share", label: "takeShare()", status: "added", note: "new entry", at },
+    ],
+    edges: [{ from: "main", to: "take-share", label: "intent" }],
+  } as const;
+  const skeleton = {
+    kind: "skeleton",
+    caption: "How a blob read reaches the network",
+    lines: [
+      { depth: 0, code: "loadBlob(path)", status: "same" },
+      { depth: 1, code: "withRetry(() => fetchBlob(path))", status: "added", at },
+    ],
+  } as const;
+
+  it("makes body optional: an overview may be a title and the guide's front alone", () => {
+    const parsed = ReviewOverview.parse({
+      title: "Share to a thread",
+      lede: "Shared content reaches a thread on both platforms.",
+      steps: ["Register the intent", "Stage and upload"],
+      visual: flow,
+    });
+    expect(parsed.body).toBeUndefined();
+    expect(parsed.steps).toHaveLength(2);
+    // An overview written to the old contract — a body and nothing else — still parses.
+    expect(ReviewOverview.safeParse({ title: "t", body: "b" }).success).toBe(true);
+  });
+
+  it("refuses a lede or step that breaks a line, and a step count outside 2 to 5", () => {
+    expect(ReviewOverview.safeParse({ title: "t", lede: "one\ntwo" }).success).toBe(false);
+    expect(ReviewOverview.safeParse({ title: "t", steps: ["a\r\nb", "c"] }).success).toBe(false);
+    expect(ReviewOverview.safeParse({ title: "t", steps: ["only"] }).success).toBe(false);
+    expect(
+      ReviewOverview.safeParse({ title: "t", steps: ["1", "2", "3", "4", "5", "6"] }).success,
+    ).toBe(false);
+  });
+
+  it("refuses a layer summary that breaks a line — it is set inline, like a step", () => {
+    expect(ReviewLayerInput.safeParse({ label: "l", summary: "Reads `x` now" }).success).toBe(true);
+    expect(ReviewLayerInput.safeParse({ label: "l", summary: "one\ntwo" }).success).toBe(false);
+  });
+
+  it("parses both kinds and refuses a third — the union is closed", () => {
+    expect(ReviewVisual.parse(flow).kind).toBe("flow");
+    expect(ReviewVisual.parse(skeleton).kind).toBe("skeleton");
+    expect(ReviewVisual.safeParse({ ...flow, kind: "chart" }).success).toBe(false);
+    // A skeleton line is a line: it is added, removed or the same, never "changed".
+    const changedLine = {
+      ...skeleton,
+      lines: [skeleton.lines[0], { ...skeleton.lines[1], status: "changed" }],
+    };
+    expect(ReviewVisual.safeParse(changedLine).success).toBe(false);
+  });
+
+  it("holds the drawn limits: node count, label length, slug ids, depth", () => {
+    const node = flow.nodes[0];
+    const nodes = (count: number) =>
+      Array.from({ length: count }, (_, i) => ({ ...node, id: `n${i}` }));
+    expect(ReviewVisual.safeParse({ ...flow, nodes: nodes(1) }).success).toBe(false);
+    expect(ReviewVisual.safeParse({ ...flow, nodes: nodes(14) }).success).toBe(true);
+    expect(ReviewVisual.safeParse({ ...flow, nodes: nodes(15) }).success).toBe(false);
+    expect(
+      ReviewVisual.safeParse({ ...flow, nodes: [{ ...node, label: "x".repeat(41) }, node] })
+        .success,
+    ).toBe(false);
+    expect(
+      ReviewVisual.safeParse({ ...flow, nodes: [{ ...node, id: "two words" }, node] }).success,
+    ).toBe(false);
+    const deep = { ...skeleton, lines: [{ ...skeleton.lines[0], depth: 7 }, skeleton.lines[1]] };
+    expect(ReviewVisual.safeParse(deep).success).toBe(false);
+  });
+
+  it("carries a layer's visual and focus through the flatten, absent staying absent", () => {
+    const result = importReview(
+      JSON.stringify(
+        validArtifact({
+          overview: { title: "t", lede: "One sentence.", visual: flow },
+          layers: [
+            { label: "Pictured", ranges: [at], visual: skeleton, focus: at },
+            { label: "Plain", ranges: [at] },
+          ],
+        }),
+      ),
+      fixedStamp(),
+    );
+    expect(result.ok).toBe(true);
+    if (!result.ok) {
+      return;
+    }
+    const [pictured, plain] = result.review.layers;
+    expect(pictured?.visual).toEqual(skeleton);
+    expect(pictured?.focus).toEqual(at);
+    expect(plain !== undefined && ("visual" in plain || "focus" in plain)).toBe(false);
+    expect(result.review.overview?.visual).toEqual(flow);
+    expect(result.review.overview?.lede).toBe("One sentence.");
+  });
+
+  it("refuses a stray key on a layer but drops one inside a visual — the reader's leniency", () => {
+    // The layer is a strictObject; a visual's objects are plain, so a node from a newer build
+    // opens here without its unknown key. `rvw emit` refuses the same key from an author.
+    expect(
+      ReviewArtifact.safeParse(validArtifact({ layers: [{ label: "x", ranges: [at], focal: at }] }))
+        .success,
+    ).toBe(false);
+    const future = { ...flow, nodes: [{ ...flow.nodes[0], shape: "hexagon" }, flow.nodes[1]] };
+    const parsed = ReviewVisual.parse(future);
+    expect(parsed.kind === "flow" && "shape" in (parsed.nodes[0] ?? {})).toBe(false);
+  });
+});
+
+describe("artifactPath", () => {
+  it("counts positions from 1 and marks them, as every other locator in a report does", () => {
+    expect(artifactPath(["layers", 1, "children", 0, "ranges", 2, "startLine"])).toBe(
+      "layers#2.children#1.ranges#3.startLine",
+    );
+    expect(artifactPath(["overview", "steps", 0])).toBe("overview.steps#1");
+    expect(artifactPath([])).toBe("");
+  });
+
+  it("quotes a key that is not a plain identifier, so a dot in one names one place", () => {
+    expect(artifactPath(["overview", "a.b", "c"])).toBe('overview["a.b"].c');
+    expect(artifactPath(["my key"])).toBe('["my key"]');
   });
 });

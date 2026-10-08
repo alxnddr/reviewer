@@ -595,9 +595,123 @@ describe("rvw emit — the draft", () => {
     // and the two reports of it are folded into this one.
     expect(outcome.problems.map((problem) => problem.path)).toEqual([
       "overview.summary",
-      "comments[0].suggestion",
-      "layers[0].ranges[0].why",
-      "layers[0].children[0].order",
+      "comments#1.suggestion",
+      "layers#1.ranges#1.why",
+      "layers#1.children#1.order",
+    ]);
+  });
+
+  it("carries the guide — lede, steps, a visual, a layer focus — and gates every claim in it", async () => {
+    const alpha = { file: "alpha.ts", side: "additions", startLine: 2, endLine: 2 };
+    const beta = { file: "beta.ts", side: "additions", startLine: 1, endLine: 2 };
+    const overview = {
+      title: "Rewrite line 2",
+      lede: "Line 2 of [alpha](alpha.ts:2) is rewritten and `beta.ts` lands.",
+      steps: ["Rewrite `a2`", "Add [beta](beta.ts)"],
+      visual: {
+        kind: "flow",
+        caption: "alpha now reaches beta",
+        nodes: [
+          { id: "alpha", label: "alpha.ts", status: "changed", at: alpha },
+          { id: "beta", label: "beta.ts", status: "added", at: beta },
+        ],
+        edges: [{ from: "alpha", to: "beta" }],
+      },
+    };
+    const layers = [{ ...(VALID_DRAFT.layers as object[])[0], focus: beta }];
+    const out = outPath("guide.reviewer.json");
+    const result = await runCli(explicit({ ...VALID_DRAFT, overview, layers }, "--out", out));
+    expect(result.code).toBe(0);
+    const written = readArtifact(out);
+    expect(written.overview).toEqual(overview);
+    expect(written.layers[0]?.focus).toEqual(beta);
+
+    // An element that claims a change with nothing to point at, and a focus off the diff:
+    // both refused, located, and nothing written.
+    const dead = outPath("unproven.reviewer.json");
+    const unproven = {
+      ...overview,
+      visual: {
+        ...overview.visual,
+        nodes: [overview.visual.nodes[0], { id: "beta", label: "beta.ts", status: "added" }],
+      },
+    };
+    const refused = await runCli(
+      explicit(
+        {
+          ...VALID_DRAFT,
+          overview: unproven,
+          layers: [{ ...layers[0], focus: { ...alpha, startLine: 99, endLine: 99 } }],
+        },
+        "--out",
+        dead,
+      ),
+    );
+    expect(refused.code).toBe(1);
+    expect(refused.stderr).toContain(
+      'overview visual, node "beta" is marked as a change but has no `at`',
+    );
+    expect(existsSync(dead)).toBe(false);
+
+    expect(refused.stderr).toContain("layer 1 focus alpha.ts additions 99-99 is outside the layer");
+
+    // The structural problems stop the parse, so the placement one is heard on the next run —
+    // here a focus inside the layer's extent that runs past the hunk.
+    const offDiff = await runCli(
+      explicit({
+        ...VALID_DRAFT,
+        overview,
+        layers: [{ ...layers[0], focus: { ...alpha, startLine: 2, endLine: 99 } }],
+      }),
+    );
+    expect(offDiff.code).toBe(1);
+    expect(offDiff.stderr).toContain(
+      "layer 1 focus does not place in the diff: alpha.ts additions 2-99",
+    );
+  });
+
+  it("refuses a stray key anywhere inside a visual or a focus, located", async () => {
+    // A visual's objects are plain in the schema, like a comment's, so these would otherwise
+    // be written into the file and vanish on open.
+    const at = { file: "beta.ts", side: "additions", startLine: 1, endLine: 2 };
+    const draft = {
+      overview: {
+        title: "T",
+        visual: {
+          kind: "flow",
+          caption: "c",
+          nodes: [
+            { id: "a", label: "a", status: "same", shape: "box" },
+            { id: "b", label: "b", status: "added", at },
+          ],
+          edges: [{ from: "a", to: "b", weight: 2, at: { ...at, via: "ipc" } }],
+        },
+      },
+      layers: [
+        {
+          label: "Walk",
+          ranges: (VALID_DRAFT.layers as { ranges: object[] }[])[0]?.ranges,
+          focus: { ...at, why: "w" },
+          visual: {
+            kind: "skeleton",
+            caption: "c",
+            lines: [
+              { depth: 0, code: "a()", status: "same" },
+              { depth: 1, code: "b()", status: "added", at: { ...at, note: "n" } },
+            ],
+          },
+        },
+      ],
+    };
+    const result = await runCli(explicit(draft as Draft, "--json"));
+    expect(result.code).toBe(1);
+    const outcome = JSON.parse(result.stdout) as { problems: { kind: string; path: string }[] };
+    expect(outcome.problems.map((problem) => problem.path)).toEqual([
+      "overview.visual.nodes#1.shape",
+      "overview.visual.edges#1.weight",
+      "overview.visual.edges#1.at.via",
+      "layers#1.visual.lines#2.at.note",
+      "layers#1.focus.why",
     ]);
   });
 
@@ -658,6 +772,25 @@ describe("rvw emit — layer coverage", () => {
     const result = await runCli(explicit(full, "--out", outPath("full.reviewer.json")));
     expect(result.code).toBe(0);
     expect(result.stdout).toContain("layers cover every changed line (5)");
+  });
+
+  it("covers both sides of every hunk with one whole-file range per file", async () => {
+    // The shape that replaces a range per hunk per side: `{ file }` alone.
+    const whole: Draft = {
+      layers: [{ label: "Walk", ranges: [{ file: "alpha.ts" }, { file: "beta.ts" }] }],
+    };
+    const result = await runCli(explicit(whole, "--out", outPath("whole.reviewer.json")));
+    expect(result.code).toBe(0);
+    expect(result.stdout).toContain("layers cover every changed line (5)");
+  });
+
+  it("offers a whole-file range for a file no layer touches", async () => {
+    const partial: Draft = { layers: [{ label: "Walk", ranges: [{ file: "alpha.ts" }] }] };
+    const result = await runCli(explicit(partial, "--out", outPath("part.reviewer.json")));
+    expect(result.code).toBe(0);
+    expect(result.stdout).toContain(
+      '  beta.ts: in no layer — { "file": "beta.ts" } covers all of it',
+    );
   });
 
   it("is silent about coverage for a comments-only review, which claims no walkthrough", async () => {

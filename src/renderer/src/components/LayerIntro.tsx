@@ -1,18 +1,28 @@
 import type { ReactElement } from "react";
 import { ChevronLeft, ChevronRight } from "lucide-react";
-import type { ReviewLayer } from "../../../shared/review";
+import type { AnchorSpan, ReviewLayer } from "../../../shared/review";
 import type { FitToContentRefs } from "@/lib/fit-panel";
 import { isFullyRead, type ReadTally } from "@/lib/read-progress";
 import { Button } from "@/components/ui/button";
 import { TooltipHint } from "@/components/ui/tooltip";
 import { ReadRing, readLabel } from "@/components/ReadRing";
 import { Markdown, type ProseLinks } from "@/components/Markdown";
+import { VisualCountsLabel, VisualFigure } from "@/components/guide/VisualCard";
+import { SymbolChips } from "@/components/guide/SymbolChips";
+import type { AnchorDoor } from "@/components/guide/anchor-door";
+import type { ChapterBadge, GuideSymbol } from "@/lib/guide";
 import { cn } from "@/lib/utils";
 
 // A layer's long-form description read at reading width above the diff, not
 // crammed into the rail. Links resolve against the files actually in the diff
 // (the soloed subset), so a clickable chip always navigates to something on
 // screen and an absent reference is inert.
+//
+// Beside the prose sits the chapter's evidence, compact: its authored picture when it has one —
+// the same renderer the guide uses (`VisualFigure`), smaller — or else the symbols it changed,
+// as chips. Either is a door into the code (`AnchorDoor`) bounded by the soloed file set, the
+// rule the prose chips beside it follow, so an element pointing outside the chapter is drawn
+// but inert.
 //
 // A band, not a section: everything it draws and everything it fires comes from
 // `DiffScreen`, which already resolved which chapter this is and derived its ordinal,
@@ -54,6 +64,11 @@ type LayerIntroProps = {
    * panel's dragged height and the prose scrolls within it (the border seam is the
    * handle below). False keeps the classic content-height band with a bounded prose. */
   fill: boolean;
+  /** The chapter's changed symbols (`chapterSymbols`), shown as chips when it has no picture. */
+  symbols: readonly GuideSymbol[];
+  /** Badges for the picture's elements, and the door they open through. */
+  badgeOf: (anchor: AnchorSpan | undefined) => ChapterBadge | null;
+  door: AnchorDoor;
   /** Marks what DiffScreen measures to fit the panel to the prose's own height (it
    * only does so in `fill` mode): the scroll viewport, and the reading-width block
    * inside it that stays at content height however tall that viewport is stretched. */
@@ -74,12 +89,17 @@ export function LayerIntro({
   onToggleCollapsed,
   fill,
   fit,
+  symbols,
+  badgeOf,
+  door,
 }: LayerIntroProps): ReactElement {
   // Falls back to the one-line summary when a layer carries no long-form prose — the
   // inferred not-covered layer is exactly that shape (coverage.ts). A layer that carries
   // neither is a bare label: the band is then its heading bar and nothing under it.
   const content = layer.description ?? layer.summary ?? null;
   const complete = isFullyRead(readTally);
+  const visual = layer.visual;
+  const hasAside = visual !== undefined || symbols.length > 0;
 
   return (
     <section
@@ -200,21 +220,51 @@ export function LayerIntro({
         </div>
       </div>
       {!collapsed &&
-        content !== null && (
-          // The scroll viewport spans the full pane so its scrollbar rides the diff's
-          // right edge, not a narrow column; the prose keeps its reading width inside.
-          // In the panel it fills the dragged height; otherwise it stays a bounded band.
+        (content !== null || hasAside) && (
+          // The scroll viewport spans the full pane so its scrollbar rides the diff's right
+          // edge, not a narrow column; the prose keeps its reading width inside. In the panel it
+          // fills the dragged height; otherwise it stays a bounded band.
           <div
             ref={fit?.viewportRef}
             className={cn("overflow-y-auto pb-3", fill ? "min-h-0 flex-1" : "max-h-48")}
           >
-            <Markdown
-              ref={fit?.contentRef}
-              text={content}
-              links={{ paths: filePaths, onSelect: onSelectReference }}
-              diagrams
-              className="max-w-3xl space-y-2 px-6 text-base leading-relaxed text-foreground select-text"
-            />
+            {/* The measured block: prose and evidence side by side when the pane is wide enough
+              (a container query on the band, not the window), stacked when it is not. */}
+            <div ref={fit?.contentRef} className="@container px-6">
+              <div
+                className={cn(
+                  "grid grid-cols-1 gap-x-8 gap-y-3",
+                  hasAside &&
+                    visual !== undefined &&
+                    "@4xl:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]",
+                )}
+              >
+                <div className="min-w-0 max-w-3xl">
+                  {content !== null && (
+                    <Markdown
+                      text={content}
+                      links={{ paths: filePaths, onSelect: onSelectReference }}
+                      diagrams
+                      className="space-y-2 text-base leading-relaxed text-foreground select-text"
+                    />
+                  )}
+                  {visual === undefined && (
+                    <SymbolChips symbols={symbols} door={door} className="mt-3" />
+                  )}
+                </div>
+                {visual !== undefined && (
+                  <figure className="min-w-0 rounded-lg border border-border px-1 pt-2 pb-1">
+                    <figcaption className="flex items-baseline gap-2 px-2 pb-1.5 text-xs text-text-muted">
+                      <span className="min-w-0 truncate">{visual.caption}</span>
+                      <span className="ml-auto text-xs">
+                        <VisualCountsLabel visual={visual} />
+                      </span>
+                    </figcaption>
+                    <VisualFigure visual={visual} badgeOf={badgeOf} door={door} compact />
+                  </figure>
+                )}
+              </div>
+            </div>
           </div>
         )}
     </section>

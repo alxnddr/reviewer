@@ -7,8 +7,10 @@ import {
   type ReviewComment,
   type ReviewLayer,
   type ReviewLayerDraft,
+  type ReviewAnchor,
   type ReviewOverview,
   type ReviewSide,
+  type ReviewVisual,
 } from "../../../shared/review";
 import { assertNever } from "../../../shared/assert";
 import type { CommentResolution } from "../../../shared/review-progress";
@@ -111,6 +113,10 @@ export function nestLayers(layers: readonly ReviewLayer[]): ReviewLayerDraft[] {
       // mark, the app never sets or clears it, and a layer that carried it in must carry it
       // back out or a round trip through the app silently un-marks the mechanical chapter.
       ...(layer.skim === undefined ? {} : { skim: layer.skim }),
+      // The chapter's picture and its key hunk, on the same rule and for the same reason:
+      // authored, never derived, so an export that dropped them would be a different review.
+      ...(layer.visual === undefined ? {} : { visual: layer.visual }),
+      ...(layer.focus === undefined ? {} : { focus: layer.focus }),
     }),
   );
   const indexById = new Map(layers.map((layer, index) => [layer.id, index]));
@@ -444,10 +450,11 @@ function commentBullet(comment: MarkdownComment): string {
 
 /** The curated review as portable Markdown: a repo + `base…head` header, then one
  * `##` section per layer in authored reading order — its summary, when it has one, and the
- * comments it covers — and a general section for any layer-less comments. A review
- * with a tour doc leads with it: its title becomes the `#` heading and its body the
- * lead paragraphs, which need no conversion — the markdown-lite grammar (paragraphs,
- * code spans, `[label](path)` links) is already Markdown. Machine tokens (paths, refs)
+ * comments it covers, and its visual when it has one — and a general section for any
+ * layer-less comments. A review with a tour doc leads with it: its title becomes the `#`
+ * heading, then its lede, its steps as a numbered list, its visual (`visualBlock`) and its
+ * notes (`body`), none of which need conversion — the prose grammar (paragraphs, code spans,
+ * `[label](path)` links) is already Markdown. Machine tokens (paths, refs)
  * render as code spans; the output ends in exactly one newline, deterministic so it is
  * snapshot-testable. */
 export function reviewToMarkdown(review: MarkdownReview): string {
@@ -477,7 +484,21 @@ export function reviewToMarkdown(review: MarkdownReview): string {
     if (overview.verdict !== undefined) {
       lines.push("", `Verdict — ${overview.verdict}`);
     }
-    lines.push("", overview.body.trim());
+    // Then the guide's front in the order the app draws it — the sentence, the numbered
+    // steps, the picture — and the notes last, where the app folds them. `lede` and `steps`
+    // are inline markdown and pass through verbatim like every prose tier.
+    if (overview.lede !== undefined) {
+      lines.push("", overview.lede);
+    }
+    if (overview.steps !== undefined) {
+      lines.push("", ...overview.steps.map((step, index) => `${index + 1}. ${step}`));
+    }
+    if (overview.visual !== undefined) {
+      lines.push("", visualBlock(overview.visual));
+    }
+    if (overview.body !== undefined) {
+      lines.push("", overview.body.trim());
+    }
   }
 
   review.layers.forEach((layer, index) => {
@@ -486,6 +507,9 @@ export function reviewToMarkdown(review: MarkdownReview): string {
     lines.push("", `## ${headingText(layer.label)}`);
     if (layer.summary !== undefined) {
       lines.push("", layer.summary);
+    }
+    if (layer.visual !== undefined) {
+      lines.push("", visualBlock(layer.visual));
     }
     const covered = (byLayer[index] ?? []).toSorted(compareComments);
     if (covered.length > 0) {
@@ -503,6 +527,84 @@ export function reviewToMarkdown(review: MarkdownReview): string {
   }
 
   return `${lines.join("\n")}\n`;
+}
+
+// ── Visuals as text ─────────────────────────────────────────────────────────────
+
+/** A visual as one fenced block, caption first — the closest a document gets to the picture
+ * the app draws, and portable because it is only text. Inside a fence and not as prose because
+ * every field of a visual is plain text the schema never read as Markdown (a label is
+ * `fetchBlob()`, a code line may carry `*` or a backtick): fenced, none of it can become
+ * structure, and the fence is sized past any backtick run inside so none of it can close the
+ * block early either.
+ *
+ * A skeleton is a `diff` fence — it already *is* `+`/`-`/space per line — with the caption
+ * as the hunk header, where a diff names what the lines are in. A flow has no textual form a
+ * reader already knows (an ASCII layout would be a second renderer to keep in step with the
+ * app's), so it is the two lists it is made of: the nodes marked as a skeleton's lines are,
+ * `~` for a changed one, then the edges by label. Each element that carries an anchor — an
+ * edge may too — names it as `path:lines`, so a reader of the export can still find the code
+ * the box or the arrow points at. */
+function visualBlock(visual: ReviewVisual): string {
+  const body = visualLines(visual).join("\n");
+  const fence = fenceFor(body);
+  return [`${fence}${visual.kind === "skeleton" ? "diff" : "text"}`, body, fence].join("\n");
+}
+
+function visualLines(visual: ReviewVisual): string[] {
+  switch (visual.kind) {
+    case "skeleton":
+      return [
+        `@@ ${visual.caption} @@`,
+        ...visual.lines.map(
+          (line) =>
+            `${PRESENCE_MARK[line.status]}${"  ".repeat(line.depth)}${line.code}${visualSuffix(line.note, line.at)}`,
+        ),
+      ];
+    case "flow": {
+      const labelOf = new Map(visual.nodes.map((node) => [node.id, node.label]));
+      return [
+        visual.caption,
+        "",
+        ...visual.nodes.map(
+          (node) => `${NODE_MARK[node.status]} ${node.label}${visualSuffix(node.note, node.at)}`,
+        ),
+        "",
+        ...visual.edges.map((edge) => {
+          const label = edge.label === undefined ? "" : ` (${edge.label})`;
+          // An edge naming no node is a hand-edited artifact the gate would have refused;
+          // the id it wrote is the most honest thing to print for the missing end.
+          const from = labelOf.get(edge.from) ?? edge.from;
+          const to = labelOf.get(edge.to) ?? edge.to;
+          return `${PRESENCE_MARK[edge.status ?? "same"]} ${from} → ${to}${label}${visualSuffix(undefined, edge.at)}`;
+        }),
+      ];
+    }
+  }
+}
+
+/** A diff's own line markers, so a skeleton reads as one. */
+const PRESENCE_MARK = { added: "+", removed: "-", same: " " } as const;
+/** A node's marker: the diff's three, plus `~` for a box that exists on both sides but changed. */
+const NODE_MARK = { ...PRESENCE_MARK, changed: "~" } as const;
+
+/** What trails an element's code: its note, then where its anchor sits. */
+function visualSuffix(note: string | undefined, at: ReviewAnchor | undefined): string {
+  const parts = [
+    ...(note === undefined ? [] : [note]),
+    ...(at === undefined ? [] : [anchorRange(at)]),
+  ];
+  return parts.length === 0 ? "" : `  — ${parts.join(" · ")}`;
+}
+
+/** `path:12` / `path:12-15`, with the deletions side spelled out — the file reference grammar
+ * the prose tiers already use, so a reader of the export reads it the same way. */
+function anchorRange(anchor: ReviewAnchor): string {
+  const lines =
+    anchor.startLine === anchor.endLine
+      ? `${anchor.startLine}`
+      : `${anchor.startLine}-${anchor.endLine}`;
+  return `${anchor.file}:${lines}${anchor.side === "deletions" ? "@deletions" : ""}`;
 }
 
 // ── The prompt exports ──────────────────────────────────────────────────────────

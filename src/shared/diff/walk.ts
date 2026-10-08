@@ -65,8 +65,15 @@ export function walkFileLines(file: FileDiffMetadata, visit: WalkVisitor): void 
   }
 }
 
-/** One hunk's lines. False once the visitor has asked to stop, which ends the whole walk. */
-function walkHunkLines(hunk: Hunk, visit: WalkVisitor): boolean {
+/** One hunk's lines, by the same rules — `walkFileLines` is this over every hunk in order. False
+ * once the visitor has asked to stop, which ends the whole walk.
+ *
+ * Exported for the one consumer that needs a hunk's boundary as well as its lines: the outline
+ * (`outline.ts`) reads each hunk against its own header's function context, which belongs to
+ * that hunk and no other. It walks hunk by hunk through *this* function rather than slicing
+ * `file.hunks` into a fake one-hunk file, so it still cannot disagree with the search index or
+ * the coverage universe about where a line landed. */
+export function walkHunkLines(hunk: Hunk, visit: WalkVisitor): boolean {
   let additionLine = hunk.additionStart;
   let deletionLine = hunk.deletionStart;
   /** One block's run of lines on one side: `count` lines numbered from `from`, whose text sits

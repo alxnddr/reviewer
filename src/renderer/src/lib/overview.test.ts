@@ -1,11 +1,11 @@
 import { describe, expect, it } from "vitest";
 import type { Comment, ReviewLayer } from "../../../shared/review";
 import { UNCOVERED_LAYER_ID } from "./coverage";
-import { ONE_HUNK_PATCH } from "../../../shared/diff/fixtures";
+import { buildManyHunksPatch, ONE_HUNK_PATCH } from "../../../shared/diff/fixtures";
 import { parsePatch, type PatchFile } from "../../../shared/diff/patch";
 import { snippetForAnchor } from "./diff/snippet";
 import { NO_READ_FILES } from "./read-progress";
-import { buildOverview, chapterCommentLabel } from "./overview";
+import { buildChapterSnippets, buildOverview, chapterCommentLabel } from "./overview";
 
 // A three-file diff read by the real parser, so every count below is measured against a
 // genuine changed-line universe rather than a hand-tallied one. foo.ts is the shared
@@ -132,9 +132,19 @@ describe("buildOverview", () => {
     });
 
     expect(model.chapters[0]?.snippet?.file).toBe("src/foo.ts");
+    expect(model.chapters[0]?.snippet?.source).toBe("range");
+    // The hunk card: the range's rows in unified order, two unchanged rows of air either side —
+    // and the change rows on the way to them (the deleted line `new11` replaced, the `new13`
+    // after it) come along, since the card reads like the diff.
     expect(model.chapters[0]?.snippet?.snippet.lines.map((line) => line.text)).toEqual([
+      "ctx9",
+      "ctx10",
+      "old11",
       "new11",
       "new12",
+      "new13",
+      "ctx12",
+      "ctx13",
     ]);
     expect(model.chapters[0]?.outdated).toBe(false);
 
@@ -365,6 +375,43 @@ describe("buildOverview", () => {
   });
 });
 
+describe("buildOverview's chapter card", () => {
+  it("prefers the layer's focus to its first range", () => {
+    const focused = layer("focused", FOO.ranges, {
+      focus: { file: "src/bar.ts", side: "additions", startLine: 2, endLine: 3 },
+    });
+    const model = buildOverview({
+      layers: [focused],
+      files: FILES,
+      comments: [],
+      frozen: false,
+      readFiles: NO_READ_FILES,
+    });
+    expect(model.chapters[0]?.snippet?.file).toBe("src/bar.ts");
+    expect(model.chapters[0]?.snippet?.source).toBe("focus");
+    expect(model.chapters[0]?.snippet?.snippet.lines.map((line) => line.text)).toEqual([
+      "ctx1",
+      "new2",
+      "new3",
+    ]);
+  });
+
+  it("falls back to the ranges when the focus no longer places", () => {
+    const drifted = layer("drifted-focus", FOO.ranges, {
+      focus: { file: "src/vanished.ts", side: "additions", startLine: 1, endLine: 1 },
+    });
+    const model = buildOverview({
+      layers: [drifted],
+      files: FILES,
+      comments: [],
+      frozen: false,
+      readFiles: NO_READ_FILES,
+    });
+    expect(model.chapters[0]?.snippet?.file).toBe("src/foo.ts");
+    expect(model.chapters[0]?.snippet?.source).toBe("range");
+  });
+});
+
 describe("snippetForAnchor", () => {
   const foo = FILES.find((file) => file.path === "src/foo.ts");
 
@@ -455,5 +502,100 @@ describe("a chapter's blocking count", () => {
     expect(model.chapters[0]?.comments).toBe(3);
     expect(model.chapters[0]?.blocking).toBe(1);
     expect(model.chapters.at(-1)?.blocking).toBe(1);
+  });
+});
+
+describe("whole-file ranges in the overview", () => {
+  it("count every changed line of the file, both sides, and keep the note", () => {
+    const owned = layer("owned", [{ file: "src/foo.ts", note: "all of it" }]);
+    const model = buildOverview({
+      layers: [owned],
+      files: FILES,
+      comments: [comment("src/foo.ts", 13, 13, "c1")],
+      frozen: false,
+      readFiles: NO_READ_FILES,
+    });
+    expect(model.chapters[0]?.files).toEqual([
+      {
+        path: "src/foo.ts",
+        status: "modified",
+        additions: 3,
+        deletions: 1,
+        read: false,
+        note: "all of it",
+      },
+    ]);
+    expect(model.chapters[0]?.comments).toBe(1);
+    expect(model.chapters[0]?.outdated).toBe(false);
+    expect(model.chapters[0]?.snippet?.file).toBe("src/foo.ts");
+  });
+});
+
+describe("a chapter's card without a focus", () => {
+  it("opens on the biggest hand-written file's first declaration, not the first range's imports", () => {
+    const added = [
+      "diff --git a/src/retry.ts b/src/retry.ts",
+      "new file mode 100644",
+      "index 0000000..1111111",
+      "--- /dev/null",
+      "+++ b/src/retry.ts",
+      "@@ -0,0 +1,6 @@",
+      "+// Retries a blob fetch per host.",
+      '+import { sleep } from "./sleep";',
+      "+",
+      "+export function retryBlob(path: string): Promise<void> {",
+      "+  return sleep(path);",
+      "+}",
+      "",
+    ].join("\n");
+    const files = parsePatch(PATCH + added, "test");
+    // bar.ts is authored first, but retry.ts is the bigger change and carries the declaration.
+    const chapter = layer("retry", [{ file: "src/bar.ts" }, { file: "src/retry.ts" }]);
+    const model = buildOverview({
+      layers: [chapter],
+      files,
+      comments: [],
+      frozen: false,
+      readFiles: NO_READ_FILES,
+    });
+    expect(model.chapters[0]?.snippet?.file).toBe("src/retry.ts");
+    expect(model.chapters[0]?.snippet?.source).toBe("range");
+    expect(model.chapters[0]?.snippet?.snippet.lines[0]?.text).toBe(
+      "export function retryBlob(path: string): Promise<void> {",
+    );
+  });
+});
+
+// The chapter cards are the part of the model that reads code, so the screen derives them on a
+// memo of their own (layers + diff) and hands them in; a read mark or a comment edit re-runs
+// `buildOverview` without re-picking a card — which once cost 6.6 s per toggle on a 12k-line file.
+describe("buildOverview's cards, derived apart", () => {
+  it("prints the cards it is handed, and derives the same ones when it is not", () => {
+    const layers = [FOO, BAR];
+    const snippets = buildChapterSnippets({ layers, files: FILES });
+    const input = { layers, files: FILES, comments: [], frozen: false, readFiles: NO_READ_FILES };
+    const handed = buildOverview(input, snippets);
+    expect(handed.chapters.map((chapter) => chapter.snippet)).toEqual(
+      handed.chapters.map((chapter) => snippets.get(chapter.layer.id) ?? null),
+    );
+    expect(handed.chapters[0]?.snippet).toBe(snippets.get("foo"));
+    expect(buildOverview(input).chapters).toEqual(handed.chapters);
+  });
+
+  it("counts a whole-file chapter over thousands of hunks in linear time", () => {
+    // 20,000 hunks: a whole-file range is one span per hunk, and testing every span per changed
+    // line was 800 million comparisons — here, in the card's ranking, and in the coverage core
+    // `effectiveLayers` reads (`spansCover`). All three now binary-search one merged index.
+    const files = parsePatch(buildManyHunksPatch(20_000), "test");
+    const layers = [layer("all", [{ file: "src/many-hunks.ts" }])];
+    const snippets = buildChapterSnippets({ layers, files });
+    const started = performance.now();
+    const model = buildOverview(
+      { layers, files, comments: [], frozen: false, readFiles: NO_READ_FILES },
+      snippets,
+    );
+    expect(performance.now() - started).toBeLessThan(1000);
+    expect(model.chapters[0]?.additions).toBe(20_000);
+    expect(model.chapters[0]?.deletions).toBe(20_000);
   });
 });

@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
-import type { ReviewAnchor, ReviewArtifact, ReviewLayerInput } from "../shared/review";
-import { ONE_HUNK_PATCH } from "../shared/diff/fixtures";
+import type { ReviewArtifact, ReviewLayerInput, ReviewLayerRange } from "../shared/review";
+import { buildManyHunksPatch, ONE_HUNK_PATCH, TWO_HUNKS_PATCH } from "../shared/diff/fixtures";
 import { resolveAnchor } from "../shared/diff/anchor";
 import { ANALYSIS_CACHE_KEY, parsePatch } from "../shared/diff/patch";
 import {
@@ -8,6 +8,7 @@ import {
   coverageOfPatch,
   isFullyCovered,
   layerExtentsOf,
+  spansCover,
   type CoverageResult,
 } from "./review-coverage";
 
@@ -51,7 +52,7 @@ function artifact(embeddedPatch: string | undefined, layers: ReviewLayerInput[])
 
 function layer(
   label: string,
-  ranges: ReviewAnchor[],
+  ranges: ReviewLayerRange[],
   children: ReviewLayerInput[] = [],
 ): ReviewLayerInput {
   return { label, summary: label, ranges, children };
@@ -120,7 +121,7 @@ describe("coverage over an artifact's diff", () => {
     // The mark is a rendering decision, and coverage must not be able to see it. If it could,
     // an author could mark the chapter they did not want to write `skim` and the gate would
     // stop asking for it — which is the one thing "the gate cannot be argued with" rules out.
-    const ranges: ReviewAnchor[] = [
+    const ranges: ReviewLayerRange[] = [
       { file: "src/foo.ts", side: "additions", startLine: 11, endLine: 13 },
       { file: "src/foo.ts", side: "deletions", startLine: 11, endLine: 11 },
     ];
@@ -346,7 +347,64 @@ describe("coverage over an artifact's diff", () => {
   });
 });
 
+describe("whole-file ranges", () => {
+  it("cover every changed line of their file, both sides, and nothing of any other", () => {
+    const report = reportOf(
+      coverageOfPatch(patch(ONE_HUNK_PATCH, BAR_HUNK), [{ ranges: [{ file: "src/foo.ts" }] }]),
+    );
+    expect(report.files).toEqual([
+      { file: "src/foo.ts", status: "covered", coverableChangedLines: 4, coveredChangedLines: 4 },
+      { file: "src/bar.ts", status: "uncovered", coverableChangedLines: 4, coveredChangedLines: 0 },
+    ]);
+  });
+
+  it("cover every hunk of a multi-hunk file — the case that took a range per hunk per side", () => {
+    const report = reportOf(
+      coverageOfPatch(TWO_HUNKS_PATCH, [{ ranges: [{ file: "src/two-hunks.txt" }] }]),
+    );
+    expect(isFullyCovered(report)).toBe(true);
+  });
+
+  it("cover a file of 20,000 hunks in linear time, not lines × hunks", () => {
+    // One span per hunk per side: testing every span per changed line took 460 ms here, and it
+    // ran on every read mark in the guide (`effectiveLayers`). The bound is generous.
+    const many = buildManyHunksPatch(20_000);
+    const started = performance.now();
+    const report = reportOf(coverageOfPatch(many, [{ ranges: [{ file: "src/many-hunks.ts" }] }]));
+    expect(performance.now() - started).toBeLessThan(1500);
+    expect(report.headline).toEqual({ coverableChangedLines: 40_000, coveredChangedLines: 40_000 });
+  });
+
+  it("cover nothing when their file is not in the diff", () => {
+    const report = reportOf(
+      coverageOfPatch(patch(BAR_HUNK), [{ ranges: [{ file: "src/gone.ts" }] }]),
+    );
+    expect(report.headline.coveredChangedLines).toBe(0);
+  });
+});
+
 describe("changedLineUniverse", () => {
+  it("pairs each hunk's two side extents, null where the hunk has no line on a side", () => {
+    const added = [
+      "diff --git a/new.ts b/new.ts",
+      "new file mode 100644",
+      "index 0000000..1111111",
+      "--- /dev/null",
+      "+++ b/new.ts",
+      "@@ -0,0 +1,2 @@",
+      "+one",
+      "+two",
+    ];
+    const [twoHunks, created] = changedLineUniverse(patch(TWO_HUNKS_PATCH, added));
+    // One pair per hunk, in file order, each side exactly one of the `hunks` entries.
+    expect(twoHunks?.pairs).toHaveLength(2);
+    for (const pair of twoHunks?.pairs ?? []) {
+      expect(twoHunks?.hunks).toContainEqual({ side: "deletions", ...pair.deletions });
+      expect(twoHunks?.hunks).toContainEqual({ side: "additions", ...pair.additions });
+    }
+    expect(created?.pairs).toEqual([{ deletions: null, additions: { startLine: 1, endLine: 2 } }]);
+  });
+
   it("lists each coverable file's per-side contiguous changed spans, in deletions-then-additions order", () => {
     expect(changedLineUniverse(patch(ONE_HUNK_PATCH, BAR_HUNK))).toEqual([
       {
@@ -361,6 +419,9 @@ describe("changedLineUniverse", () => {
           { side: "deletions", startLine: 8, endLine: 14 },
           { side: "additions", startLine: 8, endLine: 16 },
         ],
+        pairs: [
+          { deletions: { startLine: 8, endLine: 14 }, additions: { startLine: 8, endLine: 16 } },
+        ],
       },
       {
         file: "src/bar.ts",
@@ -370,6 +431,9 @@ describe("changedLineUniverse", () => {
         hunks: [
           { side: "deletions", startLine: 4, endLine: 4 },
           { side: "additions", startLine: 4, endLine: 8 },
+        ],
+        pairs: [
+          { deletions: { startLine: 4, endLine: 4 }, additions: { startLine: 4, endLine: 8 } },
         ],
       },
     ]);
@@ -403,8 +467,22 @@ describe("changedLineUniverse", () => {
       "rename to new.ts",
     ];
     expect(changedLineUniverse(patch(binary, rename))).toEqual([
-      { file: "logo.png", status: "modified", coverable: false, reason: "binary", hunks: [] },
-      { file: "new.ts", status: "renamed", coverable: false, reason: "pureRename", hunks: [] },
+      {
+        file: "logo.png",
+        status: "modified",
+        coverable: false,
+        reason: "binary",
+        hunks: [],
+        pairs: [],
+      },
+      {
+        file: "new.ts",
+        status: "renamed",
+        coverable: false,
+        reason: "pureRename",
+        hunks: [],
+        pairs: [],
+      },
     ]);
   });
 
@@ -425,3 +503,18 @@ describe("changedLineUniverse", () => {
 function patchedGapArtifact(layers: ReviewLayerInput[]): ReviewArtifact {
   return artifact(patch(ONE_HUNK_PATCH, BAR_HUNK), layers);
 }
+
+describe("spansCover", () => {
+  it("answers over unsorted, overlapping, adjoining and empty spans", () => {
+    const covers = spansCover([
+      { startLine: 20, endLine: 25 },
+      { startLine: 1, endLine: 3 },
+      { startLine: 4, endLine: 6 },
+      { startLine: 22, endLine: 30 },
+      { startLine: 9, endLine: 8 },
+    ]);
+    const held = Array.from({ length: 32 }, (_, line) => line).filter((line) => covers(line));
+    expect(held).toEqual([1, 2, 3, 4, 5, 6, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30]);
+    expect(spansCover([])(1)).toBe(false);
+  });
+});

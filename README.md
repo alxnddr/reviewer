@@ -8,7 +8,7 @@ Your agent can already review code. You have a review skill, rules in `CLAUDE.md
 
 Reviewer keeps your agent and your prompt. It changes only where you read the review. You get:
 
-- A summary of what the change does and why.
+- A guide to the change: one sentence on what it does and why, the steps it takes, and a before/after picture. Every changed box in the picture is checked against the diff, wears the number of the chapter it belongs to, and opens that code when you click it.
 - The diff split into chapters that you read in order. The schema comes before the code that uses it, and the fix comes before its tests.
 - Each finding on the lines it is about. `rvw`, the CLI that comes with the app, checks every finding against the real diff before it saves the review, so a comment cannot point at the wrong code.
 - A mark for each finding (addressed, skipped, or disagree), and a button that copies the open findings back to your agent as a fix prompt.

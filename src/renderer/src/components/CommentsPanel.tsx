@@ -10,12 +10,12 @@ import { orderedComments, type CommentNavEntry } from "@/lib/diff/comment-naviga
 import { CopyAllCommentsPromptButton } from "@/components/CopyPromptButton";
 import { PostAllFoot } from "@/components/GitHubPosting";
 import { FileTypeIcon } from "@/components/FileTypeIcon";
+import { PlainMarkdown } from "@/components/PlainMarkdown";
 import { TooltipHint } from "@/components/ui/tooltip";
 import { commentLocation } from "@/lib/comment-location";
 import { commentMetaLabel, SeverityPill } from "@/components/CommentMeta";
 import { CommentMarkGlyph, commentMarkLabel } from "@/components/CommentMark";
 import { useScrollIntoViewById } from "@/lib/use-scroll-into-view";
-import { flattenMarkdown } from "../../../shared/markdown";
 import {
   RAIL_GLYPH,
   RailCaption,
@@ -55,38 +55,6 @@ function rowDomId(commentId: string): string {
  * after it, so the preview starts exactly where the file name does. Derived from the
  * rail's own glyph size rather than guessed as a padding class. */
 const COMMENT_INDENT_PX = 20;
-
-/** A comment body as a rail can show it: markdown flattened to its words
- * (`flattenMarkdown`), with code runs kept mono. Nobody reads markup in a 256px column —
- * a body opening `**[BUG]**` spends the row's first characters on asterisks and brackets,
- * and the bold they ask for is a distinction this register does not draw anyway. What
- * survives is the sans/mono split, because a `symbol` reads as machine text at any size
- * and it is most of what makes a one-line preview recognisable as the comment it stands
- * for. The card in the diff renders the same body in full, one click away.
- *
- * Ink is left to the caller: this runs inside a 13px row and inside an inverted hint,
- * both of which set their own. */
-function PlainBody({ body }: { body: string }): ReactElement {
-  // Held against the body, because flattening is a full remark parse and the panel
-  // re-renders on every step of the `n`/`p` walk — a list of N comments would otherwise
-  // re-parse all N on each keypress, for a body that has not changed since it was
-  // written. The same memo `Markdown` keeps over its own pipeline, for the same reason.
-  const runs = useMemo(() => flattenMarkdown(body), [body]);
-
-  return (
-    <>
-      {runs.map((run, index) =>
-        run.code ? (
-          <code key={index} className="font-mono">
-            {run.text}
-          </code>
-        ) : (
-          <span key={index}>{run.text}</span>
-        ),
-      )}
-    </>
-  );
-}
 
 /** A path split for the group heading: the name is what the reader scans for, the
  * directory only disambiguates two files sharing one name. */
@@ -404,7 +372,7 @@ const CommentRow = memo(function CommentRow({
         content={
           <div className="flex min-w-0 flex-col gap-1">
             <span className="whitespace-pre-wrap">
-              <PlainBody body={comment.body} />
+              <PlainMarkdown text={comment.body} />
             </span>
             {/* Where it sits, but only when the row can't say it: a placed comment
                 already shows its file in the heading above and its line at the right,
@@ -434,7 +402,7 @@ const CommentRow = memo(function CommentRow({
             spaces, so a comment written as three paragraphs previews as its opening
             sentence rather than as its first word. */}
         <span className="min-w-0 flex-1 truncate text-sm">
-          <PlainBody body={comment.body} />
+          <PlainMarkdown text={comment.body} />
         </span>
       </TooltipHint>
       {status === "outdated" ? (

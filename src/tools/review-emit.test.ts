@@ -62,6 +62,39 @@ describe("emitReviewArtifact", () => {
     expect(withoutKey).toEqual(JSON.parse(plain.bytes));
   });
 
+  it("writes a guide through only when every visual claim and focus places", () => {
+    const bar = { file: "src/bar.ts", side: "additions", startLine: 2, endLine: 2 };
+    const guide = (at: typeof bar) => ({
+      title: "Bar joins",
+      lede: "A call now reaches `bar`.",
+      steps: ["Call it", "Test it"],
+      visual: {
+        kind: "skeleton",
+        caption: "What foo now calls",
+        lines: [
+          { depth: 0, code: "foo()", status: "same" },
+          { depth: 1, code: "bar()", status: "added", at },
+        ],
+      },
+    });
+    const placed = emitReviewArtifact(
+      input({ overview: guide(bar), layers: [{ label: "Bar", ranges: [bar], focus: bar }] }),
+    );
+    expect(placed.ok).toBe(true);
+    if (!placed.ok) return;
+    expect(placed.artifact.overview?.visual?.kind).toBe("skeleton");
+    expect(placed.artifact.layers[0]?.focus).toEqual(bar);
+
+    // The gate is the whole difference between a visual and a picture: an element whose
+    // anchor misses yields no bytes, exactly as a misplaced range does.
+    const unplaced = emitReviewArtifact(
+      input({ overview: guide({ ...bar, startLine: 40, endLine: 40 }) }),
+    );
+    expect(unplaced.ok).toBe(false);
+    if (unplaced.ok) return;
+    expect(unplaced.problems.map((problem) => problem.kind)).toEqual(["visualAnchorOutdated"]);
+  });
+
   it("omits the reviewed head when the caller has no sha to offer", () => {
     const result = emitReviewArtifact(input());
     expect(result.ok).toBe(true);
@@ -167,7 +200,7 @@ describe("emitReviewArtifact", () => {
     expect(result.ok).toBe(false);
     if (result.ok) return;
     expect(result.problems).toContainEqual(
-      expect.objectContaining({ kind: "schema", path: "comments[0].side" }),
+      expect.objectContaining({ kind: "schema", path: "comments#1.side" }),
     );
   });
 
@@ -184,7 +217,7 @@ describe("emitReviewArtifact", () => {
     expect(result.ok).toBe(false);
     if (result.ok) return;
     expect(result.problems).toContainEqual(
-      expect.objectContaining({ kind: "schema", path: "comments[0].endLine" }),
+      expect.objectContaining({ kind: "schema", path: "comments#1.endLine" }),
     );
   });
 

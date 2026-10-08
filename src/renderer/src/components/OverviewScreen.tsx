@@ -7,10 +7,27 @@ import {
   type ReactElement,
   type RefObject,
 } from "react";
-import { ArrowRight } from "lucide-react";
+import { ArrowRight, ChevronRight } from "lucide-react";
 import type { Comment, ReviewLayer } from "../../../shared/review";
+import type { PatchFile } from "../../../shared/diff/patch";
+import { outlineDiff, outlineLanguage, tooLargeToRead } from "../../../shared/diff/outline";
+import { dependencyDiff } from "../../../shared/diff/imports";
 import { countLabel } from "../../../shared/plural";
-import { buildOverview } from "@/lib/overview";
+import { buildChapterSnippets, buildOverview, type OverviewModel } from "@/lib/overview";
+import { buildModuleMap } from "@/lib/module-map";
+import { buildDepsGraph } from "@/lib/deps-graph";
+import { chapterStripInput } from "@/lib/chapter-strip";
+import { isMachineWritten } from "@/lib/initial-folds";
+import { useElementWidth } from "@/lib/use-element-width";
+import {
+  chapterRows,
+  chapterSlots,
+  createBadgeLookup,
+  frontArrangement,
+  visualNaturalWidth,
+  guideSymbols,
+  shapeGroups,
+} from "@/lib/guide";
 import { reviewDrift } from "@/lib/review-drift";
 import { shortSha } from "@/lib/refs";
 import { NO_READ_FILES } from "@/lib/read-progress";
@@ -19,7 +36,15 @@ import { assertNever } from "../../../shared/assert";
 import { Button } from "@/components/ui/button";
 import { GLASS_PRIMARY } from "@/components/Glass";
 import { ReadRing } from "@/components/ReadRing";
-import { OverviewLayerSection, layerSectionDomId } from "@/components/OverviewLayerSection";
+import {
+  ChapterRow,
+  layerSectionDomId,
+  type ChapterRowActions,
+} from "@/components/guide/ChapterRow";
+import { ChapterStrip } from "@/components/guide/ChapterStrip";
+import { MapCard } from "@/components/guide/MapCard";
+import { VisualCard } from "@/components/guide/VisualCard";
+import type { AnchorDoor } from "@/components/guide/anchor-door";
 import { Markdown } from "@/components/Markdown";
 import { VerdictChip } from "@/components/VerdictChip";
 import { cn } from "@/lib/utils";
@@ -166,6 +191,59 @@ function serveDocReturn(scroller: HTMLElement, docReturn: DocReturn, docScrollTo
   }
 }
 
+/** Everything the guide computes beyond the overview model, memoised on its real inputs: the
+ * badge lookup, the chapter tints, the outline diff and its Shape grouping, the module map, the
+ * dependency graph, the strip, and the chapters folded into rows. Each is a pure function in `lib/` with its own tests;
+ * this only decides when they re-run — on a new diff or new layers, never because the reader
+ * scrolled or marked a file. (The strip and the rows read the model, which does change with a
+ * read mark: that is their progress fills.) */
+function useGuideModel(
+  layers: readonly ReviewLayer[],
+  files: readonly PatchFile[] | null,
+  model: OverviewModel,
+) {
+  const badgeOf = useMemo(() => createBadgeLookup(layers), [layers]);
+  const slots = useMemo(() => chapterSlots(layers), [layers]);
+  const outline = useMemo(() => outlineDiff(files ?? [], { skip: isMachineWritten }), [files]);
+  const symbols = useMemo(() => guideSymbols(outline, badgeOf), [outline, badgeOf]);
+  const shape = useMemo(() => shapeGroups(outline, symbols), [outline, symbols]);
+  // The authored layers, not `effectiveLayers`: the inferred "not covered" layer would own the
+  // very files the map hatches (`buildModuleMap`).
+  const moduleMap = useMemo(() => buildModuleMap(files ?? [], layers), [files, layers]);
+  // The Deps tab: the dependency diff is a function of the diff alone; the module graph over it
+  // takes the map only for its frame names.
+  const dependencies = useMemo(
+    () => dependencyDiff(files ?? [], { skip: isMachineWritten }),
+    [files],
+  );
+  const deps = useMemo(
+    () => buildDepsGraph(dependencies, files ?? [], moduleMap),
+    [dependencies, files, moduleMap],
+  );
+  const strip = useMemo(
+    () => chapterStripInput(model, files ?? [], layers),
+    [model, files, layers],
+  );
+  const rows = useMemo(() => chapterRows(model.chapters), [model]);
+  // The code files the outline and the import read both left out for size (`tooLargeToRead`),
+  // so the Shape and Deps tabs can say so rather than draw a silence that reads "declares
+  // nothing". Machine-written files are not listed: they are skipped by design, not by budget.
+  const unread = useMemo(
+    () =>
+      (files ?? [])
+        .filter(
+          (file) =>
+            outlineLanguage(file.path) !== null &&
+            !file.isBinary &&
+            !isMachineWritten(file) &&
+            tooLargeToRead(file),
+        )
+        .map((file) => file.path),
+    [files],
+  );
+  return { badgeOf, slots, symbols, shape, moduleMap, deps, strip, rows, unread };
+}
+
 export function OverviewScreen(): ReactElement | null {
   const overview = useReviewStore((state) => selectActiveSlice(state)?.overview ?? null);
   const layers = useReviewStore((state) => selectActiveSlice(state)?.layers ?? EMPTY_LAYERS);
@@ -190,13 +268,54 @@ export function OverviewScreen(): ReactElement | null {
   const focusReference = useReviewStore((state) => state.focusReference);
 
   const doc = useDocPosition();
+  const frontRef = useRef<HTMLDivElement>(null);
+  const frontWidth = useElementWidth(frontRef);
 
   const files = diff !== null && diff.phase === "loaded" ? diff.files : null;
+  // The chapter cards on their own memo, keyed on the layers and the diff only: they are the part
+  // of the model that reads code, and a read mark or a comment edit — which do re-run
+  // `buildOverview` — changes nothing about them (`buildChapterSnippets`).
+  const snippets = useMemo(
+    () => buildChapterSnippets({ layers, files: files ?? [] }),
+    [layers, files],
+  );
   const model = useMemo(
-    () => buildOverview({ layers, files: files ?? [], comments, frozen, readFiles }),
-    [layers, files, comments, frozen, readFiles],
+    () => buildOverview({ layers, files: files ?? [], comments, frozen, readFiles }, snippets),
+    [layers, files, comments, frozen, readFiles, snippets],
   );
   const filePaths = useMemo(() => (files ?? []).map((file) => file.path), [files]);
+  const guide = useGuideModel(layers, files, model);
+  const visual = overview?.visual;
+  const naturalWidth = useMemo(
+    () => (visual === undefined ? 0 : visualNaturalWidth(visual, guide.badgeOf)),
+    [visual, guide.badgeOf],
+  );
+  // Whether the picture sits beside the lede or under it is measured, not a breakpoint: a flow
+  // that would wrap in the right column but fits the page goes under (`frontArrangement`). With
+  // no picture there is nothing to sit beside: the prose takes the single reading column. It
+  // was "beside", which squeezed every pre-guide review's front into five twelfths of the page
+  // next to seven twelfths of nothing.
+  const front = {
+    ref: frontRef,
+    arrangement: visual === undefined ? "below" : frontArrangement(naturalWidth, frontWidth),
+  };
+
+  // Every element of the guide that points at code — a box in a diagram, a line of a skeleton,
+  // a changed symbol — goes through the prose's own door (`focusReference`), so following one
+  // is a navigation act exactly like following a `[label](path:12)` chip: it leaves the
+  // document, starting the trip the Back pill serves (`components/guide/anchor-door.tsx`).
+  const door = useMemo<AnchorDoor>(
+    () => ({
+      paths: new Set(filePaths),
+      open: (anchor) =>
+        focusReference(anchor.file, {
+          side: anchor.side,
+          startLine: anchor.startLine,
+          endLine: anchor.endLine,
+        }),
+    }),
+    [filePaths, focusReference],
+  );
 
   if (overview === null) {
     return null;
@@ -205,18 +324,24 @@ export function OverviewScreen(): ReactElement | null {
   const drift = reviewDrift({ reviewedHead, reviewDiff, log });
   const firstLayerId = layers[0]?.id ?? null;
   const resumeLayerId = model.resumeLayerId;
+  const steps = overview.steps ?? [];
+  // A review from before the guide contract carries its whole front in `body`. Folding the only
+  // prose it has into "Reviewer's notes" would open the page on nothing, so without a lede or
+  // steps the body *is* the front, read open, and the notes at the end are not drawn twice.
+  const bodyIsFront = overview.lede === undefined && steps.length === 0;
+  const chapterCount = guide.rows.filter((row) => row.chapter.ordinal !== null).length;
 
   // Just the file count, never the read tally. The rail's foot carries "3 of 11 files read"
   // permanently, one pane away and always on screen; growing this slot into the same
   // sentence mid-review meant the number was on the page twice and the headline changed
   // shape under the reader as they worked. What this row is for is describing the change —
-  // how much of it they have been through is the sidebar's standing job.
+  // how much of it they have been through is the sidebar's standing job, and the chapter
+  // strip's fills below.
   //
   // Layer coverage is deliberately not here either. It is a figure about how well the review
-  // was *authored*, and this headline is read by someone about to do the reading — a
-  // percentage they cannot act on and did not ask for. The rail states it where it belongs,
-  // next to the layers themselves, and the "Not covered" chapter says the same thing in a
-  // form the reader can actually open.
+  // was *authored*; the strip's hatched remainder and the map's hatched tiles say the same
+  // thing in a form the reader can actually open. The chapter count is here because the
+  // guide's chapters no longer each lead with a section number a reader could count by.
   const stats: ReactElement[] = loaded
     ? [
         <span key="files">{countLabel(model.files, "file")}</span>,
@@ -224,6 +349,9 @@ export function OverviewScreen(): ReactElement | null {
           <span className="text-diff-add-fg">+{model.additions}</span>{" "}
           <span className="text-diff-del-fg">−{model.deletions}</span>
         </span>,
+        ...(chapterCount > 0
+          ? [<span key="chapters">{countLabel(chapterCount, "chapter")}</span>]
+          : []),
       ]
     : [];
 
@@ -231,17 +359,28 @@ export function OverviewScreen(): ReactElement | null {
   // at the exact place the reader clicked, and each is one store action rather than two calls
   // from here: the second call would find the document already closed, which makes it a
   // navigation act, which ends the trip the first call started (`openLayerFile`).
-  const openLayer = (layerId: string): void => setActiveLayer(layerId);
+  const actions: ChapterRowActions = {
+    onOpen: (layerId) => setActiveLayer(layerId),
+    onOpenFile: (layerId, path) => openLayerFile(layerId, path),
+    onToggleRead: (chapter) =>
+      setLayerRead(chapter.layer.id, chapter.read.read < chapter.read.total),
+    onOpenComments: (chapter) => {
+      if (chapter.firstCommentId !== null) {
+        openLayerComment(chapter.layer.id, chapter.firstCommentId);
+      }
+    },
+    onSelectReference: focusReference,
+  };
+  const links = { paths: filePaths, onSelect: focusReference };
 
   return (
     <div className="relative flex h-full flex-col bg-diff-surface">
       {/* No header bar. Every other surface opens with one because it has something only a
           bar can say — which diff, which chapter. This one had a label the rail's own
-          selected row already carries and the page's title repeats two lines down, plus a
-          "Browse all files" button the footer's action row already holds; a bar whose every
-          part is said elsewhere on the same screen is a rule with chrome attached. The
-          document simply starts, and the extra top inset stands in for the bar's height so
-          the title still clears the window's chrome. */}
+          selected row already carries and the page's title repeats two lines down; a bar
+          whose every part is said elsewhere on the same screen is a rule with chrome
+          attached. The document simply starts, and the extra top inset stands in for the
+          bar's height so the title still clears the window's chrome. */}
       {/* tabIndex -1, not 0: the doc is not a Tab stop of its own (the reader would land on
           a whole page before reaching its first link), but it is F6's landing spot for this
           screen, and focusing a scroll container is what gives PgDn and the arrows something
@@ -253,33 +392,32 @@ export function OverviewScreen(): ReactElement | null {
         tabIndex={-1}
         className="min-h-0 flex-1 overflow-y-auto outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
       >
-        {/* Centred, unlike every other surface in the app: this one is a document, and a
-            reading column pinned to the left edge of a wide pane leaves the page looking
-            like it failed to load the rest of itself. On a narrow pane the margins fall to
-            the padding and it reads exactly as it did before. */}
+        {/* Centred and wide: the guide is two columns — the argument and its evidence — so it
+            takes the width a diff would, where the old single reading column stopped at 48rem.
+            The two columns are a *container* query (`@container`), not a viewport one: what
+            decides whether there is room beside the prose is the pane, which the sidebar's
+            seam resizes, not the window. Below that width everything stacks, evidence under
+            argument, and reads as the single column it used to be. */}
         {/* pb-28 is the island's own height plus its inset plus air: the end of the document
             has to be able to scroll clear of the pill, or the last thing a reader reaches is
             permanently half-covered by the control that took them there. */}
-        <div className="mx-auto max-w-3xl px-6 pt-10 pb-28 select-text">
+        <div className="@container mx-auto max-w-6xl px-8 pt-10 pb-28 select-text">
           {/* The title, and the author's verdict on the same line — the one thing on this
               page the app did not measure, so it sits with the one other thing the author
-              wrote at the top rather than among the counted facts below. Baseline-aligned and
-              wrapping as a unit, the same way a chapter heading carries its chips. */}
-          <h1 className="flex flex-wrap items-baseline gap-x-2 gap-y-1 text-lg leading-7 font-medium text-foreground">
+              wrote at the top rather than among the counted facts below. */}
+          <h1 className="flex flex-wrap items-baseline gap-x-2 gap-y-1 text-xl leading-8 font-medium text-foreground">
             {overview.title}
             {overview.verdict !== undefined && <VerdictChip verdict={overview.verdict} />}
           </h1>
           {stats.length > 0 && (
-            <div className="mt-2">
+            <div className="mt-1.5">
               <StatRow>{stats}</StatRow>
             </div>
           )}
 
-          {/* The branch has moved since this was written. A line of its own rather than two
-              more items in the row above — that row was cut to three on purpose, and this is
-              a sentence about *when* the review is from, not a measurement of the change.
-              It appears only when the two shas actually differ, so a review read the hour it
-              was written says nothing at all. */}
+          {/* The branch has moved since this was written. A line of its own rather than more
+              items in the row above — this is a sentence about *when* the review is from, not
+              a measurement of the change. It appears only when the two shas actually differ. */}
           {drift !== null && (
             <p className="mt-2 flex flex-wrap items-center gap-x-1.5 text-sm text-text-muted">
               Written at
@@ -307,67 +445,125 @@ export function OverviewScreen(): ReactElement | null {
             </p>
           )}
 
-          <Markdown
-            text={overview.body}
-            links={{ paths: filePaths, onSelect: focusReference }}
-            diagrams
-            className="mt-5 space-y-3 text-base leading-relaxed text-foreground"
-          />
+          {/* The front: one sentence and the steps the change takes, beside one proven picture
+              of its shape. Read first because it is what a reader who reads nothing else
+              should leave with — and short because the old front, 100–250 words of prose,
+              was the part nobody read. */}
+          <div
+            ref={front.ref}
+            className={cn(
+              "mt-10 grid grid-cols-1 gap-x-12 gap-y-8",
+              front.arrangement === "beside" && "grid-cols-[minmax(0,5fr)_minmax(0,7fr)]",
+            )}
+          >
+            <div className={cn("min-w-0", front.arrangement === "below" && "max-w-3xl")}>
+              <h2 className="text-lg font-medium text-foreground">Overview</h2>
+              {overview.lede !== undefined && (
+                <Markdown
+                  text={overview.lede}
+                  links={links}
+                  className="mt-3 text-base leading-relaxed text-text-muted"
+                />
+              )}
+              {steps.length > 0 && (
+                <ol className="mt-4 list-decimal space-y-2 pl-6 text-base leading-relaxed text-foreground marker:text-text-faint">
+                  {steps.map((step, index) => (
+                    <li key={index} className="pl-1">
+                      <Markdown text={step} links={links} />
+                    </li>
+                  ))}
+                </ol>
+              )}
+              {bodyIsFront && overview.body !== undefined && (
+                <Markdown
+                  text={overview.body}
+                  links={links}
+                  diagrams
+                  className="mt-3 space-y-3 text-base leading-relaxed text-foreground"
+                />
+              )}
+            </div>
+            {overview.visual !== undefined && (
+              <VisualCard visual={overview.visual} badgeOf={guide.badgeOf} door={door} />
+            )}
+          </div>
 
-          {/* No chapter index here. One stood between the prose and the sections — a line
-              per chapter with its summary, read ring, file count and line counts — and the
-              reader, using it on a sixteen-chapter review, called it useless: the rail's
-              Layers list names the same chapters in the same order on the same screen, and
-              every other fact on a row is said again by the section a scroll below. It cost
-              most of a first screen at ten chapters to say nothing new. With the sidebar
-              hidden the doc has no chapter list at all, and that is accepted: the sections
-              are the list, and ⌘B brings the rail back. Do not re-add it without a new
-              reason. */}
+          {/* The map: the whole change at a glance, before its chapters. The strip says how big
+              each chapter is and how far through it the reader is; the card under it says where
+              the change lives (Map) and what it declares (Shape). Both computed — nothing on
+              this section is authored. */}
+          {loaded && model.files > 0 && (
+            <section aria-labelledby="guide-map-heading" className="mt-14">
+              <h2 id="guide-map-heading" className="text-lg font-medium text-foreground">
+                Map
+              </h2>
+              {guide.strip.chapters.length > 0 && (
+                <div className="mt-4">
+                  <ChapterStrip
+                    input={guide.strip}
+                    slots={guide.slots}
+                    onOpen={(layerId) => setActiveLayer(layerId)}
+                  />
+                </div>
+              )}
+              <div className="mt-4">
+                <MapCard
+                  root={guide.moduleMap}
+                  groups={guide.shape}
+                  slots={guide.slots}
+                  deps={guide.deps}
+                  unread={guide.unread}
+                  badgeOf={guide.badgeOf}
+                  door={door}
+                  onOpenFile={(path) => focusReference(path, null)}
+                />
+              </div>
+            </section>
+          )}
 
-          {/* The layers, in authored order, as the rest of the document — no section
-              heading over them: they *are* the document past the opening prose, and each
-              one's own heading already names it. A rollup is followed by the sections it
-              stands for, each saying which rollup it belongs to, so the reading order is
-              the one the rail steps rather than a tree the reader has to reassemble. */}
-          {model.chapters.length > 0 && (
-            // No spacing of its own: each section owns the gap above it (and a top-level
-            // one splits that gap either side of its rule), so the first section's margin
-            // is the space under the prose.
-            <div>
-              {model.chapters.map((chapter) => (
-                <OverviewLayerSection
-                  key={chapter.layer.id}
-                  chapter={chapter}
+          {/* No chapter index here. One stood between the prose and the sections — a line per
+              chapter with its summary, read ring, file count and line counts — and the reader,
+              using it on a sixteen-chapter review, called it useless: the rail's Layers list
+              names the same chapters in the same order on the same screen. The strip above is
+              the index now, and it is a picture of size and progress rather than a list. */}
+          {guide.rows.length > 0 && (
+            <div className="mt-14">
+              {guide.rows.map((row) => (
+                <ChapterRow
+                  key={row.chapter.layer.id}
+                  row={row}
+                  total={chapterCount}
                   filePaths={filePaths}
-                  onOpen={() => openLayer(chapter.layer.id)}
-                  onOpenFile={(path) => openLayerFile(chapter.layer.id, path)}
-                  onSelectReference={focusReference}
-                  onToggleRead={() =>
-                    setLayerRead(chapter.layer.id, chapter.read.read < chapter.read.total)
-                  }
-                  onOpenComments={
-                    chapter.firstCommentId === null
-                      ? null
-                      : () => {
-                          if (chapter.firstCommentId !== null) {
-                            openLayerComment(chapter.layer.id, chapter.firstCommentId);
-                          }
-                        }
-                  }
+                  symbols={guide.symbols}
+                  badgeOf={guide.badgeOf}
+                  door={door}
+                  actions={actions}
                 />
               ))}
             </div>
           )}
 
-          {/* Nothing but the ending. The two ways *on* moved to the island below, which is
-              on screen the whole time — reaching them here meant scrolling past the entire
-              review first, which is backwards for the control a reader wants at the moment
-              they decide to stop reading the summary and go.
+          {/* The author's longer notes, folded at the end: what used to be the whole front of
+              the document is now the part a reader opens if the chapters left them wanting
+              more. A native disclosure — the browser owns its keyboard and its state. */}
+          {!bodyIsFront && overview.body !== undefined && (
+            <details className="group mt-6 border-t border-border pt-6">
+              <summary className="flex cursor-pointer list-none items-center gap-1.5 text-base font-medium text-foreground [&::-webkit-details-marker]:hidden">
+                <ChevronRight
+                  aria-hidden="true"
+                  className="size-4 text-text-faint transition-transform duration-(--duration-fast) group-open:rotate-90"
+                />
+                Reviewer’s notes
+              </summary>
+              <Markdown
+                text={overview.body}
+                links={links}
+                diagrams
+                className="mt-3 max-w-3xl space-y-3 text-base leading-relaxed text-foreground"
+              />
+            </details>
+          )}
 
-              "Mark all unread" went too, and not for room: the rail's tree already ends in a
-              Reset that clears the same files by the same call, and it is on screen from the
-              first render rather than at the bottom of a long page. Two buttons, one job, one
-              of them permanently visible — the doc's copy was the one adding nothing. */}
           {/* The end of the walkthrough, stated once, where the reader lands when they come
               back to the hub after the last chapter. */}
           {loaded && model.read.total > 0 && model.read.read === model.read.total && (

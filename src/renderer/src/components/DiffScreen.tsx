@@ -5,6 +5,7 @@ import type { Comment, ReviewLayer } from "../../../shared/review";
 import type { SessionId } from "../../../shared/session";
 import { emptySoloReason, layerOutline } from "../../../shared/layers";
 import { useFitToContent } from "@/lib/fit-panel";
+import { useChapterEvidence } from "@/lib/use-chapter-evidence";
 import { unplaceableComments } from "../../../shared/diff/comment-annotations";
 import { isFullyRead, NO_COLLAPSED_FILES, NO_READ_FILES, tallyRead } from "@/lib/read-progress";
 import { NO_RESOLUTIONS } from "../../../shared/comment-resolution";
@@ -243,6 +244,15 @@ export function DiffScreen(): ReactElement | null {
   // subset so LayerIntro's own derived state (the diff-file Set, the parsed
   // description) holds across renders instead of rebuilding every time.
   const visibleFilePaths = useMemo(() => visibleFiles.map((file) => file.path), [visibleFiles]);
+  // The band's evidence beside its prose: the chapter's picture or its changed symbols, and the
+  // door their elements open through — the prose chips' own, bounded by the solo.
+  const evidence = useChapterEvidence(
+    layers,
+    loadedFiles,
+    activeLayer?.id ?? null,
+    visibleFilePaths,
+    onSelectReference,
+  );
   // Context expansion: a loader only when a live repo backs a two-ref
   // selection, else null so the expander is absent and no git read can fire. Stable
   // across expands (Pierre hydrates the diff in place), so the diff never rebuilds
@@ -387,6 +397,9 @@ export function DiffScreen(): ReactElement | null {
             onToggleCollapsed={() => setLayerIntroCollapsed((value) => !value)}
             fill={fill}
             fit={introFit.content}
+            symbols={evidence.symbols}
+            badgeOf={evidence.badgeOf}
+            door={evidence.door}
           />
         );
       };

@@ -196,7 +196,17 @@ export type Comment = z.infer<typeof Comment>;
  * layer's `description` already is. */
 const MAX_NOTE_LENGTH = 120;
 
-/** A layer's range: an anchor plus the one line saying what *this* slice of the layer
+/** The `note` both kinds of layer range carry. */
+const RangeNote = z
+  .string()
+  .min(1)
+  .max(MAX_NOTE_LENGTH)
+  .optional()
+  .meta({
+    description: `One line, at most ${MAX_NOTE_LENGTH} characters: what this range contributes to its layer, not what changed in it. Shown beside the file's row in the overview. When a layer anchors several ranges in one file, only the first note is shown.`,
+  });
+
+/** A layer's line range: an anchor plus the one line saying what *this* slice of the layer
  * contributes to it. The overview lists a chapter's files with a tick and a `+`/`−` count;
  * before this, the only place to explain a particular file was the layer's prose, which does
  * not line up with the rows the reader is looking at while they choose where to start.
@@ -212,17 +222,288 @@ const MAX_NOTE_LENGTH = 120;
  * two notes is a sentence nobody wrote, and showing the longest is a rule no author could
  * predict. The `.meta` says so, because an author whose second note is silently unread has
  * to be able to find out why from the schema `rvw schema` publishes. */
-export const ReviewLayerRange = ReviewAnchor.extend({
-  note: z
+export const LineLayerRange = ReviewAnchor.extend({ note: RangeNote });
+export type LineLayerRange = z.infer<typeof LineLayerRange>;
+
+/** A key a whole-file range must not carry. `z.never()` rather than a `strictObject`, so the
+ * range stays a plain object like its line sibling — an unknown key from a newer build is
+ * dropped, not refused — while the three line keys, the ones that would make it a *broken line
+ * range* read as a whole-file claim, are refused by name. It publishes as `{ "not": {} }`,
+ * which is JSON Schema's own spelling of "absent", and it infers as `undefined`, which is what
+ * lets `range.side === undefined` narrow the union below. */
+const ABSENT = z
+  .never({
+    error:
+      "a whole-file range names no side or lines — give side, startLine and endLine together, or none of them",
+  })
+  .optional();
+
+/** A layer range of a whole file: every changed line of `file`, on both sides. The shape an
+ * author writes for a file the layer owns outright — which is most files in most layers.
+ *
+ * It exists because a line range must sit inside one hunk (that is what makes it place), so
+ * covering a file of seven hunks took fourteen ranges — one per hunk per side — and a
+ * dogfooding agent wrote 63 of them for 14 files, matching each hunk's two sides by order out
+ * of `rvw diff --json`. Every one of those ranges said the same thing: *this file is this
+ * layer's*. So that claim gets its own shape, and line ranges are left for the case they are
+ * actually for — a file split between layers.
+ *
+ * Persisted as written, `{ file }`, never expanded into hunk spans on import: the spans are
+ * derived from the diff (`rangeSpans` in `shared/layers.ts`), and a session that stored them
+ * would describe the diff as it was at import rather than as it is (the session.ts
+ * inputs-not-derived precedent). It places iff the file is in the diff by its current path —
+ * the layer-range rule — and covers every changed line the file has there. */
+export const WholeFileLayerRange = z.object({
+  file: z.string().min(1),
+  side: ABSENT,
+  startLine: ABSENT,
+  endLine: ABSENT,
+  note: RangeNote,
+});
+export type WholeFileLayerRange = z.infer<typeof WholeFileLayerRange>;
+
+/** The keys that make a range a line range. Present at all — any one of them — and the author
+ * meant `LineLayerRange`, so that is the arm whose complaint the union reports. */
+const LINE_KEYS = ["side", "startLine", "endLine"] as const;
+
+/** One of a layer's ranges: lines in one hunk of a file, or the whole file.
+ *
+ * A plain `z.union`, not a `z.discriminatedUnion` on `side`: the whole-file arm's
+ * discriminator would be "absent", which zod can only spell `z.undefined()`, and that has no
+ * JSON Schema — `rvw schema` publishes this — while `z.never().optional()` has one but no
+ * discriminator value. The cost of a plain union is its failure: zod reports every arm's
+ * issues under one "Invalid input". So the union says which arm the author meant — the line
+ * one if any line key is present, else the whole-file one — and reports *that* arm's first
+ * complaint, field named, rather than a generic sentence that describes both shapes and fixes
+ * neither. Line arm first, so a complete line range is never read any other way.
+ *
+ * Narrow it with `range.side === undefined` (whole file) — every consumer has to, because a
+ * whole-file range has no `startLine` to read, which is the point: a reader of `ranges` that
+ * forgot the whole-file case does not compile. */
+export const ReviewLayerRange = z
+  .union([LineLayerRange, WholeFileLayerRange], {
+    error: (issue) => {
+      if (issue.code !== "invalid_union") {
+        // Not the union's own failure: zod's default message stands.
+        return;
+      }
+      const input = issue.input;
+      const lineShaped =
+        typeof input === "object" &&
+        input !== null &&
+        LINE_KEYS.some((key) => Object.hasOwn(input, key));
+      const meant = (lineShaped ? issue.errors[0] : issue.errors[1]) ?? [];
+      const first = meant[0];
+      const detail =
+        first === undefined
+          ? ""
+          : ` — ${first.path.length === 0 ? "" : `${first.path.join(".")}: `}${first.message}`;
+      return lineShaped
+        ? `a line range is file, side, startLine and endLine, inside one hunk${detail}`
+        : `a whole-file range is file and an optional note${detail}`;
+    },
+  })
+  .meta({
+    description:
+      "A layer range: either file + side + startLine + endLine (lines inside one hunk), or file alone — every changed line of that file, both sides. Use the whole-file form for a file this layer owns entirely; line ranges only where a file is split between layers.",
+  });
+export type ReviewLayerRange = z.infer<typeof ReviewLayerRange>;
+
+/** Whether a layer range is the whole-file form — the narrowing, named, for call sites that
+ * read better as a predicate than as `range.side === undefined`. */
+export function isWholeFileRange(range: ReviewLayerRange): range is WholeFileLayerRange {
+  return range.side === undefined;
+}
+
+// ── Visuals ─────────────────────────────────────────────────────────────────────────────
+//
+// The before/after picture of a change — the overview's, or one chapter's — as *structured
+// data* the app draws with its own deterministic renderer, never as markup or a diagram
+// language. The alternative was what the prose tier already allows: a ```` ```mermaid ````
+// fence. That stays readable for back-compat, but it has two faults a review cannot afford.
+// It is unverified — a box labelled `retryBlob()` claims a change nobody checked is in the
+// diff — and it is someone else's renderer turning artifact text into markup
+// (`MermaidDiagram.tsx` is the one insertion of that kind in the renderer, and it should
+// stay one). A diagram nobody verified is prose in picture form.
+//
+// So every element that claims a change carries `at`, an ordinary `ReviewAnchor`, and the
+// gate places it exactly as it places a layer range (`tools/review-validator.ts`): a visual
+// that passes `rvw emit` is a proven table of contents into the diff. The chapter badge a
+// node wears is *derived* — the layer that owns its anchor (`layerOwning`) — never
+// authored, so it cannot name the wrong chapter.
+//
+// Two kinds, closed: `flow` for who calls whom / how data travels, `skeleton` for what one
+// function now does (its call tree without bodies, `+`/`−` per line). A third kind is a
+// renderer, a validator arm and a skill paragraph, and the discriminated union makes
+// forgetting any of them a compile error.
+//
+// Every limit is in the schema rather than in the renderer's layout, so `rvw schema`
+// publishes it and an agent hears "40 characters" from the gate rather than seeing its label
+// clipped. The numbers are the layout's: a flow node is one monospace box in a row of three
+// or four, a skeleton line one row of a narrow card, and the counts keep a picture a glance
+// rather than a map. What zod *cannot* say — unique node ids, edges naming real nodes, a
+// changed element pointing at its code — is the validator's structural pass, the same split
+// the layer outline takes (`validateOutline`): the app draws a hand-edited visual that breaks
+// one of those as best it can (a dangling edge is skipped, not a refusal to open), and
+// `rvw emit`/`check` refuse to produce one.
+//
+// Plain `z.object`s, like `ReviewComment` and the range: an artifact from a newer build that
+// adds a key to a node still opens here with the key dropped, and `cli/draft-keys.ts` walks
+// into visuals so an *author's* stray key is still refused.
+
+/** A visual's text is drawn in a box or on one row, so a line break in it is a layout the
+ * renderer would have to invent. Refused at the parse instead of collapsed at draw time,
+ * because collapsing silently rewrites what the author wrote. */
+const SINGLE_LINE = /^[^\r\n]*$/u;
+
+/** One line of plain text, at most `max` characters. Not markdown: a node label and a note
+ * are drawn as text, so `**` in one is two asterisks — which is why this is a separate
+ * helper from the prose fields and says so in the description it publishes.
+ *
+ * Markup in one is refused by the validator's structural pass (`visualTextMarkup`), not by a
+ * regex here: whether `**` is emphasis is CommonMark's flanking rule — `f(**kwargs)` is
+ * legitimate code and not bold — so it is asked of the same parser the prose tier renders
+ * with, and the schema stays free of a markdown dependency. A skeleton's `code` is held only
+ * to a span wrapping the whole line, since a backtick inside source is usually syntax. */
+function plainLine(max: number, description: string) {
+  return z
     .string()
     .min(1)
-    .max(MAX_NOTE_LENGTH)
+    .max(max)
+    .regex(SINGLE_LINE, "must be a single line")
+    .meta({
+      description: `${description} Plain text, not markdown — backticks and ** would be drawn as-is, so the gate refuses them. One line, at most ${max} characters.`,
+    });
+}
+
+/** A node's identity inside its own flow — what an edge names. A slug rather than free text so
+ * an edge can never fail to match over a trailing space or a case slip the author cannot see. */
+const FLOW_NODE_ID = /^[A-Za-z0-9][A-Za-z0-9_.-]*$/u;
+const MAX_FLOW_NODE_ID = 40;
+
+/** What a flow node is, relative to the change. `changed` exists on a node and not on a line:
+ * a function whose body moved is one box either way, whereas a skeleton line is a line, and a
+ * line that changed is a `removed` beside an `added` — the diff's own grammar. */
+export const FlowNodeStatus = z.enum(["added", "changed", "removed", "same"]);
+export type FlowNodeStatus = z.infer<typeof FlowNodeStatus>;
+
+/** Whether an edge or a skeleton line exists before, after, or both. */
+export const VisualPresence = z.enum(["added", "removed", "same"]);
+export type VisualPresence = z.infer<typeof VisualPresence>;
+
+/** `VisualPresence` as one element's `status` parses it, refusing the node-only `"changed"`
+ * with the sentence that fixes it rather than zod's bare "expected one of". An author who
+ * marks a skeleton line or an edge `changed` has carried a flow node's grammar across — the
+ * commonest slip in a first draft — and "invalid option" sends them to the schema to find out
+ * why a word that is legal two keys away is not legal here. Built per element (rather than
+ * one schema with a generic message) because the fix is different for a line and for an
+ * edge. Any other bad value falls through to zod's own message, which lists the options. */
+function presenceStatus(changedFix: string) {
+  return z.enum(VisualPresence.options, {
+    error: (issue) => (issue.input === "changed" ? changedFix : undefined),
+  });
+}
+
+/** Shared by every visual element: the anchor that proves the element's claim. Optional in
+ * shape because a `same` element (the unchanged caller a flow starts from) may have no code in
+ * the diff to point at; the validator requires it on every other node and line status. Where
+ * it is given, its side and lines must agree with the status (added → added lines on
+ * `additions`, removed → removed lines on `deletions`, changed → a changed line) — the
+ * validator's rule, stated here so `rvw schema` publishes it. */
+const PRESENCE_RULE =
+  'Its side and lines must agree with the status: "added" points at added lines on additions, "removed" at removed lines on deletions';
+const STATUS_RULE = `${PRESENCE_RULE}, "changed" at a range with at least one changed line.`;
+const visualAnchor = () =>
+  ReviewAnchor.optional().meta({
+    description: `${anchorDescription} Where this element's code is in the diff; must place like a layer range. Required unless status is "same". ${STATUS_RULE} The app derives the element's chapter badge from it.`,
+  });
+
+export const FlowNode = z.object({
+  id: z
+    .string()
+    .max(MAX_FLOW_NODE_ID)
+    .regex(FLOW_NODE_ID, "must be a slug: letters, digits, `_`, `.`, `-`")
+    .meta({
+      description: `The node's name within this flow, unique in it, for edges to name. A slug of letters, digits, \`_\`, \`.\`, \`-\`, at most ${MAX_FLOW_NODE_ID} characters.`,
+    }),
+  label: plainLine(40, "The box's text, drawn monospace: a symbol, such as fetchBlob()."),
+  status: FlowNodeStatus,
+  note: plainLine(60, "A few words drawn under the label.").optional(),
+  at: visualAnchor(),
+});
+export type FlowNode = z.infer<typeof FlowNode>;
+
+export const FlowEdge = z.object({
+  from: z.string().min(1).meta({ description: "The `id` of the node the edge leaves." }),
+  to: z.string().min(1).meta({ description: "The `id` of the node the edge enters." }),
+  label: plainLine(16, "What travels along the edge.").optional(),
+  /** Absent reads as `same`: most edges in a before/after picture are the unchanged wiring
+   * the new boxes hang off, and a key on each saying so is noise. */
+  status: presenceStatus(
+    'an edge is "added", "removed" or "same"; show a rewired call as a removed edge beside an added one',
+  )
     .optional()
     .meta({
-      description: `One line, at most ${MAX_NOTE_LENGTH} characters: what this range contributes to its layer, not what changed in it. Shown beside the file's row in the overview. When a layer anchors several ranges in one file, only the first note is shown.`,
+      description: 'Whether the edge is new, gone, or unchanged; absent means "same".',
     }),
+  /** Optional on every status, unlike a node's: an edge is often only the wiring between two
+   * boxes that already carry the proof, but an IPC channel or a call site is as often exactly
+   * where a change lives, and then the arrow is the element to click. Given, it is held to
+   * the node's rules — it places, and its side and lines agree with its status. */
+  at: ReviewAnchor.optional().meta({
+    description: `${anchorDescription} Optional: where the edge itself lives in the diff — the call site, the channel. Must place like a layer range. ${PRESENCE_RULE}.`,
+  }),
 });
-export type ReviewLayerRange = z.infer<typeof ReviewLayerRange>;
+export type FlowEdge = z.infer<typeof FlowEdge>;
+
+export const SkeletonLine = z.object({
+  depth: z.number().int().min(0).max(6).meta({
+    description: "Indent level, 0-6: a call made inside the line above sits one deeper.",
+  }),
+  code: plainLine(
+    90,
+    "A signature or a call, never a body, such as withRetry(() => fetchBlob(path)).",
+  ),
+  status: presenceStatus(
+    'a skeleton line is "added", "removed" or "same"; show a change as a removed line beside an added one',
+  ),
+  note: plainLine(80, "A few words drawn beside the code.").optional(),
+  at: visualAnchor(),
+});
+export type SkeletonLine = z.infer<typeof SkeletonLine>;
+
+const visualCaption = () =>
+  plainLine(
+    80,
+    "What the picture shows, as a phrase, such as: How a blob read reaches the network.",
+  );
+
+/** Boxes and arrows: who calls whom, or how data travels. */
+export const FlowVisual = z.object({
+  kind: z.literal("flow"),
+  caption: visualCaption(),
+  nodes: z.array(FlowNode).min(2).max(14),
+  edges: z.array(FlowEdge).min(1).max(20),
+});
+export type FlowVisual = z.infer<typeof FlowVisual>;
+
+/** A call tree without bodies: what one function now does, `+`/`−` per line. */
+export const SkeletonVisual = z.object({
+  kind: z.literal("skeleton"),
+  caption: visualCaption(),
+  lines: z.array(SkeletonLine).min(2).max(18),
+});
+export type SkeletonVisual = z.infer<typeof SkeletonVisual>;
+
+/** The closed set of pictures. `z.discriminatedUnion` so a third kind is an arm every
+ * consumer's `switch` must grow (`assertNever`), and `id` so the published JSON Schema
+ * states it once in `$defs` and references it from the overview and the layer both. */
+export const ReviewVisual = z.discriminatedUnion("kind", [FlowVisual, SkeletonVisual]).meta({
+  id: "reviewVisual",
+  description:
+    'A before/after picture the app draws. `flow`: boxes and arrows, for who calls whom or how data travels. `skeleton`: a call tree without bodies, `+`/`-` per line, for what one function now does. Every node or line whose status is not "same" needs `at`; an edge may carry one. Every `at` must place, on the side and lines its status claims: "added" on added lines, "removed" on removed lines, "changed" on a range with a changed line. Node ids are unique; an edge names two different existing nodes. All text is plain, not markdown.',
+});
+export type ReviewVisual = z.infer<typeof ReviewVisual>;
 
 /** A layer as written in the artifact: **nested**, and identity-free. A layer that
  * contains others carries them in `children`, so the outline is a real tree on the wire
@@ -265,14 +546,23 @@ export type ReviewLayerRange = z.infer<typeof ReviewLayerRange>;
 export const ReviewLayerInput = z
   .strictObject({
     label: z.string().min(1),
-    summary: z.string().min(1).optional(),
+    /** Inline markdown on one line, the `lede`'s tier: a summary naming `EditorOpenRequest`
+     * wants it in code, and drawn as text it showed the backticks. One line because every
+     * surface sets it inline — in the guide's heading row, under a nested part, in the rail's
+     * hint — where a paragraph break is two decks. The flattened `ReviewLayer` below keeps the
+     * plain string, so a session persisted before this rule still loads. */
+    summary: z.string().min(1).regex(SINGLE_LINE, "must be a single line").optional().meta({
+      description:
+        "The point of the chapter, under its label. Inline markdown (code spans, file references; no heading, list, quote or fence), one line.",
+    }),
     description: z.string().min(1).optional(),
     /** `ReviewLayerRange`, not a bare anchor: a range here is a place *in a chapter* and may
      * carry the one-line `note` that explains it on the overview's file row. Adding it there
      * rather than widening `ReviewAnchor` is what keeps every locator in the codebase four
-     * fields. An unknown key inside a range is dropped rather than refused — the range schema
-     * is a plain object, unlike this one — so a note reaching an older build costs the note
-     * and nothing else. */
+     * fields. An unknown key inside a range is dropped rather than refused — both range arms
+     * are plain objects, unlike this one — so a note reaching an older build costs the note
+     * and nothing else. A whole-file range (`{ file }`) reaching a build older than it is
+     * refused, though: there it is a line range missing three keys. */
     ranges: z.array(ReviewLayerRange).default([]),
     /** `true` or absent, never `false`: the flag is a mark an author puts on one layer, and
      * a `skim: false` on the other twelve would be twelve authored keys saying nothing. The
@@ -280,6 +570,31 @@ export const ReviewLayerInput = z
     skim: z.literal(true).optional().meta({
       description:
         "Marks this layer as the mechanical remainder: lockfiles, generated output, a rename sweep, formatting. The app marks its heading Skim and opens its files folded in the diff; coverage still counts its lines.",
+    }),
+    /** The chapter's own picture, drawn beside its prose in place of a code excerpt. Optional
+     * and rare: most chapters are read best from their key hunk (`focus`), and a chapter with
+     * neither falls back to the excerpt the app computes. */
+    visual: ReviewVisual.optional(),
+    /** The one hunk that represents this chapter, shown beside its prose before the reader
+     * opens the diff. Authored because the computed fallback can only pick the *first* hunk,
+     * and the first hunk of a chapter is as often an import as it is the point. A plain
+     * anchor rather than a range index, so it can be a tighter cut than the range it sits in.
+     *
+     * Its lines must be *owned* by the layer's extent — `layerOwning` of the focus is the layer
+     * itself or a descendant — and the validator refuses one that is not
+     * (`layerFocusOutsideLayer`). That used to be advice,
+     * on the theory that a chapter's most telling hunk can be a call site in a sibling's file.
+     * But a focus outside the layer is a hunk shown beside a chapter that does not explain it,
+     * and every badge is derived from the layer that owns the lines, so the excerpt would wear
+     * a different chapter's number than the row it sits in. A call site this chapter explains
+     * belongs in its ranges; one it does not belongs to the sibling. Ownership rather than
+     * mere overlap, because overlap passed a focus a sibling's line range claims while this
+     * layer reaches it only through a whole-file range — and the badge said the sibling.
+     * Ownership rather than containment, because `layerOwning` itself is overlap-based: a
+     * focus may widen to the hunk's context around the range it shows, as long as no other
+     * chapter claims those lines more specifically. */
+    focus: ReviewAnchor.optional().meta({
+      description: `${anchorDescription} The one hunk that best represents this layer, shown beside its prose. Must place like a range, and its lines must belong to this layer or a descendant: overlap this layer's own ranges or a descendant's, and not lines another layer claims more specifically (a deeper layer, or a line range where this layer has only a whole-file range).`,
     }),
     /** A getter, not a `z.lazy` wrapper: it defers the self-reference the same way, but
      * leaves the schema's own type *inferable*, so the two exported types below are read
@@ -315,6 +630,11 @@ export const ReviewLayer = z.object({
   /** Carried through from the authored layer verbatim — the app reads it, it never
    * derives it. Absent, never `false`, on the same rule the wire shape keeps. */
   skim: z.literal(true).optional(),
+  /** Both carried verbatim, like `skim`: authored decisions, persisted with the session and
+   * re-emitted by the export, never derived. Where `focus` places is recomputed on load like
+   * every anchor's (the session.ts inputs-not-derived precedent). */
+  visual: ReviewVisual.optional(),
+  focus: ReviewAnchor.optional(),
 });
 export type ReviewLayer = z.infer<typeof ReviewLayer>;
 
@@ -355,16 +675,43 @@ export function walkLayerInputs(layers: readonly ReviewLayerInput[]): LayerInput
 export const ReviewVerdict = z.enum(["ready", "caution", "blocked"]);
 export type ReviewVerdict = z.infer<typeof ReviewVerdict>;
 
+/** The longest a `lede` may be — one sentence, at most two lines of the guide's left column.
+ * Was 280 and a first real review filled it: a 280-character lede is a paragraph that wraps to
+ * four lines, which is the prose wall the guide's front exists to replace. */
+const MAX_LEDE_LENGTH = 220;
+/** The longest one `steps` entry may be — one line of a numbered list, a second at most. Was
+ * 160, which let a step carry its own justification; the reason belongs in the chapter. */
+const MAX_STEP_LENGTH = 110;
+/** How many `steps` an overview may list. Named because the skill quotes them, and the skill
+ * once said three where the schema said two: `review-schema.test.ts` now holds the skill's
+ * numbers to the published schema, so the two cannot disagree again. */
+const MIN_STEPS = 2;
+const MAX_STEPS = 5;
+
 /** The review's front matter — the tour doc the app opens on, before any diff.
- * `title` names the change the way its author would say it out loud; `body` is the
- * long-form "what this does, why it is shaped this way", written in the *same*
- * markdown a layer `description` and a comment take — CommonMark + GFM, parsed by
- * remark, with `` `code` `` and `[label](path)` naming a diff file resolved to a
- * clickable reference — one prose tier for the whole artifact, so the parser, the link
- * gate, and the renderer are shared rather than forked. The walkthrough itself is never authored here: the app derives the chapter
- * list, its files, and its counts from `layers` and the loaded diff, so the doc can
- * never drift from the layers it introduces. Optional — an artifact without one opens
- * straight onto the diff.
+ *
+ * **Read top to bottom as the reader meets it: `lede`, `steps`, `visual`, then `body`.** The
+ * overview used to be `body` alone, 100–250 words of prose, and readers did not read it: a
+ * paragraph is the one thing a person deciding where to start will skip. So the front of the
+ * doc is now three small authored parts with one job each — the one sentence of context, the
+ * two to five steps the change takes in order, and one proven picture of its shape — and
+ * `body` moved to the back as the folded "Reviewer's notes": what was checked, the verdict
+ * sentence, anything that fits nowhere else. Optional, all four, so an artifact written to
+ * the old contract (a `body` and nothing else) still reads, just without the guide's front.
+ *
+ * `lede` and `steps` are *inline* markdown — code spans and file references, no blocks — and
+ * single lines, refused rather than collapsed if they break: a numbered step with a paragraph
+ * break in it is two steps. The gate holds their references to the same rules as `body`'s.
+ *
+ * `title` names the change the way its author would say it out loud. `body` is written in the
+ * *same* markdown a layer `description` and a comment take — CommonMark + GFM, parsed by
+ * remark, with `` `code` `` and `[label](path)` naming a diff file resolved to a clickable
+ * reference — one prose tier for the whole artifact, so the parser, the link gate, and the
+ * renderer are shared rather than forked. The walkthrough itself is never authored here: the
+ * app derives the chapter list, its files, and its counts from `layers` and the loaded diff,
+ * so the doc can never drift from the layers it introduces — and a `visual`'s chapter badges
+ * are derived the same way. The overview as a whole is optional — an artifact without one
+ * opens straight onto the diff.
  *
  * `verdict` is the one key here the app did not already have a place for, and the only
  * authored *judgement* anywhere in the artifact: everything else on this doc is either prose
@@ -372,7 +719,28 @@ export type ReviewVerdict = z.infer<typeof ReviewVerdict>;
  * still where the reasoning lives. */
 export const ReviewOverview = z.object({
   title: z.string().min(1),
-  body: z.string().min(1),
+  lede: z
+    .string()
+    .min(1)
+    .max(MAX_LEDE_LENGTH)
+    .regex(SINGLE_LINE, "must be a single line")
+    .optional()
+    .meta({
+      description: `One sentence of context: what the change does and why it exists. Inline markdown (code spans, file references; no heading, list, quote or fence), one line, at most ${MAX_LEDE_LENGTH} characters.`,
+    }),
+  steps: z
+    .array(z.string().min(1).max(MAX_STEP_LENGTH).regex(SINGLE_LINE, "must be a single line"))
+    .min(MIN_STEPS)
+    .max(MAX_STEPS)
+    .optional()
+    .meta({
+      description: `The steps the change takes, in order, shown as a numbered list (so no list marker of your own): ${MIN_STEPS} to ${MAX_STEPS}, each one line of inline markdown at most ${MAX_STEP_LENGTH} characters.`,
+    }),
+  visual: ReviewVisual.optional(),
+  body: z.string().min(1).optional().meta({
+    description:
+      "Reviewer's notes, shown folded at the end of the overview: what was checked and the verdict sentence. Markdown (CommonMark + GFM).",
+  }),
   verdict: ReviewVerdict.optional().meta({
     description:
       "Whether this should land: `ready` (as it stands), `caution` (landable once the comments are read), `blocked` (something has to change first). Shown as a chip on the review and on the picker row. It never replaces the verdict sentence in `body`.",
@@ -651,6 +1019,8 @@ export function flattenLayers(
       // The absent-key rule the optionals either side of it take: a layer nobody marked
       // arrives without the key, never with a `false` the schema would refuse anyway.
       ...(input.skim === undefined ? {} : { skim: input.skim }),
+      ...(input.visual === undefined ? {} : { visual: input.visual }),
+      ...(input.focus === undefined ? {} : { focus: input.focus }),
     });
     for (const child of input.children) {
       visit(child, id);
@@ -715,6 +1085,36 @@ export function parseArtifactBytes(bytes: string): ParsedArtifactBytes {
     : { ok: false, issues: parsed.error.issues };
 }
 
+/** A key that needs no quoting in a path: what a reader would type after a dot. */
+const PLAIN_KEY = /^[A-Za-z_$][\w$]*$/u;
+
+/** A place in an artifact, as every report names it: `layers#2.children#1.ranges#3.startLine`.
+ *
+ * Positions count from 1 and wear a `#`, because every other locator a report prints counts
+ * from 1 — layer `2.1`, range 3, step 2, skeleton line 4 are the numbers the app shows beside
+ * those things — and a report that said "layer 2.1" in one line and `layers[1].children[0]`
+ * in the next made an author translate between two numberings to find one place. The `#` is what keeps it from being misread as
+ * a 0-based JSON index: `[1]` would look like one and mean the other. A key that is not a plain
+ * identifier is quoted in brackets, as zod's own `toDotPath` does, so a key containing a dot
+ * still names exactly one place.
+ *
+ * Shared, not the CLI's, because the app's open-failure banner names a place in the same file
+ * the same way (`firstIssueReason`), and `cli/draft-keys.ts` builds its stray-key locators
+ * with it so they match the schema's word for word — `withoutDuplicates` compares them. */
+export function artifactPath(path: readonly PropertyKey[]): string {
+  let rendered = "";
+  for (const segment of path) {
+    if (typeof segment === "number") {
+      rendered += `#${segment + 1}`;
+    } else if (typeof segment === "string" && PLAIN_KEY.test(segment)) {
+      rendered += rendered === "" ? segment : `.${segment}`;
+    } else {
+      rendered += `[${JSON.stringify(String(segment))}]`;
+    }
+  }
+  return rendered;
+}
+
 /** Bound on the sentence below, because part of it is the file's own text: zod names an
  * unrecognized key back at the author, and an artifact is up to 32 MiB of untrusted JSON, so an
  * absurd key would otherwise ride into the open-failure banner as one unbreakable text node —
@@ -726,9 +1126,8 @@ const MAX_REASON_LENGTH = 200;
  * an unrecognized key at the root). Only the first, because this ends up in a banner — the
  * full list is a report, and `rvw check` already prints one.
  *
- * The locator is zod's own `toDotPath` rather than a `join(".")`, for the reason the validator
- * uses it: it brackets array indices (`comments[2].endLine`) and escapes a key containing a
- * dot, so the path names exactly one place in the file the reader has open. */
+ * The locator is `artifactPath`, the one spelling of a place in an artifact every report uses
+ * — the CLI's schema problems and this banner alike. */
 function firstIssueReason(issues: readonly z.core.$ZodIssue[]): string {
   const issue = issues[0];
   if (issue === undefined) {
@@ -736,7 +1135,7 @@ function firstIssueReason(issues: readonly z.core.$ZodIssue[]): string {
     // its own. Answered rather than asserted — an open must not throw on the way to a banner.
     return "The file is not a valid review.";
   }
-  const path = z.core.toDotPath(issue.path);
+  const path = artifactPath(issue.path);
   const reason = path === "" ? issue.message : `${path} — ${issue.message}`;
   return reason.length > MAX_REASON_LENGTH ? `${reason.slice(0, MAX_REASON_LENGTH)}…` : reason;
 }

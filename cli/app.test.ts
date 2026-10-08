@@ -229,7 +229,7 @@ describe("rvw check — the validation half", () => {
     expect(JSON.parse(result.stdout)).toMatchObject({
       ok: false,
       stage: "validate",
-      problems: [{ kind: "schema", path: "comments[0].suggestion" }],
+      problems: [{ kind: "schema", path: "comments#1.suggestion" }],
     });
   });
 

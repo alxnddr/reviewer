@@ -16,7 +16,7 @@
 import remarkGfm from "remark-gfm";
 import remarkParse from "remark-parse";
 import { unified, type Plugin, type PluggableList } from "unified";
-import { visit } from "unist-util-visit";
+import { CONTINUE, EXIT, visit } from "unist-util-visit";
 import { toString } from "mdast-util-to-string";
 import type { Definition, Link, Nodes, Root } from "mdast";
 import type { ReviewSide } from "./review";
@@ -189,6 +189,79 @@ export function proseReferences(text: string): {
     }
   });
   return { references, malformed };
+}
+
+/** The markup a *plain-text* field would have rendered as, had it been prose: a code span or
+ * strong emphasis. A closed pair because these are the two an author reaches for out of habit
+ * in a visual's label or note (`` `fetchBlob()` ``, `**new**`), and each is fixed differently.
+ */
+export type InlineMarkup = "code" | "strong";
+
+/** Which code spans count as markup: any, or only one that wraps the whole text. The second is
+ * for a field that holds *source* — a skeleton line's `code` — where a backtick is as often
+ * syntax (a JS template literal, a shell substitution, a Kotlin identifier) as habit, and the
+ * habit has one shape: the entire line wrapped, `` `fetchBlob(path)` ``. */
+export type CodeSpanRule = "any" | "whole";
+
+/** The first inline markup in a line of text, or null when it would read as plain words — the
+ * question the gate asks of a visual's text, which the app draws literally. Asked of the
+ * parser rather than a regex because CommonMark decides what `**` and a backtick mean by
+ * context: `f(**kwargs)` and `a ** b` are not emphasis, a lone backtick is not a code span, and
+ * only the parser that renders prose knows which a given line is. */
+export function inlineMarkup(text: string, codeSpans: CodeSpanRule = "any"): InlineMarkup | null {
+  const start = text.length - text.trimStart().length;
+  const end = text.trimEnd().length;
+  let found: InlineMarkup | null = null;
+  visit(parseMarkdown(text), ["inlineCode", "strong"], (node) => {
+    const counts =
+      node.type === "strong" ||
+      codeSpans === "any" ||
+      (node.position?.start.offset === start && node.position.end.offset === end);
+    if (counts) {
+      found = node.type === "strong" ? "strong" : "code";
+    }
+    return counts ? EXIT : CONTINUE;
+  });
+  return found;
+}
+
+/** The block constructs a line of *inline* prose can turn into by accident — a `lede`, a step,
+ * a layer `summary`, which every surface sets inside a sentence-sized slot (a list item, a
+ * heading row, a rail hint). Each is one an author reaches for without meaning structure: a
+ * step written `1. Parse the config` (the app numbers steps itself), a summary opening `#`,
+ * a `>` before a quoted error, a `---` as a separator. Closed, so the gate's sentence for each
+ * is a compile-time obligation. `table` cannot occur on one line (a table needs its delimiter
+ * row) and is listed so the set states the whole of "block", not just what the single-line
+ * rule happens to leave reachable. */
+export type BlockMarkup = "heading" | "blockquote" | "list" | "code" | "table" | "thematicBreak";
+
+const BLOCK_MARKUP: ReadonlySet<string> = new Set<BlockMarkup>([
+  "heading",
+  "blockquote",
+  "list",
+  "code",
+  "table",
+  "thematicBreak",
+]);
+
+function isBlockMarkup(type: string): type is BlockMarkup {
+  return BLOCK_MARKUP.has(type);
+}
+
+/** The first block construct in a piece of inline prose, or null when it parses as the plain
+ * paragraph it is drawn as. Asked of the same parser the renderer uses, for `inlineMarkup`'s
+ * reason: whether `1. x`, `# x` or `- x` is a list or a heading is CommonMark's decision
+ * (`#x` is not a heading, `1) x` is a list, `2025. was a year` is one too), and a regex would
+ * only approximate it. A top-level `definition` or `html` node is not reported here — a path
+ * behind a definition is the reference rule's (`MalformedForm`), and neither is markup an
+ * author types by habit. */
+export function blockMarkup(text: string): BlockMarkup | null {
+  for (const node of parseMarkdown(text).children) {
+    if (isBlockMarkup(node.type)) {
+      return node.type;
+    }
+  }
+  return null;
 }
 
 /** A reference together with where its link sits in the source: the half-open

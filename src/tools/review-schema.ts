@@ -23,10 +23,14 @@ const SCHEMA_TITLE = ".reviewer.json";
 
 const SCHEMA_DESCRIPTION = [
   "The Reviewer review artifact, derived from the zod contract that `rvw emit` and `rvw check`",
-  "enforce. JSON Schema cannot express two of its rules: an anchor's ascending line range",
-  "(endLine >= startLine compares sibling properties), and whether an anchor places on a hunk",
-  "of the review's diff. `rvw emit` / `rvw check` check both, so a document that satisfies",
-  "this schema is well-formed, not necessarily valid. A draft for `rvw emit` carries only",
+  "enforce. JSON Schema cannot express four of its rules: an anchor's ascending line range",
+  "(endLine >= startLine compares sibling properties); a visual's structure (unique node ids,",
+  "edges joining two existing nodes, `at` on every node or line that is not `same`, text",
+  "without markdown); a layer's `focus` overlapping that layer's ranges or its children's; and",
+  "whether an anchor places on a hunk of the review's diff, on the side and lines its status",
+  "claims. `rvw emit` / `rvw check` check all four,",
+  "so a document that satisfies this schema is well-formed, not necessarily valid. A draft for",
+  "`rvw emit` carries only",
   "`overview`, `comments` and `layers`: emit supplies `repo`, `base`, `head` and the rest,",
   "though this schema of the finished artifact lists them as required.",
 ].join(" ");

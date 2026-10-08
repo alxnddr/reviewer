@@ -1,13 +1,21 @@
 import {
+  FlowEdge,
+  FlowNode,
+  FlowVisual,
+  ReviewAnchor,
   ReviewComment,
   ReviewLayerInput,
-  ReviewLayerRange,
+  LineLayerRange,
+  WholeFileLayerRange,
   ReviewOverview,
+  SkeletonLine,
+  SkeletonVisual,
+  artifactPath,
 } from "../src/shared/review";
 import type { ValidationProblem } from "../src/tools/review-validator";
 
 // Keys an author wrote that the review has no place for. The artifact schema is deliberately
-// lenient about them below the top level: `ReviewComment`, `ReviewLayerRange` and
+// lenient about them below the top level: `ReviewComment`, both `ReviewLayerRange` arms and
 // `ReviewOverview` are plain `z.object`s, so an artifact written by a newer build still opens in
 // an older app with the unknown keys dropped (`shared/review.ts` states that trade on each). That
 // leniency is right for the *reader* and wrong for the *author*: a draft's `"suggestion"` on a
@@ -36,26 +44,39 @@ const EMIT_SUPPLIED: ReadonlySet<string> = new Set(["repo", "base", "head", "rev
 const COMMENT_KEYS = keysOf(ReviewComment.shape);
 const OVERVIEW_KEYS = keysOf(ReviewOverview.shape);
 const LAYER_KEYS = keysOf(ReviewLayerInput.shape);
-const RANGE_KEYS = keysOf(ReviewLayerRange.shape);
+/** Either arm's keys: a range is a line range or a whole-file one (`ReviewLayerRange`), and
+ * which one an author meant is the schema's to report, not a stray key's. */
+const RANGE_KEYS = new Set([...keysOf(LineLayerRange.shape), ...keysOf(WholeFileLayerRange.shape)]);
+const ANCHOR_KEYS = keysOf(ReviewAnchor.shape);
+const FLOW_KEYS = keysOf(FlowVisual.shape);
+const SKELETON_KEYS = keysOf(SkeletonVisual.shape);
+const NODE_KEYS = keysOf(FlowNode.shape);
+const EDGE_KEYS = keysOf(FlowEdge.shape);
+const LINE_KEYS = keysOf(SkeletonLine.shape);
 
 function keysOf(shape: object): ReadonlySet<string> {
   return new Set(Object.keys(shape));
 }
 
+/** A located place: the path segments `artifactPath` renders, kept as segments while the walk
+ * descends so the one renderer the schema's problems go through renders these too. */
+type Path = readonly PropertyKey[];
+
 /** Every unknown key in a draft (`{ overview?, comments?, layers? }`), located by the same
- * dot-path a schema problem uses (`comments[2].suggestion`, `layers[0].children[1].ranges[0].why`),
- * so an author reads both kinds of problem the same way. */
+ * path a schema problem uses (`comments#3.suggestion`, `layers#1.children#2.ranges#1.why`),
+ * rendered by the same `artifactPath`, so an author reads both kinds of problem the same way —
+ * and `withoutDuplicates` can match them as strings. */
 export function unknownDraftKeys(draft: Readonly<Record<string, unknown>>): ValidationProblem[] {
   const problems: ValidationProblem[] = [];
   for (const key of Object.keys(draft)) {
     if (EMIT_SUPPLIED.has(key)) {
       problems.push({
         kind: "schema",
-        path: key,
+        path: artifactPath([key]),
         message: `"${key}" is filled in by rvw emit — remove it from the draft`,
       });
     } else if (!DRAFT_KEYS.has(key)) {
-      problems.push(unknownKey("", key, DRAFT_KEYS));
+      problems.push(unknownKey([], key, DRAFT_KEYS));
     }
   }
   problems.push(...unknownArtifactKeys(draft));
@@ -71,17 +92,20 @@ export function unknownArtifactKeys(parts: Readonly<Record<string, unknown>>): V
   const problems: ValidationProblem[] = [];
   const { overview, comments, layers } = parts;
   if (isRecord(overview)) {
-    problems.push(...strayKeys("overview", overview, OVERVIEW_KEYS));
+    problems.push(
+      ...strayKeys(["overview"], overview, OVERVIEW_KEYS),
+      ...visualKeys(["overview", "visual"], overview.visual),
+    );
   }
   if (Array.isArray(comments)) {
     comments.forEach((comment, index) => {
       if (isRecord(comment)) {
-        problems.push(...strayKeys(`comments[${index}]`, comment, COMMENT_KEYS));
+        problems.push(...strayKeys(["comments", index], comment, COMMENT_KEYS));
       }
     });
   }
   if (Array.isArray(layers)) {
-    problems.push(...layerKeys("layers", layers));
+    problems.push(...layerKeys(["layers"], layers));
   }
   return problems;
 }
@@ -91,31 +115,73 @@ export function unknownArtifactKeys(parts: Readonly<Record<string, unknown>>): V
  * anyway to reach their ranges, and reporting both kinds from here keeps an outline's key
  * problems in one place and in one wording. The schema's own duplicate is dropped by
  * `withoutDuplicates` where the two meet. */
-function layerKeys(path: string, layers: readonly unknown[]): ValidationProblem[] {
+function layerKeys(path: Path, layers: readonly unknown[]): ValidationProblem[] {
   const problems: ValidationProblem[] = [];
   layers.forEach((layer, index) => {
     if (!isRecord(layer)) {
       return;
     }
-    const at = `${path}[${index}]`;
+    const at = [...path, index];
     problems.push(...strayKeys(at, layer, LAYER_KEYS));
-    const { ranges, children } = layer;
+    const { ranges, children, visual, focus } = layer;
+    problems.push(...visualKeys([...at, "visual"], visual));
+    if (isRecord(focus)) {
+      problems.push(...strayKeys([...at, "focus"], focus, ANCHOR_KEYS));
+    }
     if (Array.isArray(ranges)) {
       ranges.forEach((range, rangeIndex) => {
         if (isRecord(range)) {
-          problems.push(...strayKeys(`${at}.ranges[${rangeIndex}]`, range, RANGE_KEYS));
+          problems.push(...strayKeys([...at, "ranges", rangeIndex], range, RANGE_KEYS));
         }
       });
     }
     if (Array.isArray(children)) {
-      problems.push(...layerKeys(`${at}.children`, children));
+      problems.push(...layerKeys([...at, "children"], children));
     }
   });
   return problems;
 }
 
+/** A visual and everything in it — the plain objects the schema would silently thin (see the
+ * header). The kind picks the key set; a visual whose `kind` is missing or unknown is the
+ * schema's to report, so the walk stops there rather than guessing which shape was meant. */
+function visualKeys(path: Path, visual: unknown): ValidationProblem[] {
+  if (!isRecord(visual)) {
+    return [];
+  }
+  const problems: ValidationProblem[] = [];
+  const elements = (key: "nodes" | "edges" | "lines", allowed: ReadonlySet<string>): void => {
+    const { [key]: list } = visual;
+    if (!Array.isArray(list)) {
+      return;
+    }
+    list.forEach((element, index) => {
+      if (!isRecord(element)) {
+        return;
+      }
+      problems.push(...strayKeys([...path, key, index], element, allowed));
+      // Every element kind carries an `at` now (an edge's is optional); the guard stays so a
+      // future element without one reports a stray `at` once, as a key, not twice.
+      const { at } = element;
+      if (allowed.has("at") && isRecord(at)) {
+        problems.push(...strayKeys([...path, key, index, "at"], at, ANCHOR_KEYS));
+      }
+    });
+  };
+  const { kind } = visual;
+  if (kind === "flow") {
+    problems.push(...strayKeys(path, visual, FLOW_KEYS));
+    elements("nodes", NODE_KEYS);
+    elements("edges", EDGE_KEYS);
+  } else if (kind === "skeleton") {
+    problems.push(...strayKeys(path, visual, SKELETON_KEYS));
+    elements("lines", LINE_KEYS);
+  }
+  return problems;
+}
+
 function strayKeys(
-  path: string,
+  path: Path,
   object: Readonly<Record<string, unknown>>,
   allowed: ReadonlySet<string>,
 ): ValidationProblem[] {
@@ -126,10 +192,10 @@ function strayKeys(
 
 /** The problem for one stray key, naming the keys that *are* allowed there: the likeliest
  * cause is a near-miss (`layer`, `severity_level`, `line`), and the list is the fix. */
-function unknownKey(path: string, key: string, allowed: ReadonlySet<string>): ValidationProblem {
+function unknownKey(path: Path, key: string, allowed: ReadonlySet<string>): ValidationProblem {
   return {
     kind: "schema",
-    path: path === "" ? key : `${path}.${key}`,
+    path: artifactPath([...path, key]),
     message: `unknown key "${key}" — the keys here are ${[...allowed].join(", ")}`,
   };
 }
