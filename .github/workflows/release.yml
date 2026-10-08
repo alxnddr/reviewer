@@ -101,6 +101,11 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           draft: true
+          # A tag with a semver pre-release suffix (v0.7.0-experimental.1) is cut from a
+          # branch to try something, not to ship it. Marked pre-release, it stays out of
+          # GitHub's /releases/latest — which is what install-cli.sh installs by default — so
+          # nobody on a stable rvw is moved onto an experiment.
+          prerelease: ${{ contains(github.ref_name, '-') }}
           generate_release_notes: true
           fail_on_unmatched_files: true
           files: |
