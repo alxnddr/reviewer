@@ -63,7 +63,7 @@ There is no Linux app. `rvw` runs on any machine with Node 20 or later, so you c
 curl -fsSL https://raw.githubusercontent.com/alxnddr/reviewer/main/scripts/install-cli.sh | sh
 ```
 
-The script installs `rvw` to `~/.local/bin` for the current user. It also takes `--version 0.5.0` to install one release, and `--uninstall`. On Linux, pass `--no-open` to `rvw emit`, because opening a review needs the macOS app.
+The script installs `rvw` to `~/.local/bin` for the current user. It also takes `--version 0.6.0` to install one release, and `--uninstall`. On Linux, pass `--no-open` to `rvw emit`, because opening a review needs the macOS app.
 
 ## Develop
 
