@@ -21,6 +21,10 @@ const ENFORCEMENT_NOTE = [
   "      JSON Schema cannot express an anchor's ascending line range (endLine >= startLine",
   "      compares two sibling properties), nor whether an anchor places on a hunk of the",
   "      review's diff. `rvw emit` and `rvw check` enforce both.",
+  "",
+  "note: this is the finished artifact. A draft for `rvw emit` carries only overview,",
+  "      comments and layers — emit fills in repo, base and head and refuses any other key.",
+  "      The authoring guide: `rvw skills present-review` prints its path.",
 ];
 
 export const schemaCommand = buildCommand<SchemaFlags, [], LocalContext>({
@@ -31,6 +35,9 @@ export const schemaCommand = buildCommand<SchemaFlags, [], LocalContext>({
       "zod schema the validator parses with, so the shape you author against is the shape that",
       "is enforced. --json emits the schema alone (pipe it to a file or a validator); text mode",
       "pretty-prints it and appends the rules JSON Schema cannot express. Exit 0.",
+      "This is the shape of the finished artifact. A draft for `rvw emit` carries only",
+      "overview, comments and layers; what to write in them is the authoring guide's —",
+      "`rvw skills present-review` prints its path.",
     ].join("\n"),
     customUsage: ["", "--json", "--json > reviewer.schema.json"],
   },

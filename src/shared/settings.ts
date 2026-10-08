@@ -159,9 +159,13 @@ export const SETTINGS_DEFAULTS: Omit<ResolvedSettings, "theme"> = {
   // saying where the findings go, with `--pr` so the review knows its pull request. `{pr}` is
   // the pull request's URL, which `rvw emit --pr` reads unambiguously; `{base}` is the
   // freshly fetched remote-tracking branch, so the agent compares against the base as it is
-  // now and not a stale local one.
+  // now and not a stale local one. The rvw clause repeats `{worktree}` and `{base}` as flags
+  // because `rvw emit` otherwise resolves the range from wherever the agent's shell happens to
+  // stand and guesses a fork point — a review authored against `{base}` then presented
+  // against some other diff, or none. Quoted, because the worktree lives under userData,
+  // which on macOS is `~/Library/Application Support/…` — a space a shell would split on.
   pullRequestPrompt:
-    "/code-review PR {pr} in {worktree} against {base} — then present the findings using the rvw CLI with --pr {pr}.",
+    '/code-review PR {pr} in {worktree} against {base} — then present the findings using the rvw CLI with --pr {pr} --repo "{worktree}" --base {base}.',
   // No login until the reader gives one: the empty string is "not set", which the inbox reads as
   // the pointer to Settings rather than as a search (`githubLogin`).
   githubUsername: "",

@@ -1,3 +1,4 @@
+import { spawn } from "node:child_process";
 import { rmSync } from "node:fs";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
@@ -106,5 +107,35 @@ describe("rvw writes all of stdout, even past the pipe buffer", () => {
     expect(report.complete).toBe(false);
     expect(report.coverage.headline.coverableChangedLines).toBe(BULK_COVERABLE_LINES);
     expect(report.coverage.uncoveredSpans.length).toBeGreaterThan(1000);
+  });
+});
+
+describe("rvw lets a reader stop reading", () => {
+  it("ends quietly with its own exit code when the pipe closes early, as `| head` does", async () => {
+    // The other side of the pipe: a reader that takes the first lines and goes away. Every write
+    // after that fails with EPIPE, which used to surface as an uncaught exception — a stack trace
+    // on the terminal after `head` already had what it wanted. Closing the read end on the first
+    // chunk is exactly what `head -c` does; the patch is megabytes, so writes are still pending.
+    const child = spawn("node", [cli.bundle, "diff", "--base", bulky.base, "--head", bulky.head], {
+      cwd: bulky.path,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    let stderr = "";
+    child.stderr.setEncoding("utf8");
+    child.stderr.on("data", (chunk: string) => {
+      stderr += chunk;
+    });
+    child.stdout.once("data", () => {
+      child.stdout.destroy();
+    });
+    const code = await new Promise<number | null>((resolve) => {
+      child.on("close", (status) => resolve(status));
+    });
+
+    expect(stderr).not.toContain("EPIPE");
+    expect(stderr).not.toContain("Error");
+    expect(stderr).not.toContain("    at ");
+    // The diff was produced; only nobody read it all. That is not a failed run.
+    expect(code).toBe(0);
   });
 });

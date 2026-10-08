@@ -1,8 +1,11 @@
 import { assertNever } from "../src/shared/assert";
-import type {
-  CoverageReport,
-  FileCoverage,
-  NonCoverableReason,
+import type { AnchorSpan, ReviewSide } from "../src/shared/review";
+import {
+  isFullyCovered,
+  type CoverageHeadline,
+  type CoverageReport,
+  type FileCoverage,
+  type NonCoverableReason,
 } from "../src/tools/review-coverage";
 
 // The human rendering of a `CoverageReport`: a headline percentage and a per-file rollup, and
@@ -14,6 +17,15 @@ import type {
 // swamp the answer it is attached to.
 //
 // Pure: it returns lines, so the command owns the stream and the exit code.
+//
+// `rvw emit` has a second, smaller rendering of the same report (`emitCoverageLines`,
+// `emitCoverageSummary`). Emit never used to say anything about coverage, so an author whose
+// layers missed every removed line — coverage counts the two sides separately, and an
+// additions-only range leaves the deletions beside it uncovered — heard nothing until a reader
+// saw "Not covered by layers" in the app. Emit is the moment the author can still fix it, so it
+// says so there; it does not change the exit code, for the reason `rvw check` gives (a strong
+// review may skip trivia on purpose). What it prints is the fix rather than the score: the
+// uncovered spans per file and side, since those are what a range is written from.
 
 /** How many files the rollup names before it starts counting instead. Small on purpose: past a
  * handful, a file list stops being something a reader scans and becomes something they scroll,
@@ -82,4 +94,93 @@ function describeReason(reason: NonCoverableReason): string {
     default:
       return assertNever(reason);
   }
+}
+
+/** How many uncovered spans emit names per file before it counts the rest. A file with dozens
+ * of gaps is a file the layers missed wholesale, and the first few spans say that as well as
+ * all of them would. */
+const MAX_SPANS_PER_FILE = 4;
+
+/** The lines `rvw emit` prints after a clean write of a review with layers: one line when every
+ * changed line is in a layer, else the headline and, per file with a gap, its uncovered spans by
+ * side — the spans a missing range would be written from. Capped like the rollup above. */
+export function emitCoverageLines(report: CoverageReport): string[] {
+  const { coverableChangedLines, coveredChangedLines } = report.headline;
+  if (isFullyCovered(report)) {
+    return [`layers cover every changed line (${coverableChangedLines})`];
+  }
+  const bySide = uncoveredBySide(report.uncoveredSpans);
+  const lines = [
+    `layers cover ${percent(coveredChangedLines, coverableChangedLines)} of changed lines — ${bySide.additions} added and ${bySide.deletions} removed line(s) are in no layer (shown as "Not covered by layers"):`,
+  ];
+  const gaps = filesWithGaps(report);
+  for (const [file, spans] of gaps.slice(0, MAX_ROLLUP_FILES)) {
+    lines.push(`  ${file}: ${describeSpans(spans)}`);
+  }
+  const hidden = gaps.length - MAX_ROLLUP_FILES;
+  if (hidden > 0) {
+    lines.push(
+      `  … and ${hidden} more file(s) — \`rvw check <artifact> --coverage --json\` lists every span`,
+    );
+  }
+  return lines;
+}
+
+/** The same answer for `rvw emit --json`: the headline, whether it is complete, the uncovered
+ * line counts per side, and the files with a gap. Counts and files, not the spans themselves —
+ * a diff a layer barely touched has one span per changed hunk, and an emit's success document
+ * is read into an agent's context whole. `rvw check --coverage --json` carries every span. */
+export type EmitCoverageSummary = {
+  readonly complete: boolean;
+  readonly headline: CoverageHeadline;
+  readonly uncovered: Record<ReviewSide, number>;
+  readonly files: readonly string[];
+};
+
+export function emitCoverageSummary(report: CoverageReport): EmitCoverageSummary {
+  return {
+    complete: isFullyCovered(report),
+    headline: report.headline,
+    uncovered: uncoveredBySide(report.uncoveredSpans),
+    files: filesWithGaps(report).map(([file]) => file),
+  };
+}
+
+function uncoveredBySide(spans: readonly AnchorSpan[]): Record<ReviewSide, number> {
+  const counts: Record<ReviewSide, number> = { additions: 0, deletions: 0 };
+  for (const span of spans) {
+    counts[span.side] += span.endLine - span.startLine + 1;
+  }
+  return counts;
+}
+
+/** Each file with an uncovered span, in the report's file order, with its spans. */
+function filesWithGaps(report: CoverageReport): [string, AnchorSpan[]][] {
+  const byFile = new Map<string, AnchorSpan[]>();
+  for (const span of report.uncoveredSpans) {
+    const spans = byFile.get(span.file);
+    if (spans === undefined) {
+      byFile.set(span.file, [span]);
+    } else {
+      spans.push(span);
+    }
+  }
+  return [...byFile.entries()];
+}
+
+/** `deletions 3-5, 9; additions 40-41`, the shown spans capped per file. */
+function describeSpans(spans: readonly AnchorSpan[]): string {
+  const shown = spans.slice(0, MAX_SPANS_PER_FILE);
+  const sides = (["deletions", "additions"] as const).flatMap((side) => {
+    const onSide = shown.filter((span) => span.side === side);
+    if (onSide.length === 0) {
+      return [];
+    }
+    const ranges = onSide.map((span) =>
+      span.startLine === span.endLine ? `${span.startLine}` : `${span.startLine}-${span.endLine}`,
+    );
+    return [`${side} ${ranges.join(", ")}`];
+  });
+  const hidden = spans.length - shown.length;
+  return hidden > 0 ? `${sides.join("; ")} (+${hidden} more)` : sides.join("; ");
 }

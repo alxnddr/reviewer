@@ -18,7 +18,7 @@ describe("expandPrompt", () => {
 
   it("expands the default template into a prompt that names the PR for rvw", () => {
     const prompt = expandPrompt(SETTINGS_DEFAULTS.pullRequestPrompt, VALUES);
-    expect(prompt).toContain(`--pr ${VALUES.pr}`);
+    expect(prompt).toContain(`--pr ${VALUES.pr} --repo "${VALUES.worktree}" --base ${VALUES.base}`);
     expect(prompt).toContain(VALUES.worktree);
     expect(prompt).toContain(`against ${VALUES.base}`);
     expect(prompt).not.toMatch(/\{(?:pr|worktree|base|head)\}/u);

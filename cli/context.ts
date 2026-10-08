@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import type { StricliProcess } from "@stricli/core";
-import { errorMessage } from "../src/shared/errors";
+import { errnoCode, errorMessage } from "../src/shared/errors";
 
 // The context Stricli threads into every command as `this`, plus the one place the
 // CLI's exit-code contract is normalized. Stricli owns argument scanning, routing, and
@@ -111,4 +111,14 @@ export function normalizeExitCode(raw: number | string | null | undefined): numb
   if (raw === EXIT_CANNOT_RUN) return EXIT_CANNOT_RUN;
   if (raw === EXIT_READY || raw === null || raw === undefined) return EXIT_READY;
   return EXIT_CANNOT_RUN;
+}
+
+/** What a failed write to stdout or stderr does to the exit code: nothing, when the reader went
+ * away (`EPIPE` — `rvw diff | head` closing the pipe once it has its lines), and cannot-run for
+ * anything else. A reader that stops reading has not made the run fail: the command finished and
+ * set its own code, the bytes nobody wanted are dropped, and `| head` behaves as it does for every
+ * other tool. Any other write error means output the caller asked for was lost, so the run could
+ * not do its job. Returns the code to set, or null to leave the command's own. */
+export function outputErrorExitCode(error: unknown): number | null {
+  return errnoCode(error) === "EPIPE" ? null : EXIT_CANNOT_RUN;
 }

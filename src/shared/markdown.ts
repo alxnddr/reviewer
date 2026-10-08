@@ -54,8 +54,15 @@ export type ReferenceSpan = { side: ReviewSide; startLine: number; endLine: numb
 
 /** A reference: a link whose target is a path, so it names a file rather than the web —
  * and, with a suffix, one range inside that file. `span: null` is the whole file, which is
- * what every reference was before the suffix existed. */
-export type FileReference = { label: string; path: string; span: ReferenceSpan | null };
+ * what every reference was before the suffix existed. `url` is the target as its author wrote
+ * it, suffix and all (`src/a.ts:12-14@deletions`): a report that refuses a reference quotes
+ * what is to be fixed, and `path` alone would quote a link the author never wrote. */
+export type FileReference = {
+  label: string;
+  url: string;
+  path: string;
+  span: ReferenceSpan | null;
+};
 
 /** What the app reads a link target as. Three answers, because a link can fail in a way
  * that is neither the web nor a file: `malformed` is a schemeless target that reached for
@@ -171,7 +178,12 @@ export function proseReferences(text: string): {
         malformed.push({ label: node.label ?? node.identifier, url: node.url, why: "definition" });
       }
     } else if (target.kind === "reference") {
-      references.push({ label: toString(node), path: target.path, span: target.span });
+      references.push({
+        label: toString(node),
+        url: node.url,
+        path: target.path,
+        span: target.span,
+      });
     } else if (target.kind === "malformed") {
       malformed.push({ label: toString(node), url: node.url, why: "suffix" });
     }
@@ -219,6 +231,7 @@ export function placedReferences(text: string): PlacedReference[] {
     const last = node.children.at(-1)?.position?.end.offset;
     placed.push({
       label: toString(node),
+      url: node.url,
       path: target.path,
       span: target.span,
       start,

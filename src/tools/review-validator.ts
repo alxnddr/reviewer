@@ -72,9 +72,13 @@ export type ValidationProblem =
    * is not in the diff at all, which is a different fix from moving the lines. */
   | { kind: "commentAnchorOutdated"; anchor: AnchorSpan; nearestHunks: PlaceableSpan[] }
   | { kind: "commentFileAbsent"; anchor: AnchorSpan }
+  /** `range` is the range's 1-based position in that layer's own `ranges` — the ordinal
+   * names the layer, and a layer of five ranges on one file would otherwise leave the author
+   * matching line numbers to find which one to move. */
   | {
       kind: "layerRangeOutdated";
       layer: string;
+      range: number;
       anchor: AnchorSpan;
       nearestHunks: PlaceableSpan[] | null;
     }
@@ -85,8 +89,9 @@ export type ValidationProblem =
   | { kind: "nestingTooDeep"; layer: string; depth: number }
   | { kind: "layerWalksNothing"; layer: string }
   /** A reference naming a file this diff does not carry: the app renders it muted and
-   * dead, so the gate refuses it. */
-  | { kind: "unresolvedLink"; site: ProseSite; label: string; path: string }
+   * dead, so the gate refuses it. `url` is the target as written, line suffix included, so the
+   * report quotes the link the author has to find; `path` is the file it named. */
+  | { kind: "unresolvedLink"; site: ProseSite; label: string; url: string; path: string }
   /** A reference whose *line* range no hunk covers. The file is here; the lines are not —
    * a distinct fix from the above, and the one thing no interchange format's "related
    * location" is: a second place in the change, proven to exist in it. */
@@ -282,13 +287,14 @@ export function validatePlacement(artifact: ReviewArtifact, patch: string): Vali
   for (const { layer, ordinal } of walkLayerInputs(artifact.layers)) {
     // Empty `ranges` is a valid parent rollup, not a "nothing
     // placed" failure: the loop simply has no range to check.
-    for (const range of layer.ranges) {
+    for (const [index, range] of layer.ranges.entries()) {
       const file = byPath.get(range.file) ?? null;
       const resolution = resolveAnchor(range, { kind: "derived", file: file?.fileDiff ?? null });
       if (resolution.status === "outdated") {
         problems.push({
           kind: "layerRangeOutdated",
           layer: ordinal,
+          range: index + 1,
           anchor: pickAnchor(range),
           nearestHunks: file === null ? null : nearestHunks(file, range),
         });
@@ -345,6 +351,7 @@ function collectReferenceProblems(
         kind: "unresolvedLink",
         site,
         label: reference.label,
+        url: reference.url,
         path: reference.path,
       });
       continue;
@@ -415,13 +422,13 @@ export function describeProblem(problem: ValidationProblem): string {
     case "commentFileAbsent":
       return `comment references a file absent from the diff: ${locator(problem.anchor)}`;
     case "layerRangeOutdated":
-      return `layer ${problem.layer} range does not place in the diff: ${locator(problem.anchor)}${hunkHint(problem.nearestHunks)}`;
+      return `layer ${problem.layer}, range ${problem.range} does not place in the diff: ${locator(problem.anchor)}${hunkHint(problem.nearestHunks)}`;
     case "nestingTooDeep":
       return `layer ${problem.layer} is ${problem.depth} levels deep — nesting stops at ${MAX_LAYER_DEPTH}`;
     case "layerWalksNothing":
       return `layer ${problem.layer} walks no code: it has no ranges, and nothing under it has any`;
     case "unresolvedLink":
-      return `${proseAt(problem.site)} links [${problem.label}](${problem.path}) — path is not in the diff`;
+      return `${proseAt(problem.site)} links [${problem.label}](${problem.url}) — ${problem.path} is not in the diff`;
     case "referenceOutdated":
       return `${proseAt(problem.site)} references a line range that does not place in the diff: ${locator(problem.anchor)}${hunkHint(problem.nearestHunks)}`;
     case "malformedReference":

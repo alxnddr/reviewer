@@ -2,9 +2,26 @@ import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { buildCommand } from "@stricli/core";
 import { errorMessage } from "../../src/shared/errors";
-import { emitReviewArtifact, postableGap, postableGapLine } from "../../src/tools/review-emit";
+import {
+  emitReviewArtifact,
+  postableGap,
+  postableGapLine,
+  unlinkedPostableLine,
+} from "../../src/tools/review-emit";
 import { pullRequestUrl, type PullRequest } from "../../src/shared/pull-request";
 import { describeProblem, type ValidationProblem } from "../../src/tools/review-validator";
+import {
+  coverageOfPatch,
+  layerExtentsOf,
+  type CoverageReport,
+} from "../../src/tools/review-coverage";
+import type { ReviewArtifact } from "../../src/shared/review";
+import {
+  emitCoverageLines,
+  emitCoverageSummary,
+  type EmitCoverageSummary,
+} from "../coverage-report";
+import { unknownDraftKeys, withoutDuplicates } from "../draft-keys";
 import { capturePatch } from "../git";
 import { launchReviewer } from "../launch";
 import { resolveRange, type ResolvedRange } from "../range";
@@ -43,7 +60,16 @@ import { writeCannotRun, writeJson, type CliError } from "../errors";
 // comments carry no `postable`, the text the reader would post to the PR. That count is never
 // a problem and never moves the exit code — a reader may not mean to post every finding — so
 // it rides stdout with the other lines that describe what was written, and under `--json` it
-// is a field of the success document rather than prose beside it.
+// is a field of the success document rather than prose beside it. Without `--pr` the line
+// turns round: comments that *do* carry `postable` on a review naming no pull request are
+// counted, because the app links and posts that text only for the pull request `--pr` records,
+// and an agent that wrote it for a PR and forgot the flag otherwise hears about it from nobody.
+//
+// The draft is held to its keys before the gate runs (`cli/draft-keys.ts`): a key the review has
+// no place for — a misspelt `"layer"`, a comment's `"suggestion"` — is a review problem located
+// like any other, never a silent drop. And a clean write of a review with layers says how much
+// of the diff those layers cover (`cli/coverage-report.ts`), because emit is the last moment the
+// author can still close a gap. Informational, like the postable count: it never moves the exit.
 //
 // Exit 2 = the shell could not run (bad flags, unresolvable ref, git failure, unreadable or
 // empty draft, unwritable out); exit 1 = it ran and the gate refused (nothing written, each
@@ -60,6 +86,9 @@ type EmitOutcome =
       readonly out: string;
       readonly repo: string;
       readonly base: string;
+      /** The ref a defaulted `base` is the fork point with (`origin/main`); null when `--base`
+       * was given. `base` itself is the sha either way. */
+      readonly baseFrom: string | null;
       readonly head: string;
       readonly opened: boolean;
       /** Whether the diff rode along, so a CI job can assert it got the portable form
@@ -71,6 +100,13 @@ type EmitOutcome =
       /** How many comments carry no `postable` — counted only for a review of a pull
        * request, where that text is what the reader would post; null without `--pr`. */
       readonly withoutPostable: number | null;
+      /** How many comments carry `postable` on a review with no `--pr` — text for an author the
+       * app cannot link to or post anywhere; null with `--pr`, where `withoutPostable` reports
+       * the opposite gap instead. */
+      readonly postableWithoutPr: number | null;
+      /** How much of the diff the layers cover, and which files have a gap; null for a review
+       * with no layers, which has no coverage story to tell. */
+      readonly coverage: EmitCoverageSummary | null;
     }
   | { readonly ok: false; readonly problems: readonly ValidationProblem[] };
 
@@ -90,7 +126,8 @@ type EmitFlags = {
  * itself, so a draft that carries them is carrying decisions it does not own. All three stay
  * `unknown` — untrusted hand-authored content the single `emitReviewArtifact` authority
  * schema-checks (parse-don't-trust); a shape check here would be a drifting duplicate of
- * `ReviewArtifact`. */
+ * `ReviewArtifact`. `keyProblems` is the one check that *is* here, because it is about what the
+ * schema deliberately lets through (`cli/draft-keys.ts`). */
 type EmitDraft = { comments?: unknown; layers?: unknown; overview?: unknown };
 
 /** stdin as a draft source, spelled the way every other tool spells it. Also the value
@@ -99,7 +136,8 @@ const STDIN = "-";
 
 export const emitCommand = buildCommand<EmitFlags, [], LocalContext>({
   docs: {
-    brief: "Present a review: gate the draft against the range's diff, write it, open it",
+    brief:
+      "Present a review: gate the draft against the range's diff, write it, open it (--no-open to only write)",
     fullDescription: [
       "Resolves the range (each of --repo/--base/--head defaults to the repo you are standing",
       "in), captures its byte-stable patch, folds in the draft's overview/comments/layers, and",
@@ -121,8 +159,16 @@ export const emitCommand = buildCommand<EmitFlags, [], LocalContext>({
       "fork workflow (origin is your fork) pass owner/repo#123 or the URL instead.",
       "--out is optional and must end .reviewer.json; without it the artifact lands in rvw's",
       "managed reviews dir (~/.rvw/reviews, or $RVW_HOME/reviews) rather than the repo.",
+      "The default range is committed history only: head is the checked-out branch, and base is",
+      "its fork point with the branch's upstream — skipped when that is the branch's own pushed",
+      "copy (origin/<branch>) — else with the default branch (origin/HEAD, main, master). The ref",
+      "it was measured from is echoed (baseFrom under --json). To review against what you",
+      "reviewed against, pass --base. Uncommitted edits are never in the range.",
+      'A key the draft has no place for (a typo like "layer", an extra comment field) is refused.',
+      "With layers, a clean write also reports which changed lines no layer covers.",
       "Exit 0 when written (even if the launch failed — the file is real either way); 1 when the",
       "gate refused, nothing written and each problem located; 2 when the shell could not run.",
+      "What to write in the draft: `rvw skills present-review` prints the authoring guide's path.",
     ].join("\n"),
     customUsage: [
       "< draft.json",
@@ -138,18 +184,22 @@ export const emitCommand = buildCommand<EmitFlags, [], LocalContext>({
     flags: {
       repo: {
         kind: "parsed",
+        placeholder: "path",
         parse: String,
         brief: "Path to the target git repo; default the cwd's work-tree toplevel",
         optional: true,
       },
       base: {
         kind: "parsed",
+        placeholder: "ref",
         parse: String,
-        brief: "Range base — a branch where one fits (recorded as written); default the fork point",
+        brief:
+          "Range base — a branch where one fits (recorded as written); default the fork point (echoed)",
         optional: true,
       },
       head: {
         kind: "parsed",
+        placeholder: "ref",
         parse: String,
         brief:
           "Range head — a branch where one fits (recorded as written); default the branch you are on",
@@ -157,12 +207,14 @@ export const emitCommand = buildCommand<EmitFlags, [], LocalContext>({
       },
       draft: {
         kind: "parsed",
+        placeholder: "file",
         parse: String,
         brief: "Draft JSON ({ overview?, comments?, layers? }); default stdin, `-` for stdin",
         optional: true,
       },
       out: {
         kind: "parsed",
+        placeholder: "file",
         parse: String,
         brief:
           "Where to write the artifact (must end .reviewer.json); default ~/.rvw/reviews/<derived>",
@@ -180,6 +232,7 @@ export const emitCommand = buildCommand<EmitFlags, [], LocalContext>({
       },
       pr: {
         kind: "parsed",
+        placeholder: "pull-request",
         // Read in the body rather than by a throwing `parse`, so a bad value is a cannot-run
         // with a `badPullRequest` code (and a `--json` envelope) like every other refusal.
         parse: String,
@@ -229,7 +282,7 @@ export const emitCommand = buildCommand<EmitFlags, [], LocalContext>({
       writeCannotRun(this, flags.json, resolved.error);
       return;
     }
-    const { repoPath, base, head, headSha } = resolved.range;
+    const { repoPath, base, head, headSha, baseFrom } = resolved.range;
 
     const prResolved = prArg === null ? null : resolvePullRequest(this.env, repoPath, prArg.arg);
     if (prResolved !== null && !prResolved.ok) {
@@ -259,18 +312,21 @@ export const emitCommand = buildCommand<EmitFlags, [], LocalContext>({
       overview: draft.content.overview,
     });
 
-    if (!result.ok) {
+    const problems = result.ok
+      ? [...draft.keyProblems]
+      : withoutDuplicates(draft.keyProblems, result.problems);
+    if (!result.ok || problems.length > 0) {
       if (flags.json === true) {
-        const outcome: EmitOutcome = { ok: false, problems: result.problems };
+        const outcome: EmitOutcome = { ok: false, problems };
         writeJson(this, outcome);
       } else {
         // Name the *draft*. The output path is not a candidate here — nothing was written, and
         // an earlier version of this message printed a timestamped path that never existed,
         // sending the agent to look for a file no run had ever created.
         this.process.stderr.write(
-          `${draft.label} refused: ${result.problems.length} problem(s) — nothing written\n`,
+          `${draft.label} refused: ${problems.length} problem(s) — nothing written\n`,
         );
-        for (const problem of result.problems) {
+        for (const problem of problems) {
           this.process.stderr.write(`  - ${describeProblem(problem)}\n`);
         }
       }
@@ -310,6 +366,8 @@ export const emitCommand = buildCommand<EmitFlags, [], LocalContext>({
     // refs-only file it was asked not to. Report what was written, never what was requested.
     const embedded = flags.embedPatch === true && capture.patch.length > 0;
     const gap = pr === null ? null : postableGap(result.artifact);
+    const unlinked = pr === null ? postableGap(result.artifact) : null;
+    const coverage = layerCoverage(result.artifact.layers, capture.patch);
 
     if (flags.json === true) {
       const outcome: EmitOutcome = {
@@ -317,17 +375,25 @@ export const emitCommand = buildCommand<EmitFlags, [], LocalContext>({
         out,
         repo: repoPath,
         base,
+        baseFrom,
         head,
         opened,
         embedded,
         pr,
         withoutPostable: gap === null ? null : gap.missing,
+        postableWithoutPr: unlinked === null ? null : unlinked.total - unlinked.missing,
+        coverage: coverage === null ? null : emitCoverageSummary(coverage),
       };
       writeJson(this, outcome);
     } else {
       // The range first: it is the one thing this command may have decided on the caller's
       // behalf, so a defaulted `--base` is never a surprise discovered later in the app.
       this.process.stdout.write(`${repoPath}: ${base}...${head}\n`);
+      if (baseFrom !== null) {
+        this.process.stdout.write(
+          `base: the fork point with ${baseFrom} — pass --base to review against another ref\n`,
+        );
+      }
       if (pr !== null) {
         this.process.stdout.write(`pull request: ${pullRequestUrl(pr)}\n`);
       }
@@ -338,6 +404,15 @@ export const emitCommand = buildCommand<EmitFlags, [], LocalContext>({
       if (gap !== null && gap.missing > 0) {
         this.process.stdout.write(`${postableGapLine(gap)}\n`);
       }
+      const unlinkedLine = unlinked === null ? null : unlinkedPostableLine(unlinked);
+      if (unlinkedLine !== null) {
+        this.process.stdout.write(`${unlinkedLine}\n`);
+      }
+      if (coverage !== null) {
+        for (const line of emitCoverageLines(coverage)) {
+          this.process.stdout.write(`${line}\n`);
+        }
+      }
       if (opened) {
         this.process.stdout.write(`opening ${out} in Reviewer\n`);
       }
@@ -345,6 +420,17 @@ export const emitCommand = buildCommand<EmitFlags, [], LocalContext>({
     this.process.exitCode = EXIT_READY;
   },
 });
+
+/** The layers' coverage of the captured diff, or null for a review with no layers — which has
+ * no walkthrough to be incomplete — and for a patch coverage cannot read, which the gate has
+ * already refused as `missingPatch` by the time a clean write reaches here. */
+function layerCoverage(layers: ReviewArtifact["layers"], patch: string): CoverageReport | null {
+  if (layers.length === 0) {
+    return null;
+  }
+  const scored = coverageOfPatch(patch, layerExtentsOf(layers));
+  return scored.ok ? scored.report : null;
+}
 
 /** Where the artifact lands: the given `--out`, or a unique name in rvw's managed reviews dir
  * when none was given. Resolved absolute — against the caller's cwd, the same directory their
@@ -372,7 +458,14 @@ export function outPathFor(
 /** A draft that parsed, with the label an error message should call it by — the file's path,
  * or `stdin`, so a refusal names what the caller actually handed over. */
 type DraftRead =
-  | { readonly ok: true; readonly label: string; readonly content: EmitDraft }
+  | {
+      readonly ok: true;
+      readonly label: string;
+      readonly content: EmitDraft;
+      /** Keys the draft carries that the review has no place for, reported with the gate's
+       * problems rather than on their own: an author fixing a draft wants every reason at once. */
+      readonly keyProblems: readonly ValidationProblem[];
+    }
   | { readonly ok: false; readonly error: CliError };
 
 type DraftBytes =
@@ -438,15 +531,21 @@ function readDraft(context: LocalContext, source: string | undefined): DraftRead
     );
   }
 
-  const { comments, layers, overview } = json as EmitDraft;
+  const record = json as Record<string, unknown>;
+  const { comments, layers, overview } = record as EmitDraft;
   if (comments === undefined && layers === undefined && overview === undefined) {
     return {
       ok: false,
       error: {
         code: "draftEmpty",
-        message: `draft ${label} presents nothing: it needs an "overview", "comments", or "layers" (see \`rvw schema\`)`,
+        message: `draft ${label} presents nothing: it needs an "overview", "comments", or "layers" — \`rvw skills present-review\` prints the authoring guide's path`,
       },
     };
   }
-  return { ok: true, label: `draft ${label}`, content: { comments, layers, overview } };
+  return {
+    ok: true,
+    label: `draft ${label}`,
+    content: { comments, layers, overview },
+    keyProblems: unknownDraftKeys(record),
+  };
 }

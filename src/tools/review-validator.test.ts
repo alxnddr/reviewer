@@ -190,8 +190,25 @@ describe("parseReviewArtifact + validatePlacement", () => {
         kind: "unresolvedLink",
         site: { at: "layer", layer: "1.1" },
         label: "ghost",
+        url: "does/not/exist.ts",
         path: "does/not/exist.ts",
       },
+    ]);
+  });
+
+  it("quotes a dead reference as written, line suffix and side included", () => {
+    const artifact = validArtifact({
+      overview: {
+        title: "Tour",
+        body: "See [x](readme.md:250) and [y](src/gone.ts:3-4@deletions).",
+      },
+    });
+    const report = validate(JSON.stringify(artifact));
+    expect(report.ok).toBe(false);
+    if (report.ok) return;
+    expect(report.problems.map(describeProblem)).toEqual([
+      "overview body links [x](readme.md:250) — readme.md is not in the diff",
+      "overview body links [y](src/gone.ts:3-4@deletions) — src/gone.ts is not in the diff",
     ]);
   });
 
@@ -209,7 +226,13 @@ describe("parseReviewArtifact + validatePlacement", () => {
     // Only the unresolved one is a problem: the link that names a file in the diff
     // renders as a live chip and passes.
     expect(report.problems).toEqual([
-      { kind: "unresolvedLink", site: { at: "overview" }, label: "nowhere", path: "src/gone.ts" },
+      {
+        kind: "unresolvedLink",
+        site: { at: "overview" },
+        label: "nowhere",
+        url: "src/gone.ts",
+        path: "src/gone.ts",
+      },
     ]);
   });
 
@@ -355,7 +378,7 @@ describe("parseReviewArtifact + validatePlacement", () => {
     const site = { at: "comment", anchor };
     expect(report.problems).toEqual([
       { kind: "malformedReference", site, label: "typo", url: "src/foo.ts:x", why: "suffix" },
-      { kind: "unresolvedLink", site, label: "nowhere", path: "src/gone.ts" },
+      { kind: "unresolvedLink", site, label: "nowhere", url: "src/gone.ts", path: "src/gone.ts" },
       {
         kind: "referenceOutdated",
         site,
@@ -365,7 +388,7 @@ describe("parseReviewArtifact + validatePlacement", () => {
     ]);
     expect(report.problems.map(describeProblem)).toEqual([
       "postable of the comment at src/foo.ts additions 11-13 links [typo](src/foo.ts:x) — a line reference reads path:12, path:12-20 or path:12-20@deletions",
-      "postable of the comment at src/foo.ts additions 11-13 links [nowhere](src/gone.ts) — path is not in the diff",
+      "postable of the comment at src/foo.ts additions 11-13 links [nowhere](src/gone.ts) — src/gone.ts is not in the diff",
       "postable of the comment at src/foo.ts additions 11-13 references a line range that does not place in the diff: src/foo.ts additions 50-50 — it must sit inside one hunk; nearest on that side: 10-14",
     ]);
   });
@@ -412,12 +435,14 @@ describe("parseReviewArtifact + validatePlacement", () => {
     expect(report.problems).toContainEqual({
       kind: "layerRangeOutdated",
       layer: "1",
+      range: 1,
       anchor: { file: "src/foo.ts", side: "additions", startLine: 90, endLine: 90 },
       nearestHunks: [{ startLine: 10, endLine: 14 }],
     });
     expect(report.problems).toContainEqual({
       kind: "layerRangeOutdated",
       layer: "2",
+      range: 1,
       anchor: { file: "src/gone.ts", side: "additions", startLine: 1, endLine: 1 },
       nearestHunks: null,
     });
@@ -453,6 +478,7 @@ describe("parseReviewArtifact + validatePlacement", () => {
       {
         kind: "layerRangeOutdated",
         layer: "2.2",
+        range: 1,
         anchor: { file: "src/foo.ts", side: "additions", startLine: 90, endLine: 90 },
         nearestHunks: [{ startLine: 10, endLine: 14 }],
       },
@@ -516,8 +542,8 @@ describe("parseReviewArtifact + validatePlacement", () => {
     expect(report.ok).toBe(false);
     if (report.ok) return;
     expect(report.problems.map(describeProblem)).toEqual([
-      "layer 1 range does not place in the diff: doomed.txt additions 1-1 — that file has no hunk on that side",
-      "layer 1 range does not place in the diff: never.txt additions 1-1 — that file is not in the diff",
+      "layer 1, range 1 does not place in the diff: doomed.txt additions 1-1 — that file has no hunk on that side",
+      "layer 1, range 2 does not place in the diff: never.txt additions 1-1 — that file is not in the diff",
     ]);
   });
 

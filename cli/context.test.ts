@@ -4,7 +4,7 @@ import { join } from "node:path";
 import type { StricliProcess } from "@stricli/core";
 import { afterAll, describe, expect, it } from "vitest";
 import { outPathFor } from "./commands/emit";
-import { buildContext } from "./context";
+import { buildContext, EXIT_CANNOT_RUN, outputErrorExitCode } from "./context";
 import { runCli, testContext } from "./fixtures";
 
 // The process seams, proven one at a time and without a repo. Everything here used to require
@@ -97,7 +97,13 @@ describe("the cwd a range defaults from", () => {
 });
 
 describe("where an --out-less artifact lands", () => {
-  const range = { repoPath: "/work/repo", base: "main", head: "feature", headSha: "a".repeat(40) };
+  const range = {
+    repoPath: "/work/repo",
+    base: "main",
+    head: "feature",
+    headSha: "a".repeat(40),
+    baseFrom: null,
+  };
 
   it("hangs the default under the context's home, never the developer's", () => {
     const context = testContext({} as StricliProcess, { env: {}, home: "/home/agent" });
@@ -240,5 +246,20 @@ describe("the draft on stdin", () => {
     // Past the draft, refused at the range: the cwd is not a repo (see NOWHERE).
     expect(result.code).toBe(2);
     expect(JSON.parse(result.stdout)).toMatchObject({ ok: false, error: { code: "gitFailed" } });
+  });
+});
+
+describe("a failed write to stdout or stderr", () => {
+  function errno(code: string): Error {
+    return Object.assign(new Error(code), { code });
+  }
+
+  it("leaves the command's exit code alone when the reader went away (EPIPE)", () => {
+    expect(outputErrorExitCode(errno("EPIPE"))).toBeNull();
+  });
+
+  it("is a cannot-run for any other lost output", () => {
+    expect(outputErrorExitCode(errno("EIO"))).toBe(EXIT_CANNOT_RUN);
+    expect(outputErrorExitCode(new Error("no code"))).toBe(EXIT_CANNOT_RUN);
   });
 });

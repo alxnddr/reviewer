@@ -17,13 +17,22 @@ import { writeCannotRun, writeJson } from "../errors";
 // from it. Here the two cannot drift: this verb captures through the same `capturePatch` the
 // gate does and writes the bytes out unchanged.
 //
-// `--json` answers the other question an author has, in the machine form: per file and per
-// side, the contiguous changed spans, with the files that carry no anchorable line named as
-// such. Note that placement is *more* permissive than that listing — a line inside a hunk's
-// context places too — so the spans are where the change is, not the boundary of what is legal.
+// `--json` answers the other two questions an author has, in the machine form: per file and
+// per side, the contiguous changed spans (where the change is — what layers must cover) and the
+// hunk extents (where an anchor is legal — context lines included, so the only place a
+// `pre-existing` finding can be pinned), with the files that carry no anchorable line named as
+// such. The extents came second: an author used to learn a hunk's boundary from the refusal's
+// "nearest on that side", which meant failing once to find out where it could have succeeded.
 //
 // Read-only: nothing is written (that is `rvw emit`), and the range flags default exactly as
 // `emit`'s do, so what you read here is what you are about to author against.
+//
+// A defaulted base is the one decision made here on the caller's behalf, and it used to be
+// invisible: the patch carries no header, and on a pushed branch the base it picked could make
+// the range a fraction of the work, or nothing. So the ref it was measured from is said — on
+// **stderr**, in both modes, because stdout is a patch (or, under `--json`, a bare array an
+// older consumer already parses) and must stay pipeable. Said only when the base was defaulted:
+// a caller who named `--base` already knows.
 
 type DiffFlags = {
   readonly repo?: string;
@@ -39,11 +48,14 @@ export const diffCommand = buildCommand<DiffFlags, [], LocalContext>({
       "Writes the byte-stable patch for base...head to stdout, verbatim: the same capture `rvw",
       "emit` gates against and the app re-derives on open, so an anchor authored from this diff",
       "places. Each of --repo/--base/--head defaults to the repo you are standing in, exactly as",
-      "`rvw emit` resolves them. --json instead prints the changed-line universe: per file and",
-      "per side, the contiguous changed spans, with binaries and pure renames named",
-      "non-coverable. (An anchor may also land on a context line inside a hunk, so those spans",
-      "are where the change is, not the limit of what places.) Exit 0 on a captured range; 2",
-      "when the range cannot be resolved or git cannot produce the diff.",
+      "`rvw emit` resolves them: committed history only, the base the fork point with the",
+      "branch's upstream (unless that is its own pushed copy) or the default branch; the ref it",
+      "was measured from is named on stderr. --json instead prints, per file, `spans`: the",
+      "contiguous changed lines per side, which layers must cover; and `hunks`: each hunk's",
+      "extent per side, context lines included, which is where an anchor may sit (inside one",
+      "hunk, never across two). Binaries and pure renames are named non-coverable, with no",
+      "hunks. Exit 0 on a captured range; 2 when the range cannot be resolved or git cannot",
+      "produce the diff.",
     ].join("\n"),
     customUsage: ["", "--json", "--base main", "--repo . --base main --head feature --json"],
   },
@@ -51,25 +63,28 @@ export const diffCommand = buildCommand<DiffFlags, [], LocalContext>({
     flags: {
       repo: {
         kind: "parsed",
+        placeholder: "path",
         parse: String,
         brief: "Path to the target git repo; default the cwd's work-tree toplevel",
         optional: true,
       },
       base: {
         kind: "parsed",
+        placeholder: "ref",
         parse: String,
-        brief: "Range base — any revision git resolves; default the fork point",
+        brief: "Range base — any revision git resolves; default the fork point (named on stderr)",
         optional: true,
       },
       head: {
         kind: "parsed",
+        placeholder: "ref",
         parse: String,
         brief: "Range head — any revision git resolves; default the current branch",
         optional: true,
       },
       json: {
         kind: "boolean",
-        brief: "Emit the changed-line universe as JSON instead of the patch",
+        brief: "Print per file the changed spans and hunk extents as JSON instead of the patch",
         optional: true,
       },
     },
@@ -81,12 +96,18 @@ export const diffCommand = buildCommand<DiffFlags, [], LocalContext>({
       writeCannotRun(this, flags.json, resolved.error);
       return;
     }
-    const { repoPath, base, head } = resolved.range;
+    const { repoPath, base, head, baseFrom } = resolved.range;
 
     const capture = capturePatch(this.env, repoPath, base, head);
     if (!capture.ok) {
       writeCannotRun(this, flags.json, { code: "gitFailed", message: capture.message });
       return;
+    }
+
+    if (baseFrom !== null) {
+      this.process.stderr.write(
+        `rvw diff: ${base}...${head} — base is the fork point with ${baseFrom}; pass --base to change it\n`,
+      );
     }
 
     if (flags.json === true) {

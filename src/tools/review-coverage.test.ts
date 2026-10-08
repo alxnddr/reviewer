@@ -1,6 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
 import type { ReviewAnchor, ReviewArtifact, ReviewLayerInput } from "../shared/review";
 import { ONE_HUNK_PATCH } from "../shared/diff/fixtures";
+import { resolveAnchor } from "../shared/diff/anchor";
+import { ANALYSIS_CACHE_KEY, parsePatch } from "../shared/diff/patch";
 import {
   changedLineUniverse,
   coverageOfPatch,
@@ -355,14 +357,37 @@ describe("changedLineUniverse", () => {
           { side: "deletions", startLine: 11, endLine: 11 },
           { side: "additions", startLine: 11, endLine: 13 },
         ],
+        hunks: [
+          { side: "deletions", startLine: 8, endLine: 14 },
+          { side: "additions", startLine: 8, endLine: 16 },
+        ],
       },
       {
         file: "src/bar.ts",
         status: "modified",
         coverable: true,
         spans: [{ side: "additions", startLine: 5, endLine: 8 }],
+        hunks: [
+          { side: "deletions", startLine: 4, endLine: 4 },
+          { side: "additions", startLine: 4, endLine: 8 },
+        ],
       },
     ]);
+  });
+
+  it("lists hunk extents an anchor places anywhere inside, and nowhere past", () => {
+    // The by-construction claim, checked through the placement the gate itself runs: every
+    // listed extent places whole, context lines included, and one line past it does not.
+    const files = parsePatch(patch(ONE_HUNK_PATCH, BAR_HUNK), ANALYSIS_CACHE_KEY);
+    for (const entry of changedLineUniverse(patch(ONE_HUNK_PATCH, BAR_HUNK))) {
+      const fileDiff = files.find((file) => file.path === entry.file)?.fileDiff ?? null;
+      for (const hunk of entry.hunks) {
+        const inside = { file: entry.file, ...hunk };
+        const past = { ...inside, endLine: hunk.endLine + 1 };
+        expect(resolveAnchor(inside, { kind: "derived", file: fileDiff }).status).toBe("placed");
+        expect(resolveAnchor(past, { kind: "derived", file: fileDiff }).status).toBe("outdated");
+      }
+    }
   });
 
   it("lists a binary and a pure rename non-coverable, with no spans to anchor into", () => {
@@ -378,8 +403,8 @@ describe("changedLineUniverse", () => {
       "rename to new.ts",
     ];
     expect(changedLineUniverse(patch(binary, rename))).toEqual([
-      { file: "logo.png", status: "modified", coverable: false, reason: "binary" },
-      { file: "new.ts", status: "renamed", coverable: false, reason: "pureRename" },
+      { file: "logo.png", status: "modified", coverable: false, reason: "binary", hunks: [] },
+      { file: "new.ts", status: "renamed", coverable: false, reason: "pureRename", hunks: [] },
     ]);
   });
 

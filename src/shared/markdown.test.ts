@@ -95,8 +95,8 @@ describe("readLinkTarget", () => {
 describe("proseReferences", () => {
   it("collects path links with their label, in document order", () => {
     expect(proseReferences("see [the entry](src/a.ts) and [b](src/b.ts)").references).toEqual([
-      { label: "the entry", path: "src/a.ts", span: null },
-      { label: "b", path: "src/b.ts", span: null },
+      { label: "the entry", url: "src/a.ts", path: "src/a.ts", span: null },
+      { label: "b", url: "src/b.ts", path: "src/b.ts", span: null },
     ]);
   });
 
@@ -104,6 +104,7 @@ describe("proseReferences", () => {
     expect(proseReferences("the [caller](src/b.ts:40-44) never awaits it").references).toEqual([
       {
         label: "caller",
+        url: "src/b.ts:40-44",
         path: "src/b.ts",
         span: { side: "additions", startLine: 40, endLine: 44 },
       },
@@ -155,7 +156,7 @@ describe("proseReferences", () => {
 
   it("takes the label from the link's own text, markers and all stripped", () => {
     expect(proseReferences("[the **entry** `point`](src/a.ts)").references).toEqual([
-      { label: "the entry point", path: "src/a.ts", span: null },
+      { label: "the entry point", url: "src/a.ts", path: "src/a.ts", span: null },
     ]);
   });
 });

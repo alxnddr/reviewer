@@ -35,7 +35,14 @@ export const skillsCommand = buildCommand<SkillsFlags, [string | undefined], Loc
     },
     positional: {
       kind: "tuple",
-      parameters: [{ brief: "Name of one skill to locate", parse: String, optional: true }],
+      parameters: [
+        {
+          brief: "Name of one skill to locate",
+          parse: String,
+          optional: true,
+          placeholder: "skill",
+        },
+      ],
     },
   },
   func(this: LocalContext, flags: SkillsFlags, name: string | undefined): void {

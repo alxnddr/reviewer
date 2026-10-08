@@ -2,7 +2,13 @@ import { describe, expect, it } from "vitest";
 import { ReviewArtifact } from "../shared/review";
 import { TWO_FILE_PATCH } from "../shared/diff/fixtures";
 import { parseReviewArtifact, validatePlacement } from "./review-validator";
-import { emitReviewArtifact, postableGap, postableGapLine, type EmitInput } from "./review-emit";
+import {
+  emitReviewArtifact,
+  postableGap,
+  postableGapLine,
+  unlinkedPostableLine,
+  type EmitInput,
+} from "./review-emit";
 
 const COMMENTS = [
   { file: "src/foo.ts", side: "additions", startLine: 11, endLine: 13, body: "why" },
@@ -201,6 +207,7 @@ describe("emitReviewArtifact", () => {
       kind: "unresolvedLink",
       site: { at: "layer", layer: "1" },
       label: "ghost",
+      url: "does/not/exist.ts",
       path: "does/not/exist.ts",
     });
   });
@@ -313,5 +320,21 @@ describe("postableGapLine", () => {
     expect(postableGapLine({ missing: 3, total: 7 })).toBe("3 of 7 comments have no postable text");
     expect(postableGapLine({ missing: 1, total: 7 })).toBe("1 of 7 comments has no postable text");
     expect(postableGapLine({ missing: 1, total: 1 })).toBe("1 of 1 comment has no postable text");
+  });
+});
+
+describe("unlinkedPostableLine", () => {
+  it("counts the comments that do carry postable text, the verb agreeing with that count", () => {
+    expect(unlinkedPostableLine({ missing: 1, total: 3 })).toBe(
+      "2 of 3 comments have postable text, but no --pr names the pull request — pass --pr so the app can link and post it",
+    );
+    expect(unlinkedPostableLine({ missing: 2, total: 3 })).toMatch(
+      /^1 of 3 comments has postable/u,
+    );
+  });
+
+  it("says nothing when no comment carries any", () => {
+    expect(unlinkedPostableLine({ missing: 3, total: 3 })).toBeNull();
+    expect(unlinkedPostableLine({ missing: 0, total: 0 })).toBeNull();
   });
 });

@@ -12,7 +12,7 @@ import {
   type FileChangeStatus,
   type PatchFile,
 } from "../shared/diff/patch";
-import { walkFileLines } from "../shared/diff/walk";
+import { hunkSpan, walkFileLines } from "../shared/diff/walk";
 
 // Do the ordered layers cover the whole diff? The universe is every *changed* line of the
 // range's diff — additions in new-file coordinates, deletions in old-file coordinates, context
@@ -187,13 +187,34 @@ export function coverageOfFiles(
  * against, so an authored anchor targets a real span, not a guessed line number. */
 export type ChangedSpan = LineSpan & { side: ReviewSide };
 
+/** One hunk's extent on one side — the span an anchor may sit anywhere inside, context lines
+ * included. The other half of what an author needs from `rvw diff --json`: `spans` say where
+ * the change is (what a layer must cover), `hunks` say where an anchor is *legal* (what a
+ * comment, a range or a line reference must sit inside, and the only place a `pre-existing`
+ * finding can be pinned). Without them the boundary was learned by failing — the refusal's
+ * "nearest on that side" was the first place it was printed. */
+export type HunkExtent = LineSpan & { side: ReviewSide };
+
 /** One file's place in the changed-line universe: either the contiguous changed spans an
  * anchor may fall in, or an honest non-coverable reason (a binary/pure-rename carries no
  * lines to anchor). `status` is the file's A/M/D/R change so the listing reads like the
- * diff tree. */
+ * diff tree. `hunks` is on both arms so every entry has the same answer to "where may I
+ * anchor": a non-coverable file's is simply empty. */
 export type FileUniverse =
-  | { file: string; status: FileChangeStatus; coverable: false; reason: NonCoverableReason }
-  | { file: string; status: FileChangeStatus; coverable: true; spans: ChangedSpan[] };
+  | {
+      file: string;
+      status: FileChangeStatus;
+      coverable: false;
+      reason: NonCoverableReason;
+      hunks: HunkExtent[];
+    }
+  | {
+      file: string;
+      status: FileChangeStatus;
+      coverable: true;
+      spans: ChangedSpan[];
+      hunks: HunkExtent[];
+    };
 
 /** The changed-line universe of a captured patch: per file, the per-side contiguous
  * changed spans (`rvw diff --json`). Derived from the *same* `parsePatch` + `changedLines` +
@@ -204,8 +225,9 @@ export function changedLineUniverse(patch: string): FileUniverse[] {
   return parsePatch(patch, ANALYSIS_CACHE_KEY).map((file) => {
     const changed = changedLines(file);
     const reason = nonCoverableReason(file, changed);
+    const hunks = hunkExtents(file);
     if (reason !== null) {
-      return { file: file.path, status: file.status, coverable: false, reason };
+      return { file: file.path, status: file.status, coverable: false, reason, hunks };
     }
     const spans: ChangedSpan[] = [];
     for (const side of SIDES) {
@@ -213,8 +235,26 @@ export function changedLineUniverse(patch: string): FileUniverse[] {
         spans.push({ side, ...span });
       }
     }
-    return { file: file.path, status: file.status, coverable: true, spans };
+    return { file: file.path, status: file.status, coverable: true, spans, hunks };
   });
+}
+
+/** Every hunk's extent per side, deletions then additions like `spans`, in file order. Read
+ * through `hunkSpan` — the header geometry `resolveAnchor` asks and the refusal's
+ * `nearestHunks` lists — so an anchor inside one of these places, by construction rather than
+ * by a second reading of the patch. A side a hunk has no lines on (additions on a pure
+ * deletion) is left out, exactly as the refusal leaves it out. */
+function hunkExtents(file: PatchFile): HunkExtent[] {
+  const extents: HunkExtent[] = [];
+  for (const side of SIDES) {
+    for (const hunk of file.fileDiff.hunks) {
+      const span = hunkSpan(hunk, side);
+      if (span.end >= span.start) {
+        extents.push({ side, startLine: span.start, endLine: span.end });
+      }
+    }
+  }
+  return extents;
 }
 
 /** True once no changed line remains uncovered — the `--require-complete` gate. Vacuously

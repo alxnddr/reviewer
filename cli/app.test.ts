@@ -127,6 +127,17 @@ describe("rvw dispatch surface", () => {
     expect(help.stdout).not.toContain("rvw anchors");
   });
 
+  it("points every authoring surface at the guide: emit's and schema's help", async () => {
+    // An agent that goes straight to `rvw emit --help` never sees the bare-`rvw` header that
+    // names the skill, so the verbs it does read name it themselves.
+    for (const verb of ["emit", "schema"]) {
+      const help = await runCli([verb, "--help"]);
+      expect(help.stdout).toContain("rvw skills present-review");
+    }
+    const schema = await runCli(["schema"]);
+    expect(schema.stdout).toContain("rvw skills present-review");
+  });
+
   it("answers --version and -v with package.json's version and the file it is running from", async () => {
     // Read off disk rather than imported, so this is the version the app ships under and not
     // the same constant the CLI already believes. The path half is what makes the flag worth
@@ -204,6 +215,22 @@ describe("rvw check — the validation half", () => {
     expect(result.stderr).toContain("src/foo.ts additions 50-50");
     // Coverage never ran: a mis-anchored artifact has nothing sound to measure.
     expect(result.stdout).not.toContain("coverage");
+  });
+
+  it("exits 1 on a key the review has no place for — the rule rvw emit holds a draft to", async () => {
+    // The app would open this file with the key dropped; `emit` would never have written it.
+    // `check` sides with `emit`, so an artifact assembled by hand is held to the same keys.
+    const stray = JSON.stringify({
+      ...VALID,
+      comments: VALID.comments.map((comment) => ({ ...comment, suggestion: "use x" })),
+    });
+    const result = await runCli(["check", artifactFile(stray), "--json"]);
+    expect(result.code).toBe(1);
+    expect(JSON.parse(result.stdout)).toMatchObject({
+      ok: false,
+      stage: "validate",
+      problems: [{ kind: "schema", path: "comments[0].suggestion" }],
+    });
   });
 
   it("exits 1 (ran, found problems) on garbage bytes without throwing", async () => {

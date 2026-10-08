@@ -78,6 +78,7 @@ export const openCommand = buildCommand<OpenFlags, [string], LocalContext>({
       },
       repo: {
         kind: "parsed",
+        placeholder: "path",
         parse: String,
         brief: "Where the artifact's repository is checked out here, if not at the path it records",
         optional: true,
@@ -85,7 +86,13 @@ export const openCommand = buildCommand<OpenFlags, [string], LocalContext>({
     },
     positional: {
       kind: "tuple",
-      parameters: [{ brief: "Path to the .reviewer.json artifact to open", parse: String }],
+      parameters: [
+        {
+          brief: "Path to the .reviewer.json artifact to open",
+          parse: String,
+          placeholder: "artifact",
+        },
+      ],
     },
   },
   func(this: LocalContext, flags: OpenFlags, artifact: string): void {

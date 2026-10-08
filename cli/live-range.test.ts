@@ -111,6 +111,26 @@ describe("rvw diff", () => {
     expect(scored.report.uncoveredSpans).toEqual([]);
   });
 
+  it("--json lists each hunk's extent, and the gate accepts an anchor on every one", async () => {
+    // `spans` are where the change is; `hunks` are where an anchor is legal, context included.
+    // Proven against the gate itself rather than restated: a draft with one comment spanning
+    // each listed extent emits clean, so an author never has to fail once to find a boundary.
+    const files = await universe();
+    const extents = files.flatMap((file) =>
+      file.hunks.map((hunk) => ({ file: file.file, ...hunk })),
+    );
+    expect(extents.length).toBeGreaterThan(0);
+    const draft = join(root, "every-hunk.json");
+    writeFileSync(
+      draft,
+      JSON.stringify({ comments: extents.map((extent) => ({ ...extent, body: "here" })) }),
+    );
+    const out = join(root, "every-hunk.reviewer.json");
+    const result = await runCli(["emit", ...range(), "--draft", draft, "--no-open", "--out", out]);
+    expect(result.stderr).toBe("");
+    expect(result.code).toBe(0);
+  });
+
   it("defaults the whole range to the repo the caller is standing in", async () => {
     // Where the caller is standing is a context field, so this is the repo the run is *given*
     // rather than a `process.chdir` the whole worker would have shared.
@@ -126,6 +146,89 @@ describe("rvw diff", () => {
     expect(fromBase.code).toBe(0);
     expect(fromBase.stdout).toContain("alpha.ts");
     expect(fromBase.stdout).toContain("beta.ts");
+  });
+});
+
+describe("the default base on a branch that has been pushed", () => {
+  // `git push -u origin feat` makes `origin/feat` the branch's upstream, and the fork point with
+  // its own pushed copy is the last push, not where the work started. The base used to be taken
+  // against it: a partly pushed branch reviewed only its unpushed commits, and a fully pushed one
+  // reviewed nothing — while the range echoed back looked like any other.
+  let clone: string;
+  let forkSha: string;
+
+  beforeAll(() => {
+    const remote = join(root, "remote.git");
+    fixtureGit(root, "init", "-q", "--bare", "-b", "main", remote);
+    const seed = join(root, "seed");
+    fixtureGit(root, "clone", "-q", remote, seed);
+    writeFileSync(join(seed, "gamma.ts"), "g1\ng2\n");
+    fixtureGit(seed, "add", ".");
+    fixtureGit(seed, "commit", "-qm", "main");
+    fixtureGit(seed, "push", "-q", "origin", "main");
+
+    // A fresh clone, so `origin/HEAD` exists the way it does on any reader's machine.
+    clone = join(root, "clone");
+    fixtureGit(root, "clone", "-q", remote, clone);
+    forkSha = fixtureGit(clone, "rev-parse", "HEAD").trim();
+    fixtureGit(clone, "checkout", "-q", "-b", "feat");
+    writeFileSync(join(clone, "first.ts"), "pushed\n");
+    fixtureGit(clone, "add", ".");
+    fixtureGit(clone, "commit", "-qm", "first");
+    fixtureGit(clone, "push", "-q", "-u", "origin", "feat");
+    writeFileSync(join(clone, "second.ts"), "not pushed yet\n");
+    fixtureGit(clone, "add", ".");
+    fixtureGit(clone, "commit", "-qm", "second");
+  });
+
+  async function changedFiles(): Promise<string[]> {
+    const result = await runCli(["diff", "--json"], { cwd: clone });
+    expect(result.code).toBe(0);
+    return (JSON.parse(result.stdout) as FileUniverse[]).map((file) => file.file);
+  }
+
+  it("covers the pushed commits as well as the unpushed ones, measured from origin/main", async () => {
+    expect(await changedFiles()).toEqual(["first.ts", "second.ts"]);
+    // Named on stderr, so stdout stays a patch: the one decision made on the caller's behalf.
+    const result = await runCli(["diff"], { cwd: clone });
+    expect(result.stderr).toContain(`${forkSha}...feat — base is the fork point with origin/main`);
+    expect(result.stdout.startsWith("diff --git ")).toBe(true);
+  });
+
+  it("still covers the whole branch once every commit is pushed", async () => {
+    fixtureGit(clone, "push", "-q", "origin", "feat");
+    expect(await changedFiles()).toEqual(["first.ts", "second.ts"]);
+  });
+
+  it("keeps an upstream that is a different branch — the integration branch the author named", async () => {
+    // `checkout -b topic --track origin/main`: the upstream *is* where the work started.
+    fixtureGit(clone, "checkout", "-q", "-b", "topic", "--track", "origin/main");
+    writeFileSync(join(clone, "topic.ts"), "t\n");
+    fixtureGit(clone, "add", ".");
+    fixtureGit(clone, "commit", "-qm", "topic");
+    const result = await runCli(["diff", "--json"], { cwd: clone });
+    expect(result.stderr).toContain("base is the fork point with origin/main");
+    expect((JSON.parse(result.stdout) as FileUniverse[]).map((file) => file.file)).toEqual([
+      "topic.ts",
+    ]);
+    fixtureGit(clone, "checkout", "-q", "feat");
+  });
+
+  it("measures --head's own upstream, not the checked-out branch's", async () => {
+    // Standing on `topic` and asking about `feat`: the fork point is a question about `feat`.
+    fixtureGit(clone, "checkout", "-q", "topic");
+    const result = await runCli(["diff", "--head", "feat", "--json"], { cwd: clone });
+    expect((JSON.parse(result.stdout) as FileUniverse[]).map((file) => file.file)).toEqual([
+      "first.ts",
+      "second.ts",
+    ]);
+    fixtureGit(clone, "checkout", "-q", "feat");
+  });
+
+  it("says nothing on stderr when --base was given", async () => {
+    const result = await runCli(["diff", "--base", forkSha], { cwd: clone });
+    expect(result.code).toBe(0);
+    expect(result.stderr).toBe("");
   });
 });
 

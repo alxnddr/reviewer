@@ -14,6 +14,7 @@ import {
 } from "../../src/tools/review-coverage";
 import { errorMessage } from "../../src/shared/errors";
 import { coverageSummaryLines } from "../coverage-report";
+import { unknownArtifactKeys } from "../draft-keys";
 import { artifactDiff } from "../git";
 import { EXIT_PROBLEMS, EXIT_READY, type LocalContext } from "../context";
 import { writeCannotRun, writeJson } from "../errors";
@@ -31,6 +32,12 @@ import { writeCannotRun, writeJson } from "../errors";
 // `layers` is optional now, so telling a comments-only review that "a coverable changed line is
 // in no layer" is telling it off for a walkthrough it never claimed to write. A review with no
 // layers has no coverage story to be incomplete about, so it is not given one.
+//
+// Validation also holds the authored parts to their keys, the same check `rvw emit` runs on a
+// draft (`cli/draft-keys.ts`): a comment, range or overview key the review has no place for is
+// dropped by the app on open, so the two verbs agree that a file carrying one is not ready —
+// `emit` would never have written it. It is a check on the *file*, not on opening it: `rvw open`
+// and the app still open such an artifact, minus the key.
 //
 // Validation runs first and short-circuits: an artifact that does not parse, or whose anchors
 // do not place, has nothing sound to measure, so it reports validation problems and no coverage
@@ -69,7 +76,8 @@ export const checkCommand = buildCommand<CheckFlags, [string], LocalContext>({
       "Runs the same parse and placement check the app anchors with, over one diff re-derived",
       "from the artifact's own branch (so the repo must be present; a rare embedded/frozen",
       "artifact supplies it directly). An anchor that does not place, a description link that",
-      "does not resolve, or a range with no changes is a hard failure: exit 1, each problem with",
+      "does not resolve, a key the review has no place for (the same rule `rvw emit` holds a",
+      "draft to), or a range with no changes is a hard failure: exit 1, each problem with",
       "its exact locator. --coverage adds which changed lines sit in no layer — a headline and a",
       "per-file rollup in text, the whole report under --json. A gap warns and still exits 0",
       "(and does not even warn when the review has no layers), unless --require-complete",
@@ -103,7 +111,9 @@ export const checkCommand = buildCommand<CheckFlags, [string], LocalContext>({
     },
     positional: {
       kind: "tuple",
-      parameters: [{ brief: "Path to the .reviewer.json artifact", parse: String }],
+      parameters: [
+        { brief: "Path to the .reviewer.json artifact", parse: String, placeholder: "artifact" },
+      ],
     },
   },
   func(this: LocalContext, flags: CheckFlags, artifact: string): void {
@@ -121,6 +131,16 @@ export const checkCommand = buildCommand<CheckFlags, [string], LocalContext>({
     const parsed = parseReviewArtifact(bytes);
     if (!parsed.ok) {
       writeValidationFailure(this, flags, artifact, parsed.problems);
+      this.process.exitCode = EXIT_PROBLEMS;
+      return;
+    }
+
+    // Keys need no diff, so they are refused here, beside the parse, before git is asked for
+    // anything. The bytes parsed a moment ago, so this `JSON.parse` cannot throw; the schema
+    // has stripped the keys this looks for from `parsed.artifact`, which is why it reads them.
+    const keyProblems = unknownArtifactKeys(JSON.parse(bytes) as Record<string, unknown>);
+    if (keyProblems.length > 0) {
+      writeValidationFailure(this, flags, artifact, keyProblems);
       this.process.exitCode = EXIT_PROBLEMS;
       return;
     }

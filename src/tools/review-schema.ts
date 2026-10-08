@@ -26,7 +26,9 @@ const SCHEMA_DESCRIPTION = [
   "enforce. JSON Schema cannot express two of its rules: an anchor's ascending line range",
   "(endLine >= startLine compares sibling properties), and whether an anchor places on a hunk",
   "of the review's diff. `rvw emit` / `rvw check` check both, so a document that satisfies",
-  "this schema is well-formed, not necessarily valid.",
+  "this schema is well-formed, not necessarily valid. A draft for `rvw emit` carries only",
+  "`overview`, `comments` and `layers`: emit supplies `repo`, `base`, `head` and the rest,",
+  "though this schema of the finished artifact lists them as required.",
 ].join(" ");
 
 /** `ReviewArtifact` as a JSON Schema document an agent authors against. Draft 2020-12 is

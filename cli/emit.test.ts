@@ -167,6 +167,18 @@ describe("rvw emit", () => {
     const out = outPath("echo.reviewer.json");
     const result = await runCli(explicit(VALID_DRAFT, "--out", out));
     expect(result.stdout).toContain(`${repo}: ${baseSha}...${headSha}`);
+    // A given --base is the caller's own decision, so there is no fork point to explain.
+    expect(result.stdout).not.toContain("fork point");
+    const asJson = await runCli(
+      explicit(VALID_DRAFT, "--out", outPath("e.reviewer.json"), "--json"),
+    );
+    expect(JSON.parse(asJson.stdout)).toMatchObject({ ok: true, baseFrom: null });
+
+    const defaulted = await runCli(
+      ["emit", "--draft", draftFile(VALID_DRAFT), "--no-open", "--out", outPath("d.reviewer.json")],
+      { cwd: repo },
+    );
+    expect(defaulted.stdout).toContain("base: the fork point with main");
   });
 
   it("carries an authored overview into the artifact, and gates its links too", async () => {
@@ -365,6 +377,8 @@ describe("rvw emit — the range nobody typed", () => {
       base: baseSha,
       // A branch, stored as a branch: the review is meant to follow it.
       head: "feature",
+      // ...and which ref that fork point was measured from, since the sha alone cannot say.
+      baseFrom: "main",
     });
     // ...and the commit that branch pointed at, recorded beside it. This is the case the
     // field exists for: `head` alone cannot say which commit was reviewed, because tomorrow
@@ -505,13 +519,156 @@ describe("rvw emit — the draft", () => {
     expect(readArtifact(layersOnly)).not.toHaveProperty("comments");
   });
 
-  it("refuses a draft that presents nothing, before it spawns git", async () => {
+  it("refuses a draft that presents nothing, before it spawns git, and points at the guide", async () => {
     const result = await runCli(explicit({}, "--json"));
     expect(result.code).toBe(2);
     expect(JSON.parse(result.stdout)).toMatchObject({
       ok: false,
       error: { code: "draftEmpty" },
     });
+    expect(result.stdout).toContain("rvw skills present-review");
+  });
+
+  it("refuses a top-level key it would otherwise have dropped, writing nothing", async () => {
+    // `"layer"` for `"layers"`: before, emit picked out its three keys, never read this one,
+    // and wrote a review with no walkthrough at exit 0.
+    const out = outPath("typo.reviewer.json");
+    const result = await runCli(
+      explicit(
+        { comments: VALID_DRAFT.comments, layer: VALID_DRAFT.layers } as Draft,
+        "--out",
+        out,
+      ),
+    );
+    expect(result.code).toBe(1);
+    expect(result.stderr).toContain('schema: layer — unknown key "layer"');
+    expect(existsSync(out)).toBe(false);
+  });
+
+  it("refuses the range keys emit fills in itself, saying so", async () => {
+    const result = await runCli(
+      explicit({ ...VALID_DRAFT, repo, base: "main" } as Draft, "--json"),
+    );
+    expect(result.code).toBe(1);
+    const outcome = JSON.parse(result.stdout) as { ok: false; problems: unknown[] };
+    expect(outcome.problems).toEqual([
+      {
+        kind: "schema",
+        path: "repo",
+        message: '"repo" is filled in by rvw emit — remove it from the draft',
+      },
+      {
+        kind: "schema",
+        path: "base",
+        message: '"base" is filled in by rvw emit — remove it from the draft',
+      },
+    ]);
+  });
+
+  it("refuses a stray key on a comment, a range, a nested layer and the overview, located", async () => {
+    // Comments, ranges and the overview are plain objects in the artifact schema, so these
+    // passed the gate and were written into the file, to vanish when the app opened it.
+    const draft = {
+      overview: { title: "T", body: "B", summary: "not a field" },
+      comments: [{ ...(VALID_DRAFT.comments as object[])[0], suggestion: "use x" }],
+      layers: [
+        {
+          label: "Walk",
+          ranges: [{ file: "alpha.ts", side: "additions", startLine: 2, endLine: 2, why: "w" }],
+          children: [
+            {
+              label: "Inner",
+              ranges: [{ file: "beta.ts", side: "additions", startLine: 1, endLine: 2 }],
+              order: 1,
+            },
+          ],
+        },
+      ],
+    };
+    const result = await runCli(explicit(draft as Draft, "--json"));
+    expect(result.code).toBe(1);
+    const outcome = JSON.parse(result.stdout) as {
+      ok: false;
+      problems: { kind: string; path: string }[];
+    };
+    // Each typo once: a nested layer's stray key is also the strict layer schema's to refuse,
+    // and the two reports of it are folded into this one.
+    expect(outcome.problems.map((problem) => problem.path)).toEqual([
+      "overview.summary",
+      "comments[0].suggestion",
+      "layers[0].ranges[0].why",
+      "layers[0].children[0].order",
+    ]);
+  });
+
+  it("reports its unknown keys beside the gate's other problems, all in one run", async () => {
+    const draft = {
+      comments: [
+        { file: "alpha.ts", side: "additions", startLine: 999, endLine: 999, body: "x", line: 9 },
+      ],
+    };
+    const result = await runCli(explicit(draft as Draft, "--json"));
+    expect(result.code).toBe(1);
+    const outcome = JSON.parse(result.stdout) as { problems: { kind: string }[] };
+    expect(outcome.problems.map((problem) => problem.kind)).toEqual([
+      "schema",
+      "commentAnchorOutdated",
+    ]);
+  });
+});
+
+describe("rvw emit — layer coverage", () => {
+  it("says which changed lines no layer covers, by file and side, without moving the exit", async () => {
+    // VALID_DRAFT's layer covers alpha.ts addition 2 and beta.ts whole, and nothing on the
+    // deletions side: the removed line 2 and the appended line 4 are the gap. That shape — an
+    // additions-only range beside a rewrite — is the one authors miss.
+    const result = await runCli(explicit(VALID_DRAFT, "--out", outPath("cov.reviewer.json")));
+    expect(result.code).toBe(0);
+    expect(result.stdout).toContain("1 added and 1 removed line(s) are in no layer");
+    expect(result.stdout).toContain("  alpha.ts: deletions 2; additions 4");
+
+    const asJson = await runCli(
+      explicit(VALID_DRAFT, "--out", outPath("covj.reviewer.json"), "--json"),
+    );
+    expect(asJson.code).toBe(0);
+    expect(JSON.parse(asJson.stdout)).toMatchObject({
+      ok: true,
+      coverage: {
+        complete: false,
+        headline: { coverableChangedLines: 5, coveredChangedLines: 3 },
+        uncovered: { additions: 1, deletions: 1 },
+        files: ["alpha.ts"],
+      },
+    });
+  });
+
+  it("says it in one line when the layers cover everything", async () => {
+    const full: Draft = {
+      layers: [
+        {
+          label: "Walk",
+          ranges: [
+            { file: "alpha.ts", side: "deletions", startLine: 2, endLine: 2 },
+            { file: "alpha.ts", side: "additions", startLine: 2, endLine: 4 },
+            { file: "beta.ts", side: "additions", startLine: 1, endLine: 2 },
+          ],
+        },
+      ],
+    };
+    const result = await runCli(explicit(full, "--out", outPath("full.reviewer.json")));
+    expect(result.code).toBe(0);
+    expect(result.stdout).toContain("layers cover every changed line (5)");
+  });
+
+  it("is silent about coverage for a comments-only review, which claims no walkthrough", async () => {
+    const result = await runCli(
+      explicit({ comments: VALID_DRAFT.comments }, "--out", outPath("c.reviewer.json")),
+    );
+    expect(result.stdout).not.toContain("layers cover");
+    const asJson = await runCli(
+      explicit({ comments: VALID_DRAFT.comments }, "--out", outPath("cj.reviewer.json"), "--json"),
+    );
+    expect(JSON.parse(asJson.stdout)).toMatchObject({ ok: true, coverage: null });
   });
 
   it("refuses a draft that is not a JSON object", async () => {
@@ -688,8 +845,48 @@ describe("rvw emit --pr", () => {
     const own = await runCli(
       explicit(VALID_DRAFT, "--out", outPath("own.reviewer.json"), "--json"),
     );
-    expect(JSON.parse(own.stdout)).toMatchObject({ ok: true, pr: null, withoutPostable: null });
+    expect(JSON.parse(own.stdout)).toMatchObject({
+      ok: true,
+      pr: null,
+      withoutPostable: null,
+      postableWithoutPr: 0,
+    });
     expect(readArtifact(JSON.parse(own.stdout).out)).not.toHaveProperty("pr");
+  });
+
+  it("says when comments carry postable text but no --pr names the pull request", async () => {
+    // The turn-round of the gap above: text written for an author on a review that records
+    // no pull request, which the app can copy but not link or post — said, never refused.
+    const target = repoWithOrigin("https://github.com/acme/widgets");
+    const args = emitPr(target, "42", POSTED, "--out", outPath("unlinked.reviewer.json"));
+    const withoutPr = args.slice(0, args.indexOf("--pr"));
+    const result = await runCli([...withoutPr, "--out", outPath("unlinked.reviewer.json")]);
+    expect(result.code).toBe(0);
+    expect(result.stdout).toContain(
+      "1 of 3 comments has postable text, but no --pr names the pull request — pass --pr so the app can link and post it\n",
+    );
+
+    const asJson = await runCli([
+      ...withoutPr,
+      "--out",
+      outPath("unlinked-json.reviewer.json"),
+      "--json",
+    ]);
+    expect(JSON.parse(asJson.stdout)).toMatchObject({
+      ok: true,
+      pr: null,
+      withoutPostable: null,
+      postableWithoutPr: 1,
+    });
+
+    // With --pr the field is null: `withoutPostable` tells that story instead.
+    const linked = await runCli(
+      emitPr(target, "42", POSTED, "--out", outPath("linked.reviewer.json"), "--json"),
+    );
+    expect(JSON.parse(linked.stdout)).toMatchObject({
+      withoutPostable: 2,
+      postableWithoutPr: null,
+    });
   });
 
   it("exits 2 with badPullRequest when a bare number has no origin to complete it from", async () => {

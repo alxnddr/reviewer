@@ -9,7 +9,10 @@ import type { CliError } from "./errors";
 // Two decisions live here and nowhere else. The first is what a default *is*: the repo is the
 // cwd's work-tree toplevel, the head is the branch that is checked out, and the base is the
 // fork point — against the branch's upstream, else against the repo's default branch. Nothing
-// is guessed past that. A repo with neither an upstream nor a default branch fails naming
+// is guessed past that, with one exception the upstream needs: a branch's *own* remote copy
+// (`feat` tracking `origin/feat`, which is what `git push -u` sets up) is skipped, because the
+// fork point with it is the last push — a pushed branch's review would shrink to its unpushed
+// commits, and to nothing once everything is pushed, while still printing a plausible range. A repo with neither an upstream nor a default branch fails naming
 // `--base`, because a silently-wrong range is a review of the wrong diff, which is worse than
 // no review at all.
 //
@@ -28,6 +31,11 @@ import type { CliError } from "./errors";
 // commit the review was written against (`reviewedHead`) and the branch name it stores
 // deliberately cannot: a review authored at A and opened at D looks identical to one authored
 // at D. Nothing about the range changed — the ref written is the ref that was always written.
+//
+// The same is true of the defaulted base, which is stored as a bare sha (a fixed point; see
+// `defaultBase`): echoed back alone, an agent could not tell which ref the fork point was
+// measured from, so a base taken against the wrong ref looked exactly like a right one.
+// `ResolvedRange.baseFrom` keeps the name, for the verbs to say it out loud.
 
 /** The range flags every live-range verb shares, all optional — each absent one is resolved
  * from the repo the caller is standing in. */
@@ -53,6 +61,11 @@ export type ResolvedRange = {
   readonly base: string;
   readonly head: string;
   readonly headSha: string;
+  /** The ref a *defaulted* base is the fork point with (`origin/main`, `main`), or null when
+   * `--base` was given. Not written into the artifact — the stored base is the sha either way
+   * — but reported by the verbs, because it is the one input the caller did not choose and
+   * cannot otherwise see. */
+  readonly baseFrom: string | null;
 };
 
 export type RangeResult =
@@ -107,15 +120,25 @@ export function resolveRange(env: NodeJS.ProcessEnv, flags: RangeFlags, cwd: str
     return head;
   }
 
-  const base =
-    flags.base === undefined
-      ? defaultBase(env, repoPath, head.ref)
-      : resolveRef(env, repoPath, "--base", flags.base);
+  if (flags.base !== undefined) {
+    const base = resolveRef(env, repoPath, "--base", flags.base);
+    if (!base.ok) {
+      return base;
+    }
+    return {
+      ok: true,
+      range: { repoPath, base: base.ref, head: head.ref, headSha: head.sha, baseFrom: null },
+    };
+  }
+
+  const base = defaultBase(env, repoPath, head.ref);
   if (!base.ok) {
     return base;
   }
-
-  return { ok: true, range: { repoPath, base: base.ref, head: head.ref, headSha: head.sha } };
+  return {
+    ok: true,
+    range: { repoPath, base: base.sha, head: head.ref, headSha: head.sha, baseFrom: base.from },
+  };
 }
 
 type RefResult =
@@ -213,45 +236,49 @@ function defaultHead(env: NodeJS.ProcessEnv, repo: string): RefResult {
   return { ok: true, ref: sha, sha };
 }
 
+/** A defaulted base: the fork-point sha, and the ref it was measured from. */
+type ForkPointResult =
+  | { readonly ok: true; readonly sha: string; readonly from: string }
+  | { readonly ok: false; readonly error: CliError };
+
 /** The base nobody named: the fork point of `head`, which is the commit a reader would call
  * "where this work started". Tried in the order of how much the repo actually knows — the
- * branch's own upstream first, then the repo's default branch (`origin/HEAD`, then the two
- * names a repo without a remote almost always uses). The result is always a **sha**, because a
- * base is a fixed point: a base stored as `origin/main` would slide forward every fetch and
- * quietly shrink the review. When nothing answers, that is reported rather than papered over
- * with a guess — the one thing a review range must never be. */
-function defaultBase(env: NodeJS.ProcessEnv, repo: string, head: string): RefResult {
-  for (const candidate of baseCandidates(env, repo)) {
+ * branch's upstream first, then the repo's default branch (`origin/HEAD`, then the two names a
+ * repo without a remote almost always uses). The result is always a **sha**, because a base is
+ * a fixed point: a base stored as `origin/main` would slide forward every fetch and quietly
+ * shrink the review. When nothing answers, that is reported rather than papered over with a
+ * guess — the one thing a review range must never be. */
+function defaultBase(env: NodeJS.ProcessEnv, repo: string, head: string): ForkPointResult {
+  for (const candidate of baseCandidates(env, repo, head)) {
     const forkPoint = git(env, repo, ["merge-base", candidate, head]);
     if (!forkPoint.ok) {
       continue;
     }
     const sha = forkPoint.stdout.trim();
     if (CommitSha.safeParse(sha).success) {
-      return { ok: true, ref: sha, sha };
+      return { ok: true, sha, from: candidate };
     }
   }
   return {
     ok: false,
     error: {
       code: "noBase",
-      message: `cannot work out a base for ${head}: no upstream, and no default branch (origin/HEAD, main, master) — pass --base explicitly`,
+      message: `cannot work out a base for ${head}: no upstream other than its own pushed copy, and no default branch (origin/HEAD, main, master) — pass --base explicitly`,
     },
   };
 }
 
 /** The refs a fork point may be measured from, best first. Each is checked to exist before it
- * is offered, so `merge-base` is only ever asked about a ref the repo has. */
-function baseCandidates(env: NodeJS.ProcessEnv, repo: string): string[] {
+ * is offered, so `merge-base` is only ever asked about a ref the repo has.
+ *
+ * The upstream asked for is `head`'s own (`<head>@{upstream}`), not the checked-out branch's —
+ * with `--head other` the two differ, and the fork point is a question about `head`. A sha
+ * head has no upstream and simply skips the step. */
+function baseCandidates(env: NodeJS.ProcessEnv, repo: string, head: string): string[] {
   const candidates: string[] = [];
-  const upstream = git(env, repo, [
-    "rev-parse",
-    "--abbrev-ref",
-    "--symbolic-full-name",
-    "@{upstream}",
-  ]);
-  if (upstream.ok && upstream.stdout.trim().length > 0) {
-    candidates.push(upstream.stdout.trim());
+  const upstream = branchUpstream(env, repo, head);
+  if (upstream !== null) {
+    candidates.push(upstream);
   }
   const originHead = git(env, repo, ["rev-parse", "--abbrev-ref", "origin/HEAD"]);
   if (originHead.ok && originHead.stdout.trim().length > 0) {
@@ -263,4 +290,35 @@ function baseCandidates(env: NodeJS.ProcessEnv, repo: string): string[] {
     }
   }
   return candidates;
+}
+
+/** The upstream of branch `head` worth measuring a fork point from, or null.
+ *
+ * Null for a head with no upstream (a sha, a branch never pushed) and — the case this exists
+ * for — for an upstream that is the branch's own copy on a remote: `branch.<head>.merge` naming
+ * `refs/heads/<head>` is what `git push -u` writes, and the fork point with that copy is the
+ * last push rather than where the work started. Compared on the merge ref rather than on the
+ * upstream's short name, because a remote name may itself contain `/` and `origin/feat` cannot
+ * be split reliably; the merge ref is the remote branch's own name, unambiguous. An upstream
+ * that is a *different* branch (`feat` tracking `origin/main`, the `checkout -b feat
+ * origin/main` setup) is the integration branch the author named, and is kept. */
+function branchUpstream(env: NodeJS.ProcessEnv, repo: string, head: string): string | null {
+  if (!BranchName.safeParse(head).success) {
+    return null;
+  }
+  const upstream = git(env, repo, [
+    "rev-parse",
+    "--abbrev-ref",
+    "--symbolic-full-name",
+    `${head}@{upstream}`,
+  ]);
+  const name = upstream.ok ? upstream.stdout.trim() : "";
+  if (name.length === 0) {
+    return null;
+  }
+  const merge = git(env, repo, ["config", "--get", `branch.${head}.merge`]);
+  if (merge.ok && merge.stdout.trim() === `refs/heads/${head}`) {
+    return null;
+  }
+  return name;
 }

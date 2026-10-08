@@ -237,6 +237,14 @@ describe("exit gate: the agent's toolchain, end to end in a foreign repo", () =>
         { side: "additions", startLine: 2, endLine: 2 },
         { side: "additions", startLine: 18, endLine: 18 },
       ],
+      // Where an anchor may sit: each region's whole hunk, context included — wider than the
+      // changed line it carries, which is the room a `pre-existing` finding is pinned in.
+      hunks: [
+        { side: "deletions", startLine: 1, endLine: 5 },
+        { side: "deletions", startLine: 15, endLine: 20 },
+        { side: "additions", startLine: 1, endLine: 5 },
+        { side: "additions", startLine: 15, endLine: 20 },
+      ],
     });
 
     // Every anchor of the walkthrough — comment and layer range alike — falls inside a span the
@@ -273,12 +281,14 @@ describe("exit gate: the agent's toolchain, end to end in a foreign repo", () =>
       status: "modified",
       coverable: false,
       reason: "binary",
+      hunks: [],
     });
     expect(files.find((file) => file.file === "src/new-name.ts")).toEqual({
       file: "src/new-name.ts",
       status: "renamed",
       coverable: false,
       reason: "pureRename",
+      hunks: [],
     });
 
     // The honesty that matters is in the *coverage* report an agent acts on: both files appear,

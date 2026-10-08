@@ -131,3 +131,17 @@ export function postableGap(artifact: ReviewArtifact): { missing: number; total:
 export function postableGapLine(gap: { missing: number; total: number }): string {
   return `${gap.missing} of ${countLabel(gap.total, "comment")} ${gap.missing === 1 ? "has" : "have"} no postable text`;
 }
+
+/** The opposite gap, said by `rvw emit` *without* `--pr`: comments written for an author, on a
+ * review that names no pull request to post them to. The app still shows and copies the text,
+ * but its links to the code host and its Post need the pull request, and the commonest way to
+ * get here is an agent that wrote `postable` for a PR and forgot the flag. A hint, not a
+ * refusal: a reader can want author-ready text on a branch that has no PR yet. Null when no
+ * comment carries any, so the caller prints nothing. */
+export function unlinkedPostableLine(gap: { missing: number; total: number }): string | null {
+  const written = gap.total - gap.missing;
+  if (written === 0) {
+    return null;
+  }
+  return `${written} of ${countLabel(gap.total, "comment")} ${written === 1 ? "has" : "have"} postable text, but no --pr names the pull request — pass --pr so the app can link and post it`;
+}

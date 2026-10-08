@@ -2,7 +2,7 @@
 import { run } from "@stricli/core";
 import { writeAgentHeader } from "./agent-header";
 import { app } from "./app";
-import { buildContext, normalizeExitCode, EXIT_CANNOT_RUN } from "./context";
+import { buildContext, normalizeExitCode, outputErrorExitCode, EXIT_CANNOT_RUN } from "./context";
 
 // The interpreter named here must be `node`, not `bun`, and the reason is not preference:
 // `bun build` treats a `#!/usr/bin/env bun` entrypoint as a bun-only artifact, stamps the
@@ -22,6 +22,26 @@ import { buildContext, normalizeExitCode, EXIT_CANNOT_RUN } from "./context";
 // So nothing but 0/1/2 ever leaves the process. Nothing imports this module; it is executed,
 // so it needs no import.meta.main guard.
 
+// A closed pipe on either stream is an `error` event on that stream, and an `error` event with
+// no listener is an uncaught exception: `rvw diff --json | head` used to end in an EPIPE stack
+// trace on the terminal, after `head` already had its lines. On macOS stdout to a pipe is
+// asynchronous (see below), so the failed write surfaces after the command body has returned
+// and set its code — which is why this is a listener here and not a try/catch around a write.
+// The decision is `outputErrorExitCode`'s: a reader that went away leaves the code alone; any
+// other lost output is a cannot-run. Nothing is written about it: the stream that failed is
+// the one a message would go to. `lostOutput` holds the verdict for the `.then` below, which may
+// run after the event and would otherwise put the command's own code back over it.
+let lostOutput: number | null = null;
+function onOutputError(error: unknown): void {
+  const code = outputErrorExitCode(error);
+  if (code !== null) {
+    lostOutput = code;
+    process.exitCode = code;
+  }
+}
+process.stdout.on("error", onOutputError);
+process.stderr.on("error", onOutputError);
+
 const context = buildContext(process);
 const inputs = process.argv.slice(2);
 
@@ -40,7 +60,7 @@ writeAgentHeader(context, inputs);
 // stdin is read with a synchronous `readFileSync(0)`), so the process still ends immediately.
 run(app, inputs, context)
   .then(() => {
-    process.exitCode = normalizeExitCode(context.process.exitCode);
+    process.exitCode = lostOutput ?? normalizeExitCode(context.process.exitCode);
   })
   .catch(() => {
     process.exitCode = EXIT_CANNOT_RUN;

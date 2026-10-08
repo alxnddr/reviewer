@@ -93,7 +93,7 @@ const MAX_TAG_LENGTH = 24;
  * only displays, and this list is the whole extent of Reviewer's opinion about what a
  * finding *is* — deliberately provenance and stance, never weight, which is `severity`.
  *
- * They are the three words `skills/present-review` asks authors to open a body with, moved
+ * They are the three words `skills/present-review` once asked authors to open a body with, moved
  * off the body's first line and onto a field: a body that spends its title line on
  * `**Pre-existing**` spends it on a label instead of the claim, and prose is a convention
  * the app cannot see. Matched case-insensitively, because an author typing `Decision` and
@@ -136,11 +136,14 @@ export function reservedTag(tag: string | undefined): ReservedTag | null {
  * broken link on the code host, not a muted chip in the app.
  *
  * Each of the four carries its own `.meta({ description })` because `rvw schema` is derived
- * from this object and the authoring skill names that output as the authority on field
- * rules — an undescribed field is a field an agent guesses at. A description states the
- * field's rule and what the app does with it, and stops: *when* to write one is the skill's
+ * from this object and the authoring skill sends an agent there when a refusal surprises it —
+ * an undescribed field is a field an agent guesses at. A description states the field's rule
+ * and what the app does with it, and stops: *when* to write one is the skill's
  * (`skills/present-review/SKILL.md`), and saying it in both places made every agent that
- * fetched the schema pay for the same advice twice (912 bytes of it, measured).
+ * fetched the schema pay for the same advice twice (912 bytes of it, measured). The skill
+ * used to tell every agent to read the schema before writing; it now states the few limits
+ * the schema alone carried (`tag`, `note`, nesting depth) and points here only as the
+ * fallback, which saved the ~9 KB fetch on every run.
  *
  * A plain `z.object`, like every `ReviewAnchor` descendant, so an artifact carrying these
  * keys still opens in an older build: the unknown keys are dropped and the review reads as
@@ -154,7 +157,7 @@ export const ReviewComment = ReviewAnchor.extend({
     .max(MAX_TAG_LENGTH)
     .optional()
     .meta({
-      description: `A short free-form label, at most ${MAX_TAG_LENGTH} characters, shown as a pill beside the comment. Tag a comment only when the label changes how it is read, never every comment. The app knows ${RESERVED_TAGS.join(", ")}; any other value is printed as written.`,
+      description: `A short free-form label, at most ${MAX_TAG_LENGTH} characters, shown as a pill beside the comment. The app knows ${RESERVED_TAGS.join(", ")}; any other value is printed as written.`,
     }),
   severity: CommentSeverity.optional().meta({
     description:
@@ -162,7 +165,7 @@ export const ReviewComment = ReviewAnchor.extend({
   }),
   evidence: z.string().min(1).optional().meta({
     description:
-      "What you ran or read to confirm the finding — the command and the lines of output that show it — as markdown, rendered folded under the body. Put it here rather than in `body`, which stays the sentence.",
+      "Proof the comment's card cannot show — the verbatim output of something run, or lines from outside the diff headed by their path:line — as markdown, rendered folded under the body. Never the diff's own lines or the body's reasoning quoted back. File references in it are not links.",
   }),
   postable: z.string().min(1).optional().meta({
     description:
@@ -276,7 +279,7 @@ export const ReviewLayerInput = z
      * literal is what makes the absent form the only other form. */
     skim: z.literal(true).optional().meta({
       description:
-        "Marks this layer as the mechanical remainder: lockfiles, generated output, a rename sweep, formatting. Write one such layer, holding everything of that kind. The app marks its heading Skim and opens its files folded in the diff; coverage still counts its lines. It means there is nothing here to read, never that there is a lot.",
+        "Marks this layer as the mechanical remainder: lockfiles, generated output, a rename sweep, formatting. The app marks its heading Skim and opens its files folded in the diff; coverage still counts its lines.",
     }),
     /** A getter, not a `z.lazy` wrapper: it defers the self-reference the same way, but
      * leaves the schema's own type *inferable*, so the two exported types below are read
